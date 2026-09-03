@@ -1,0 +1,4 @@
+file,n_atoms,elements,energy_eV,energy_Ha,energy_per_atom_eV
+MOF_SBU\ebu_outputs\T1_Zn2+_BDC(s1)+BDC(s1).xyz,35,C H O Zn,-234.9803494564344,-8.635388139581373,-6.71372427018384
+MOF_SBU\ebu_outputs\T1_Zn2+_BDC(s1)+BDC(s2).xyz,35,C H O Zn,-234.9803494564344,-8.635388139581373,-6.71372427018384
+MOF_SBU\ebu_outputs\T2_Fe3+_bipy(N0)+bipy(N0)+bipy(N0).xyz,61,C Fe H N,-128210.01351641047,-4711.6417719875935,-2101.803500269024

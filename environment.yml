@@ -1,0 +1,21 @@
+name: mofsbu
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pandas
+  - rdkit
+  - networkx          # WL graph hash (portable L1 primary) + VF2 isomorphism
+  - ase
+  - tblite-python     # GFN2-xTB backend, cross-platform via conda-forge
+  - jupyterlab
+  - pytest
+  - pip
+  # ---- optional extras (uncomment as needed) ----
+  # - pymatgen        # StructureMatcher / MoleculeMatcher for L3 dedup
+  # - pip:
+  #   - pynauty       # true canonical labeling (nauty) — Linux-side verifier; hard to build on Windows
+  #   - torch
+  #   - mace-torch    # MACE-MP-0 ML energies

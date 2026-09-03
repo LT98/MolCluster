@@ -1,0 +1,10 @@
+# Normalize to LF in the repo so Windows <-> Linux never churns line endings
+* text=auto eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.sh   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.xyz  text eol=lf
+*.png  binary
+*.zip  binary

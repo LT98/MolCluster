@@ -1,0 +1,15 @@
+name: ebu
+channels: [conda-forge]
+dependencies:
+  - python>=3.10
+  - rdkit
+  - ase
+  - tblite-python
+  - numpy
+  - pandas
+  - matplotlib
+  - py3dmol
+  - ipywidgets
+  - jupyterlab
+  - nbformat
+  - pip

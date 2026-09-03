@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Regenerable data & heavy artifacts (synced OUTSIDE git) ----
+/data/
+!/data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+*.png
+*.zip
+*.log
+*_outputs/
+tool_outputs/
+
+# ---- Legacy: keep source (.py/.csv/.md), drop heavy notebooks + old git/claude state ----
+legacy/*.ipynb
+legacy/old_dotgit/
+legacy/old_claude/

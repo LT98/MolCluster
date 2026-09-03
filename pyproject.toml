@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mofsbu"
+version = "0.0.1"
+description = "Molecule-to-structure assembly and persistent structure registry for MOF SBU synthesis design."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "pandas", "rdkit", "networkx", "ase"]
+
+[project.optional-dependencies]
+xtb   = ["tblite"]
+canon = ["pynauty"]
+ml    = ["torch", "mace-torch"]
+match = ["pymatgen"]
+dev   = ["pytest", "jupyterlab"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

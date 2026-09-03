@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+tool_outputs/
+*_outputs/
+*.csv

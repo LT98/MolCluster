@@ -1,0 +1,14 @@
+# EBU screening tool — Linux (pip). Core engine + GFN2-xTB energies + 3D viewer.
+rdkit
+ase
+tblite            # GFN2-xTB engine (has Linux pip wheels; on Windows use conda-forge tblite-python)
+numpy
+pandas
+matplotlib
+py3Dmol           # 3D structure viewer (notebook section 5)
+ipywidgets        # dropdown selector for the viewer
+jupyterlab
+nbformat
+# --- optional MACE backend (alternative to xTB, pip-installable) ---
+# torch
+# mace-torch
