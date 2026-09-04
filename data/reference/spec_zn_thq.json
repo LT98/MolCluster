@@ -1,0 +1,43 @@
+{
+  "allow_unsaturated": false,
+  "binding": [
+    "chelate"
+  ],
+  "co_ligand": "O",
+  "coordination": [
+    4,
+    6
+  ],
+  "degree": 1,
+  "geometries": null,
+  "ligands_per_metal": [
+    1,
+    2
+  ],
+  "metals": [
+    {
+      "multiplicity": 1,
+      "oxidation_state": 2,
+      "spin_class": "ls",
+      "symbol": "Zn"
+    }
+  ],
+  "molecules": [
+    {
+      "max_deprotonations": null,
+      "multiplicity": 1,
+      "name": "THQ",
+      "smiles": "OC1=C(O)C(=O)C(O)=C(O)C1=O"
+    }
+  ],
+  "note": "Zn + THQ, chelating pockets only. Edit and re-run; degree>1 needs M5.",
+  "pocket": {
+    "min_anionic": null,
+    "n_anionic": 2,
+    "rigid": null,
+    "ring_size": 5
+  },
+  "run_mode": "construct",
+  "seed": 7,
+  "spec_version": 2
+}

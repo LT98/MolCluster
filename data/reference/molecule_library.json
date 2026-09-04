@@ -1,0 +1,11 @@
+{
+  "molecules": [
+    {
+      "added_at": "2026-09-04T17:02:07+00:00",
+      "multiplicity": 1,
+      "name": "ATF",
+      "note": "",
+      "smiles": "C1=CC2=C(C(=C1)O)C(=O)C3=C(C2=O)C(=CC=C3)O"
+    }
+  ]
+}

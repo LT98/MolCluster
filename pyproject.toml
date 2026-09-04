@@ -10,12 +10,35 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy", "scipy", "pandas", "rdkit", "networkx", "ase"]
 
+[project.scripts]
+mofsbu-ui = "mofsbu.ui.__main__:main"
+
 [project.optional-dependencies]
 xtb   = ["tblite"]
 canon = ["pynauty"]
 ml    = ["torch", "mace-torch"]
 match = ["pymatgen"]
+ui    = ["fastapi", "uvicorn[standard]"]
 dev   = ["pytest", "jupyterlab"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The viewer's HTML is not a .py file, so setuptools would otherwise leave it out of
+# an installed package and the page would 404 for anyone who pip-installed rather than
+# running from a checkout.
+[tool.setuptools.package-data]
+"mofsbu.ui" = ["static/*.html", "static/*.css", "static/*.js"]
+"mofsbu.registry" = ["*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

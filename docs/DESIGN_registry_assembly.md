@@ -423,6 +423,36 @@ coordinates.
   state/spin in node labels; µ-carboxylate = one node + two typed dative edges; multi-center geometry
   placer is the headline build cost.
 
+### 7.1 Proposed — pending your ratification (raised while implementing M2)
+
+Each of these was forced by writing the code and is currently implemented as described,
+with a test that fails if it is reversed. None is in the locked ledger yet.
+
+- **D14 (proposed)** **Bridging is DERIVED, not an edge type.** §4.1 lists `bridging(µ2,µ3)`
+  alongside `dative`, but a donor atom carrying dative edges to two distinct metals *is* µ2 —
+  labelling it again gives two encodings of one chemistry, and the two hash differently.
+  `EdgeType` is therefore `{COVALENT, DATIVE, METAL_METAL}` and `TypedGraph.bridge_class()`
+  derives µ2/µ3 on demand. Dative *direction* is derived the same way (donor is the non-metal),
+  and validated on insert.
+- **D15 (proposed)** **Net charge is a graph-level field, not a sum over atoms.** Writing a
+  carboxylate's −1 onto one of its two oxygens makes those oxygens inequivalent, so a
+  paddlewheel would hash differently depending on which way round four chemically identical
+  bridges happened to be written. Delocalised charge is not given a home it does not have.
+  Per-atom `formal_charge` survives for genuinely localised charge (an ammonium N) as a label
+  that enters identity but not the total. This is safe *because* hydrogens are explicit nodes:
+  protomers stay distinct through the H count, not through where the charge was written.
+  Bond order is excluded from the hash for the same reason (Kekulé forms, C=O/C–O resonance).
+- **D16 (proposed)** **L1 = sha256 of the canonical certificate, not the WL hash.** D3 makes WL
+  the primary stored key. It cannot be: **1-WL does not separate a µ2-bridging carboxylate from
+  a chelating one** — an 8-membered M–O–C–O–M–O–C–O ring versus two 4-membered chelate rings
+  give every atom the same local environment, so the colours are stable from the first iteration
+  and more iterations do not help. That is a binding-mode distinction this project exists to
+  draw. WL is demoted to a fast bucket index; L1 comes from an individualisation-refinement
+  canonical certificate (pure Python, so both machines agree — pynauty stays a verifier, since
+  its canonical form differs and would produce different keys). Cost measured on the fixture
+  set: 120 ms total, worst case 37 ms for [Fe(H₂O)₆]²⁺ (|Aut| = 46080) with branch-and-bound
+  plus automorphism pruning. Demonstration lives in `tests/test_canon.py`.
+
 ## 8. Open Checkpoints (need a call)
 
 *Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native).*
@@ -489,6 +519,13 @@ carries M–M + µ-bridges + per-center labels from the start.
   partner/condition dependence (C7) is real.
 
 ## 12. Changelog
+
+- *(M2 implementation session)* Built the typed graph, canonicalisation and L0/L1 keys against
+  hand-written polynuclear fixtures (paddlewheel, Fe₃-µ₃-oxo in two valence patterns, a
+  bridging/chelating pair, cis/trans-Pt(NH₃)₂Cl₂, HS/LS hexaaqua). Raised **D14/D15/D16** as
+  proposals in §7.1 — all three were forced by the code, and D16 in particular contradicts D3's
+  choice of WL as the primary key. L2/L3 ship as stubs with final signatures. See
+  `docs/PLAN_implementation.md` for the milestone context.
 
 - *(this session, rev 1)* Initial spec: recursive BuildingBlock; identifier/address/provenance
   split; layered L0–L3 identity with typed-graph canonicalization; fidelity-laddered geometries;

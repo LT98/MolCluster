@@ -8,6 +8,9 @@ conditions), and store everything for recall and further construction.
 **Architecture & decisions:** [`docs/DESIGN_registry_assembly.md`](docs/DESIGN_registry_assembly.md)
 (living design doc — decision ledger D1-D13, open checkpoints, roadmap).
 
+**Implementation plan:** [`docs/PLAN_implementation.md`](docs/PLAN_implementation.md)
+(module map + API signatures, milestone spine M0-M9 with exit gates, salvage ledger, decision gates).
+
 ## Layout
 
     src/mofsbu/        the package
@@ -30,6 +33,37 @@ conditions), and store everything for recall and further construction.
     conda env create -f environment.yml
     conda activate mofsbu
     pip install -e .        # editable install of the package
+
+## Running things
+
+Always run from the **repo root**, never from inside `src/` or a package folder: Python puts the
+current directory first on `sys.path`, and a package folder on the path shadows stdlib modules.
+(Our modules are named `_types.py` rather than `types.py` for exactly this reason.)
+
+    conda activate mofsbu
+    python -m pytest                              # the gate — must pass on both machines
+    python scripts/seed_demo_registry.py          # demo data for the viewer
+    python scripts/viewer.py                      # the viewer — no install, no arguments
+
+The `scripts/` launchers put `src` on the path themselves, so a fresh clone works immediately.
+For the shorter commands, install the package once per machine:
+
+    pip install -e .
+    python -m mofsbu.ui
+    mofsbu-ui
+
+Both find the registry themselves: the real one if it exists, otherwise the demo. A relative
+`--db` is resolved against the working directory, then `MOFSBU_DATA`, then the repo root, so the
+command behaves the same wherever it is run from.
+
+If that install fails with *"build backend is missing the 'build_editable' hook"*, the environment's
+setuptools predates PEP 660 — `pip install -U setuptools` and retry.
+
+The registry and blob store default to `<repo>/data/`. If the repo lives in OneDrive, point them
+elsewhere — a sync client copying a live SQLite file corrupts it, and none of this needs syncing:
+
+    setx MOFSBU_DATA %LOCALAPPDATA%\mofsbu        # windows
+    export MOFSBU_DATA=~/.local/share/mofsbu      # linux
 
 ## Two-machine workflow (git is the bridge)
 

@@ -15,19 +15,21 @@ venv/
 .DS_Store
 Thumbs.db
 
-# ---- Regenerable data & heavy artifacts (synced OUTSIDE git) ----
-/data/
+# ---- Data: regenerable stays OUT of git; curated reference is opt-in ----
+/data/*
 !/data/.gitkeep
+!/data/reference/
 *.db
 *.sqlite
 *.sqlite3
+
+# ---- Heavy artifacts anywhere (regenerable) ----
 *.png
 *.zip
 *.log
 *_outputs/
 tool_outputs/
 
-# ---- Legacy: keep source (.py/.csv/.md), drop heavy notebooks + old git/claude state ----
-legacy/*.ipynb
+# ---- Legacy: keep source + prior notebooks as reference; drop old git/tool state ----
 legacy/old_dotgit/
 legacy/old_claude/

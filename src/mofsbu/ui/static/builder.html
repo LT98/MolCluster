@@ -1,0 +1,401 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mofsbu — build spec</title>
+<style>
+  :root{--bg:#fbfbfa;--panel:#fff;--ink:#1c1b19;--muted:#6b6862;--line:#e2e0dc;
+        --accent:#3a6ea5;--warn:#8a5a00;--warnbg:#fff6e0;--ok:#2f6b3a;--bad:#a33}
+  @media (prefers-color-scheme:dark){:root{--bg:#16181c;--panel:#1d2025;--ink:#e6e4e1;
+        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--warn:#e0b062;--warnbg:#2b2313;
+        --ok:#7fc48d;--bad:#e08080}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:14px}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header a{color:var(--accent);font-size:12px}
+  .wrap{display:grid;grid-template-columns:minmax(340px,1fr) minmax(320px,1fr) minmax(300px,0.9fr);
+        gap:16px;padding:16px;align-items:start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+           margin:0 0 10px}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+  input,select,textarea{width:100%;padding:6px 8px;background:var(--bg);color:var(--ink);
+        border:1px solid var(--line);border-radius:5px;font:inherit}
+  input[type=checkbox]{width:auto}
+  button{padding:6px 11px;border:1px solid var(--line);border-radius:5px;background:var(--bg);
+         color:var(--ink);font:inherit;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .row>*{flex:1 1 auto}
+  .preview{border:1px dashed var(--line);border-radius:6px;min-height:170px;display:flex;
+           align-items:center;justify-content:center;margin-top:8px;padding:6px}
+  .preview svg{max-width:100%;height:auto}
+  .muted{color:var(--muted);font-size:12px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+  .chip{display:inline-block;padding:1px 7px;border:1px solid var(--line);border-radius:999px;
+        font-size:11px;margin:2px 3px 0 0}
+  .notice{background:var(--warnbg);border:1px solid var(--warn);color:var(--warn);
+          border-radius:6px;padding:8px 10px;font-size:12px;margin:8px 0}
+  .err{color:var(--bad);font-size:12px;margin-top:6px}
+  ul.list{list-style:none;margin:0;padding:0}
+  ul.list li{display:flex;justify-content:space-between;gap:8px;align-items:center;
+             padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+  ul.list li:last-child{border-bottom:0}
+  .x{color:var(--muted);cursor:pointer;border:0;background:none;padding:0 4px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500}
+  fieldset{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:8px 0}
+  legend{font-size:11px;color:var(--muted);padding:0 4px}
+</style>
+
+<header>
+  <h1>mofsbu · build spec</h1>
+  <span class="muted">writes a spec and queues a run — it never writes structures</span>
+  <a href="/" style="margin-left:auto">registry viewer →</a>
+</header>
+
+<div class="wrap">
+
+  <!-- ── molecule input ─────────────────────────────────────────────── -->
+  <section class="card">
+    <h2>1 · molecule</h2>
+    <label for="smiles">SMILES</label>
+    <input id="smiles" placeholder="Oc1ccccc1O" autocomplete="off" spellcheck="false">
+    <div class="row" style="margin-top:8px">
+      <input id="molname" placeholder="name (for display &amp; library)" style="flex:2 1 60%">
+      <input id="molmult" type="number" min="1" value="1" title="spin multiplicity"
+             style="flex:0 0 78px">
+    </div>
+    <div class="preview" id="preview"><span class="muted">enter a SMILES</span></div>
+    <div id="molinfo" class="muted"></div>
+    <div id="molerr" class="err"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="addRun" disabled>Add to run</button>
+      <button id="addLib" disabled>Save to library</button>
+    </div>
+  </section>
+
+  <!-- ── run contents ───────────────────────────────────────────────── -->
+  <section class="card">
+    <h2>2 · in this run</h2>
+    <p class="muted" style="margin:0 0 6px">molecules</p>
+    <ul class="list" id="molList"><li class="muted">none yet</li></ul>
+
+    <p class="muted" style="margin:14px 0 6px">metal centres <span id="metalOptional"></span></p>
+    <ul class="list" id="metalList"><li class="muted">none — molecular construction</li></ul>
+    <div class="row" style="margin-top:6px">
+      <input id="mSym" placeholder="Zn" style="flex:0 0 70px">
+      <input id="mOx" type="number" value="2" title="oxidation state" style="flex:0 0 64px">
+      <select id="mSpin" style="flex:0 0 76px"><option>ls</option><option>hs</option>
+        <option>is</option></select>
+      <button id="addMetal">add metal</button>
+    </div>
+
+    <h2 style="margin-top:18px">library</h2>
+    <ul class="list" id="libList"><li class="muted">empty</li></ul>
+
+    <h2 style="margin-top:18px">spec files</h2>
+    <ul class="list" id="specList"><li class="muted">none</li></ul>
+    <div class="row" style="margin-top:6px">
+      <input id="specName" placeholder="filename.json" style="flex:2 1 60%">
+      <button id="reloadSpecs" style="flex:0 0 auto">refresh</button>
+    </div>
+  </section>
+
+  <!-- ── options + submit ───────────────────────────────────────────── -->
+  <section class="card">
+    <h2>3 · construction</h2>
+
+    <label for="degree">degree</label>
+    <input id="degree" type="number" min="1" value="1">
+    <div class="notice" id="degreeNote"></div>
+
+    <fieldset>
+      <legend>coordination (metal runs)</legend>
+      <div class="row">
+        <input id="cns" value="4,6" title="coordination numbers">
+        <input id="lpm" value="1" title="ligand copies per metal" style="flex:0 0 90px">
+      </div>
+      <label for="coligand">co-ligand filling remaining sites (blank = none)</label>
+      <input id="coligand" value="O">
+      <label class="muted" style="margin-top:6px">
+        <input type="checkbox" id="unsat"> build coordinatively unsaturated products
+        when no co-ligand is set</label>
+      <label>binding</label>
+      <div class="row" style="justify-content:flex-start">
+        <label class="muted"><input type="checkbox" id="bChel" checked> chelate</label>
+        <label class="muted"><input type="checkbox" id="bMono" checked> monodentate</label>
+      </div>
+      <label>chelate pocket filter (structural, not by name)</label>
+      <div class="row">
+        <input id="pRing" type="number" placeholder="ring size" title="chelate ring size">
+        <input id="pAnion" type="number" placeholder="# anionic" title="anionic donors">
+      </div>
+    </fieldset>
+
+    <label>what to do with each structure</label>
+    <div id="modes"></div>
+
+    <label for="note">note</label>
+    <input id="note" placeholder="what this run is for">
+
+    <div class="row" style="margin-top:12px">
+      <button id="saveSpec">Save spec JSON</button>
+      <button class="primary" id="submit">Submit run</button>
+    </div>
+    <div id="submitMsg" class="muted" style="margin-top:8px"></div>
+    <div id="diagnostics"></div>
+
+    <h2 style="margin-top:18px">runs</h2>
+    <table><thead><tr><th>#</th><th>status</th><th>done</th><th>rej</th><th>fail</th></tr>
+      </thead><tbody id="runs"><tr><td colspan="5" class="muted">none</td></tr></tbody></table>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = {molecules: [], metals: [], caps: null, current: null};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+  return body;
+}
+
+// ── capabilities drive the UI, so an unimplemented option cannot be mislabelled here
+async function loadCaps() {
+  state.caps = await api('/api/capabilities');
+  $('#degreeNote').textContent = state.caps.degree_note;
+  $('#metalOptional').innerHTML = '<span class="muted">— optional</span>';
+  $('#modes').innerHTML = state.caps.run_modes.map((m, i) => `
+    <label class="muted" style="display:flex;gap:6px;align-items:baseline">
+      <input type="radio" name="mode" value="${m.id}" ${i === 0 ? 'checked' : ''}
+             ${m.available ? '' : 'disabled'} style="width:auto">
+      <span>${m.label}${m.available ? '' :
+        ` <span class="chip" style="border-color:var(--warn);color:var(--warn)">${m.note}</span>`}</span>
+    </label>`).join('');
+  $('#metalList').title = state.caps.metals_note;
+}
+
+// ── molecule preview
+let previewTimer = null;
+$('#smiles').addEventListener('input', () => {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(doPreview, 350);
+});
+$('#molmult').addEventListener('change', doPreview);
+
+async function doPreview() {
+  const smiles = $('#smiles').value.trim();
+  $('#molerr').textContent = ''; state.current = null;
+  $('#addRun').disabled = $('#addLib').disabled = true;
+  if (!smiles) { $('#preview').innerHTML = '<span class="muted">enter a SMILES</span>';
+                 $('#molinfo').textContent = ''; return; }
+  $('#preview').innerHTML = '<span class="muted">…</span>';
+  try {
+    const res = await api('/api/molecule/preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({smiles, multiplicity: +$('#molmult').value || 1})});
+    if (!res.ok) { $('#preview').innerHTML = '<span class="muted">—</span>';
+                   $('#molerr').textContent = res.error; $('#molinfo').textContent = '';
+                   return; }
+    state.current = res;
+    $('#preview').innerHTML = res.svg;
+    const donors = {};
+    res.donors.forEach(d => donors[d.type] = (donors[d.type] || 0) + 1);
+    $('#molinfo').innerHTML =
+      `<div class="mono">${res.formula} · ${res.n_atoms} atoms</div>` +
+      `<div style="margin-top:4px">donors: ` +
+        (Object.entries(donors).map(([k, v]) => `<span class="chip">${v}× ${k}</span>`).join('')
+         || '<span class="muted">none</span>') + `</div>` +
+      `<div style="margin-top:2px">pockets: ` +
+        (res.pockets.length ? [...new Set(res.pockets.map(p => p.descriptor))]
+            .map(d => `<span class="chip">${d}</span>`).join('')
+          : '<span class="muted">none</span>') + `</div>` +
+      `<div style="margin-top:2px">activation states: <b>${res.protomers.length}</b> distinct ` +
+        `(${res.protomers.map(p => 'q' + p.charge).join(', ')})</div>`;
+    $('#addRun').disabled = $('#addLib').disabled = false;
+  } catch (e) { $('#molerr').textContent = e.message; }
+}
+
+// ── run contents
+function renderMolecules() {
+  const el = $('#molList');
+  el.innerHTML = state.molecules.length ? state.molecules.map((m, i) => `
+    <li><span><b>${m.name}</b> <span class="mono muted">${m.smiles}</span></span>
+        <button class="x" data-i="${i}">✕</button></li>`).join('')
+    : '<li class="muted">none yet</li>';
+  el.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => {
+    state.molecules.splice(+b.dataset.i, 1); renderMolecules(); });
+}
+function renderMetals() {
+  const el = $('#metalList');
+  el.innerHTML = state.metals.length ? state.metals.map((m, i) => `
+    <li><span><b>${m.symbol}</b> <span class="muted">${m.oxidation_state >= 0 ? '+' : ''}${m.oxidation_state} · ${m.spin_class}</span></span>
+        <button class="x" data-i="${i}">✕</button></li>`).join('')
+    : '<li class="muted">none — molecular construction (COF / cage)</li>';
+  el.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => {
+    state.metals.splice(+b.dataset.i, 1); renderMetals(); });
+}
+
+$('#addRun').onclick = () => {
+  const name = $('#molname').value.trim() || `mol${state.molecules.length + 1}`;
+  state.molecules.push({name, smiles: state.current.smiles,
+                        multiplicity: +$('#molmult').value || 1, max_deprotonations: null});
+  renderMolecules();
+};
+$('#addLib').onclick = async () => {
+  const name = $('#molname').value.trim();
+  if (!name) { $('#molerr').textContent = 'give it a name first'; return; }
+  try {
+    await api('/api/library', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, smiles: state.current.smiles,
+                            multiplicity: +$('#molmult').value || 1})});
+    loadLibrary();
+  } catch (e) { $('#molerr').textContent = e.message; }
+};
+$('#addMetal').onclick = () => {
+  const symbol = $('#mSym').value.trim();
+  if (!symbol) return;
+  state.metals.push({symbol, oxidation_state: +$('#mOx').value || 0,
+                     spin_class: $('#mSpin').value, multiplicity: 1});
+  renderMetals();
+};
+
+async function loadLibrary() {
+  const {molecules} = await api('/api/library');
+  const el = $('#libList');
+  el.innerHTML = molecules.length ? molecules.map(m => `
+    <li><span><b>${m.name}</b> <span class="mono muted">${m.smiles}</span></span>
+        <span><button data-add='${JSON.stringify(m)}'>use</button>
+              <button class="x" data-del="${m.name}">✕</button></span></li>`).join('')
+    : '<li class="muted">empty — save a molecule to build one up</li>';
+  el.querySelectorAll('button[data-add]').forEach(b => b.onclick = () => {
+    const m = JSON.parse(b.dataset.add);
+    $('#smiles').value = m.smiles; $('#molname').value = m.name;
+    $('#molmult').value = m.multiplicity; doPreview();
+  });
+  el.querySelectorAll('button[data-del]').forEach(b => b.onclick = async () => {
+    await api('/api/library/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
+    loadLibrary();
+  });
+}
+
+// ── spec assembly
+function numbers(s) {
+  return s.split(/[,\s]+/).filter(Boolean).map(Number).filter(n => !Number.isNaN(n));
+}
+function renderDiagnostics(items) {
+  const el = $('#diagnostics');
+  if (!items || !items.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="notice"><b>candidates not queued</b>' +
+    items.map(d => `<div style="margin-top:5px">×${d.count} ${d.reason}<br>
+      <span class="muted">→ ${d.hint}</span></div>`).join('') + '</div>';
+}
+
+async function loadSpecs() {
+  const {specs} = await api('/api/specs');
+  const el = $('#specList');
+  el.innerHTML = specs.length ? specs.map(s => s.ok ? `
+    <li><span><b>${s.name}</b>
+        <span class="muted">${s.source} · ${s.molecules.join(', ') || 'no molecules'}
+        ${s.metals.length ? '+ ' + s.metals.join(', ') : '· metal-free'} · deg ${s.degree}</span>
+        ${s.note ? `<br><span class="muted">${s.note}</span>` : ''}</span>
+        <button data-load="${s.source}/${s.name}">load</button></li>` : `
+    <li><span><b>${s.name}</b> <span class="err">${s.error}</span></span></li>`).join('')
+    : '<li class="muted">none — save one below</li>';
+  el.querySelectorAll('button[data-load]').forEach(b => b.onclick = async () => {
+    const {spec, name} = await api('/api/specs/' + b.dataset.load);
+    applySpec(spec); $('#specName').value = name;
+    $('#submitMsg').textContent = `loaded ${name}`;
+  });
+}
+
+function applySpec(spec) {
+  state.molecules = spec.molecules || [];
+  state.metals = spec.metals || [];
+  renderMolecules(); renderMetals();
+  $('#degree').value = spec.degree ?? 1;
+  $('#cns').value = (spec.coordination || []).join(',');
+  $('#lpm').value = (spec.ligands_per_metal || [1]).join(',');
+  $('#coligand').value = spec.co_ligand || '';
+  $('#unsat').checked = !!spec.allow_unsaturated;
+  $('#bChel').checked = (spec.binding || []).includes('chelate');
+  $('#bMono').checked = (spec.binding || []).includes('mono');
+  $('#pRing').value = spec.pocket?.ring_size ?? '';
+  $('#pAnion').value = spec.pocket?.n_anionic ?? '';
+  $('#note').value = spec.note || '';
+  const mode = document.querySelector(`input[name=mode][value="${spec.run_mode || 'construct'}"]`);
+  if (mode && !mode.disabled) mode.checked = true;
+}
+
+function buildSpec() {
+  const binding = [];
+  if ($('#bChel').checked) binding.push('chelate');
+  if ($('#bMono').checked) binding.push('mono');
+  const pocket = {};
+  if ($('#pRing').value) pocket.ring_size = +$('#pRing').value;
+  if ($('#pAnion').value) pocket.n_anionic = +$('#pAnion').value;
+  return {
+    spec_version: 1,
+    molecules: state.molecules, metals: state.metals,
+    degree: +$('#degree').value || 1,
+    coordination: numbers($('#cns').value),
+    geometries: null,
+    ligands_per_metal: numbers($('#lpm').value),
+    co_ligand: $('#coligand').value.trim() || null,
+    binding, pocket, seed: 0,
+    allow_unsaturated: $('#unsat').checked,
+    run_mode: document.querySelector('input[name=mode]:checked').value,
+    note: $('#note').value,
+  };
+}
+
+$('#saveSpec').onclick = async () => {
+  try {
+    const res = await api('/api/spec', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: buildSpec(), filename: $('#specName').value.trim() || null})});
+    $('#submitMsg').textContent = `saved ${res.path}`;
+    loadSpecs();
+  } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
+};
+
+$('#submit').onclick = async () => {
+  $('#submitMsg').textContent = 'submitting…';
+  try {
+    const res = await api('/api/runs', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({spec: buildSpec()})});
+    $('#submitMsg').textContent =
+      `run ${res.run_id} queued — ${res.tasks} tasks` +
+      (res.tasks === 0 ? ' (nothing to build — see below)' : '');
+    renderDiagnostics(res.diagnostics);
+    pollRuns();
+  } catch (e) {
+    $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`;
+    renderDiagnostics(null);
+  }
+};
+
+$('#reloadSpecs').onclick = loadSpecs;
+
+async function pollRuns() {
+  try {
+    const {runs} = await api('/api/runs');
+    $('#runs').innerHTML = runs.length ? runs.map(r => `
+      <tr><td>${r.id}</td>
+          <td>${r.thread === 'running' ? 'running' : r.status}</td>
+          <td>${r.n_done}/${r.n_tasks}</td><td>${r.n_rejected}</td>
+          <td style="color:${r.n_failed ? 'var(--bad)' : 'inherit'}">${r.n_failed}</td></tr>` +
+      (r.diagnostics && r.diagnostics.length ? `<tr><td colspan="5" class="muted">
+         ${r.diagnostics.map(d => `×${d.count} ${d.reason}`).join('<br>')}</td></tr>` : '')
+      ).join('') : '<tr><td colspan="5" class="muted">none</td></tr>';
+  } catch (e) { /* the viewer may not have a registry yet */ }
+}
+
+loadCaps(); loadLibrary(); loadSpecs(); pollRuns(); setInterval(pollRuns, 2500);
+</script>

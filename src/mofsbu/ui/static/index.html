@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mofsbu registry viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+<style>
+:root{
+  --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
+  --accent:#2f6f9f; --accent-soft:#e6f0f8; --warn:#9a6b00; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#16181c; --panel:#1e2126; --ink:#e6e8ea; --muted:#9aa1aa; --line:#31353c;
+         --accent:#79b8e8; --accent-soft:#243444; --warn:#d9ad57; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+#app{display:grid;grid-template-columns:265px minmax(420px,1fr) 400px;height:100vh}
+.pane{overflow:auto;padding:12px 14px}
+#sidebar{border-right:1px solid var(--line);background:var(--panel)}
+#detail{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
+h1{font-size:14px;margin:0 0 2px;letter-spacing:.02em}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+   margin:16px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+label{display:block;font-size:11px;color:var(--muted);margin:8px 0 2px}
+input,select,button{font:inherit;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+input[type=text],input[type=number],select{width:100%}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.chip{border:1px solid var(--line);border-radius:11px;padding:2px 9px;cursor:pointer;font-size:11px;user-select:none}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.chk{display:flex;align-items:center;gap:6px;color:var(--ink);font-size:12px;margin:5px 0}
+.chk input{width:auto}
+button{cursor:pointer}
+button.primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+button:disabled,input:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+fieldset{border:0;padding:0;margin:0}
+fieldset:disabled .reserved-note{display:block}
+.reserved-note{display:none;font-size:10.5px;color:var(--warn);margin-top:3px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--bg);cursor:pointer;user-select:none;font-size:11px;
+   text-transform:uppercase;letter-spacing:.05em;color:var(--muted);z-index:2}
+th.sorted{color:var(--accent)}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--accent-soft)}
+tbody tr.sel{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-size:11px}
+.muted{color:var(--muted)}
+.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.spacer{flex:1}
+#viewer{position:relative;width:100%;height:300px;border:1px solid var(--line);border-radius:5px;
+        background:var(--bg);overflow:hidden}
+#viewer-fallback{position:absolute;inset:0;padding:10px;font-size:11.5px;overflow:auto;display:none}
+#viewer-fallback pre{font-family:var(--mono);font-size:10.5px;white-space:pre;margin:6px 0 0}
+dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;font-size:12px}
+dt{color:var(--muted)}
+dd{margin:0;overflow-wrap:anywhere}
+.hashline{display:flex;align-items:center;gap:6px}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:10.5px;color:var(--muted)}
+.empty{color:var(--muted);padding:24px 8px;text-align:center}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
+       padding:6px 14px;border-radius:14px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:.92}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── filters ───────────────────────────────────────────────── -->
+  <aside id="sidebar" class="pane">
+    <h1>mofsbu registry</h1>
+    <div class="muted mono" id="meta">read-only</div>
+
+    <label for="f-q">Search label / formula / L0</label>
+    <input type="text" id="f-q" placeholder="Cu paddlewheel, C4H6O9…">
+
+    <h2>composition · charge · spin</h2>
+    <label>Metal</label>
+    <div class="chips" id="f-metals"></div>
+    <div class="row2">
+      <div><label for="f-nmin">n metals ≥</label><input type="number" id="f-nmin"></div>
+      <div><label for="f-nmax">n metals ≤</label><input type="number" id="f-nmax"></div>
+    </div>
+    <div class="row2">
+      <div><label for="f-qmin">charge ≥</label><input type="number" id="f-qmin"></div>
+      <div><label for="f-qmax">charge ≤</label><input type="number" id="f-qmax"></div>
+    </div>
+    <label for="f-mult">Multiplicity</label>
+    <select id="f-mult"><option value="">any</option></select>
+
+    <h2>connectivity · binding mode</h2>
+    <label>Max bridge class</label>
+    <div class="chips" id="f-bridge"></div>
+    <label for="f-mm">Metal–metal contact</label>
+    <select id="f-mm"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
+    <fieldset id="fs-donor">
+      <label>Donor type</label>
+      <div class="chips" id="f-donor"></div>
+      <label for="f-open">Open sites ≥</label>
+      <input type="number" id="f-open">
+      <div class="reserved-note" id="note-donor">reserved — populated in M4</div>
+    </fieldset>
+
+    <h2>energy · fidelity</h2>
+    <label for="f-fid">Best fidelity ≥</label>
+    <select id="f-fid"><option value="">any</option></select>
+    <label for="f-conv">Converged</label>
+    <select id="f-conv"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
+    <div class="row2">
+      <div><label for="f-emin">energy ≥</label><input type="number" id="f-emin" step="any"></div>
+      <div><label for="f-emax">energy ≤</label><input type="number" id="f-emax" step="any"></div>
+    </div>
+
+    <h2>provenance</h2>
+    <label for="f-route">Incoming routes</label>
+    <select id="f-route"><option value="">any</option><option value="true">has a route</option><option value="false">no route</option></select>
+    <fieldset id="fs-depth">
+      <label for="f-depth">Depth ≤</label>
+      <input type="number" id="f-depth">
+      <div class="reserved-note">reserved — populated in M8</div>
+    </fieldset>
+    <label for="f-tag">Tag</label>
+    <select id="f-tag"><option value="">any</option></select>
+
+    <p style="margin-top:16px"><button id="reset">Reset filters</button></p>
+  </aside>
+
+  <!-- ── results ───────────────────────────────────────────────── -->
+  <main id="results" class="pane">
+    <div class="toolbar">
+      <strong id="count">…</strong>
+      <span class="spacer"></span>
+      <label for="f-limit" style="margin:0">page size</label>
+      <select id="f-limit" style="width:auto">
+        <option>25</option><option selected>50</option><option>100</option><option>250</option>
+      </select>
+      <button id="prev">‹ prev</button><button id="next">next ›</button>
+    </div>
+    <table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>No structures match these filters.</div>
+  </main>
+
+  <!-- ── detail + 3D ───────────────────────────────────────────── -->
+  <aside id="detail" class="pane">
+    <div id="detail-empty" class="empty">Select a row to render its geometry.</div>
+    <div id="detail-body" hidden>
+      <h1 id="d-label"></h1>
+      <div class="hashline mono muted">
+        <span>L1 <span id="d-hash"></span></span>
+        <button id="copy-hash" title="copy full L1 hash">copy</button>
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <select id="geom-pick" style="flex:1"></select>
+        <button id="copy-spec" class="primary" title="copy the run spec as JSON">copy spec</button>
+      </div>
+      <div id="viewer"><div id="viewer-fallback"></div></div>
+      <div class="toolbar" style="margin-top:6px">
+        <button id="style-stick">stick</button><button id="style-ball">ball &amp; stick</button>
+        <button id="style-sphere">spacefill</button><span class="spacer"></span>
+        <button id="recenter">recentre</button>
+      </div>
+      <dl id="d-props"></dl>
+      <div id="d-tags" class="chips"></div>
+      <h2>provenance</h2>
+      <div id="d-routes" class="muted"></div>
+    </div>
+  </aside>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const COLS = [
+  {k:"display_label", t:"label",    sort:"display_label"},
+  {k:"formula",       t:"formula",  sort:"formula", mono:true},
+  {k:"metals",        t:"metals",   sort:null},
+  {k:"net_charge",    t:"q",        sort:"net_charge", num:true},
+  {k:"multiplicity",  t:"2S+1",     sort:"multiplicity", num:true},
+  {k:"max_bridge_class", t:"bridge", sort:"max_bridge_class"},
+  {k:"best_fidelity", t:"fid",      sort:"best_fidelity", num:true},
+  {k:"best_energy",   t:"energy",   sort:"best_energy", num:true},
+  {k:"n_geometries",  t:"geoms",    sort:"n_geometries", num:true},
+  {k:"n_incoming_routes", t:"routes", sort:"n_incoming_routes", num:true},
+];
+const state = {
+  sort:"id", order:"asc", limit:50, offset:0, total:0,
+  selected:null,            // structure id — survives paging and re-filtering
+  detail:null, geomId:null, style:"ball", filters:null, xyzCache:new Map(),
+};
+let viewer = null, viewerModel = null;
+
+/* ── helpers ─────────────────────────────────────────────────── */
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("on");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),1600); }
+async function copyText(text, what){
+  try{ await navigator.clipboard.writeText(text); }
+  catch(e){ const a=document.createElement("textarea"); a.value=text; document.body.appendChild(a);
+            a.select(); document.execCommand("copy"); a.remove(); }
+  toast(what+" copied");
+}
+const fmtE = (v) => v===null||v===undefined ? "—" : Number(v).toFixed(4);
+const labelOf = (r) => r.display_label && r.display_label.trim()
+                       ? r.display_label : (r.formula || ("structure " + r.id));
+const metalsOf = (r) => (r.metals||"").split(",").filter(Boolean).join(" ") || "—";
+const short = (h) => h ? h.slice(0,10) + "…" : "—";
+
+/* ── query construction ──────────────────────────────────────── */
+function chipValues(id){ return [...$(id).querySelectorAll(".chip.on")].map(c=>c.dataset.v); }
+function val(id){ const v=$(id).value.trim(); return v===""?null:v; }
+function params(){
+  const p = new URLSearchParams();
+  const put = (k,v) => { if(v!==null && v!==undefined && v!=="") p.append(k,v); };
+  put("q", val("f-q"));
+  chipValues("f-metals").forEach(m=>p.append("metal",m));
+  put("n_metals_min", val("f-nmin")); put("n_metals_max", val("f-nmax"));
+  put("charge_min", val("f-qmin"));   put("charge_max", val("f-qmax"));
+  put("multiplicity", val("f-mult"));
+  chipValues("f-bridge").forEach(b=>p.append("max_bridge_class",b));
+  put("has_metal_metal", val("f-mm"));
+  chipValues("f-donor").forEach(d=>p.append("donor_type",d));
+  put("n_open_sites_min", val("f-open"));
+  put("fidelity_min", val("f-fid"));  put("converged", val("f-conv"));
+  put("energy_min", val("f-emin"));   put("energy_max", val("f-emax"));
+  put("has_route", val("f-route"));   put("depth_max", val("f-depth"));
+  put("tag", val("f-tag"));
+  p.set("sort", state.sort); p.set("order", state.order);
+  p.set("limit", state.limit); p.set("offset", state.offset);
+  return p;
+}
+
+/* ── table ───────────────────────────────────────────────────── */
+function renderHead(){
+  $("head").innerHTML = "";
+  for(const c of COLS){
+    const th = document.createElement("th");
+    th.textContent = c.t + (c.sort===state.sort ? (state.order==="asc"?" ▲":" ▼") : "");
+    if(c.sort===state.sort) th.classList.add("sorted");
+    if(c.sort){ th.onclick = () => {
+      if(state.sort===c.sort) state.order = state.order==="asc"?"desc":"asc";
+      else { state.sort=c.sort; state.order="asc"; }
+      state.offset=0; load();
+    }; } else { th.style.cursor="default"; }
+    $("head").appendChild(th);
+  }
+}
+async function load(){
+  const r = await fetch("/api/structures?"+params().toString());
+  if(!r.ok){ toast("query rejected ("+r.status+")"); return; }
+  const data = await r.json();
+  state.total = data.total;
+  const from = data.total ? state.offset+1 : 0;
+  $("count").textContent = `${from}–${Math.min(state.offset+data.rows.length, data.total)} of ${data.total}`;
+  $("prev").disabled = state.offset<=0;
+  $("next").disabled = state.offset + state.limit >= data.total;
+  const tb = $("rows"); tb.innerHTML="";
+  for(const row of data.rows){
+    const tr = document.createElement("tr");
+    if(row.id===state.selected) tr.classList.add("sel");
+    for(const c of COLS){
+      const td = document.createElement("td");
+      let v;
+      if(c.k==="display_label") v = labelOf(row);
+      else if(c.k==="metals")   v = metalsOf(row);
+      else if(c.k==="best_energy") v = fmtE(row.best_energy);
+      else v = row[c.k]===null||row[c.k]===undefined ? "—" : row[c.k];
+      td.textContent = v;
+      if(c.num) td.classList.add("num");
+      if(c.mono) td.classList.add("mono");
+      if(c.k==="display_label"){
+        td.title = row.l0_composition || "";
+        if(!(row.display_label||"").trim()) td.classList.add("muted");
+      }
+      tr.appendChild(td);
+    }
+    tr.onclick = () => select(row.id);
+    tb.appendChild(tr);
+  }
+  $("empty").hidden = data.rows.length>0;
+  renderHead();
+}
+
+/* ── detail pane ─────────────────────────────────────────────── */
+async function select(id){
+  state.selected = id;
+  [...$("rows").children].forEach((tr,i)=>tr.classList.toggle("sel", false));
+  const r = await fetch("/api/structures/"+id);
+  if(!r.ok){ toast("structure "+id+" not found"); return; }
+  state.detail = await r.json();
+  renderDetail();
+  load();                                     // repaint selection highlight
+}
+function renderDetail(){
+  const d = state.detail; if(!d) return;
+  const s = d.structure;
+  $("detail-empty").hidden = true; $("detail-body").hidden = false;
+  $("d-label").textContent = labelOf(s);
+  $("d-hash").textContent = short(s.l1_graph_hash);
+  $("copy-hash").onclick = () => copyText(s.l1_graph_hash, "L1 hash");
+
+  const pick = $("geom-pick"); pick.innerHTML = "";
+  if(!d.geometries.length){
+    pick.innerHTML = '<option>no geometries recorded</option>'; pick.disabled = true;
+  } else {
+    pick.disabled = false;
+    for(const g of d.geometries){
+      const o = document.createElement("option");
+      o.value = g.id;
+      o.textContent = `fid ${g.fidelity} · ${g.method||"?"} · E ${fmtE(g.energy)}`
+        + (g.is_best?" · best":"") + (g.blob_present?"":" · coords missing");
+      pick.appendChild(o);
+    }
+    const best = d.geometries.find(g=>g.is_best) || d.geometries[0];
+    pick.value = String(best.id);
+    pick.onchange = () => showGeometry(Number(pick.value));
+    showGeometry(Number(pick.value));
+  }
+  const g = d.geometries.find(x=>String(x.id)===pick.value);
+  const props = [
+    ["L0", s.l0_composition], ["formula", s.formula], ["metals", metalsOf(s)],
+    ["charge / 2S+1", `${s.net_charge} / ${s.multiplicity}`],
+    ["bridge", s.max_bridge_class], ["M–M", s.has_metal_metal?"yes":"no"],
+    ["dative bonds", s.n_dative_bonds], ["atoms", s.n_atoms],
+    ["best energy", fmtE(s.best_energy)],
+    ["method", g ? `${g.code||"?"} ${g.code_version||""} · ${g.method||"?"}` : "—"],
+    ["converged", g ? (g.converged===null?"—":(g.converged?"yes":"no")) : "—"],
+    ["donor types", s.donor_types ?? "— (M4)"],
+    ["binding modes", s.binding_modes ?? "— (M5)"],
+    ["open sites", s.n_open_sites ?? "— (M4)"],
+    ["block", s.block_id], ["created", (s.created_at||"").slice(0,10)],
+  ];
+  $("d-props").innerHTML = props.map(([k,v]) =>
+    `<dt>${k}</dt><dd>${v===null||v===undefined?"—":String(v)}</dd>`).join("");
+  $("d-tags").innerHTML = (s.tags||"").split(",").filter(Boolean)
+    .map(t=>`<span class="tag">${t}</span>`).join("");
+  $("d-routes").innerHTML = d.routes.length
+    ? d.routes.map(r=>`<div>#${r.id} · ${r.kind} · depth ${r.depth ?? "— (M8)"} ${r.note?("· "+r.note):""}</div>`).join("")
+    : "no recorded route (ingested or root reagent)";
+  $("copy-spec").onclick = async () => {
+    const q = state.geomId ? "?geometry_id="+state.geomId : "";
+    const rr = await fetch(`/api/structures/${s.id}/spec${q}`);
+    copyText(JSON.stringify(await rr.json(), null, 2), "spec");
+  };
+}
+
+/* ── 3D ──────────────────────────────────────────────────────── */
+function ensureViewer(){
+  if(viewer || typeof $3Dmol === "undefined") return viewer;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  viewer = $3Dmol.createViewer($("viewer"), {backgroundColor: dark ? "#16181c" : "#f7f7f8"});
+  return viewer;
+}
+function applyStyle(){
+  if(!viewer) return;
+  const st = state.style==="stick" ? {stick:{radius:0.12}}
+    : state.style==="sphere" ? {sphere:{scale:0.8}}
+    : {stick:{radius:0.13}, sphere:{scale:0.26}};
+  viewer.setStyle({}, st); viewer.render();
+}
+async function showGeometry(gid){
+  state.geomId = gid;
+  const fb = $("viewer-fallback");
+  let xyz = state.xyzCache.get(gid);
+  if(xyz === undefined){
+    const r = await fetch(`/api/geometries/${gid}/xyz`);
+    xyz = r.ok ? await r.text() : null;
+    state.xyzCache.set(gid, xyz);
+  }
+  if(xyz === null){
+    fb.style.display="block";
+    fb.innerHTML = '<b>Coordinates unavailable.</b><br>The blob for this geometry is not in the '
+                 + 'store — the row exists, the .xyz does not (404).';
+    if(viewer){ viewer.removeAllModels(); viewer.render(); }
+    return;
+  }
+  if(!ensureViewer()){
+    fb.style.display="block";
+    fb.innerHTML = '<b>3Dmol.js did not load</b> (offline or CDN blocked). Raw coordinates:'
+                 + '<pre>'+xyz.replace(/[<&]/g,c=>c==="<"?"&lt;":"&amp;")+'</pre>';
+    return;
+  }
+  fb.style.display="none";
+  viewer.removeAllModels();
+  viewerModel = viewer.addModel(xyz, "xyz");
+  applyStyle();
+  viewer.zoomTo(); viewer.render();
+}
+
+/* ── boot ────────────────────────────────────────────────────── */
+function chips(host, values, onChange){
+  const el = $(host); el.innerHTML = "";
+  for(const v of values){
+    const c = document.createElement("span");
+    c.className = "chip"; c.dataset.v = v; c.textContent = v;
+    c.onclick = () => { c.classList.toggle("on"); onChange(); };
+    el.appendChild(c);
+  }
+  if(!values.length) el.innerHTML = '<span class="muted">none recorded</span>';
+}
+function debounce(fn, ms){ let h; return (...a)=>{ clearTimeout(h); h=setTimeout(()=>fn(...a),ms); }; }
+
+async function boot(){
+  const f = await (await fetch("/api/filters")).json();
+  state.filters = f;
+  const meta = await (await fetch("/api/meta")).json();
+  $("meta").textContent = `read-only · ${f.n_structures} structures · ${meta.db.split(/[\\/]/).pop()}`;
+
+  const rerun = () => { state.offset = 0; load(); };
+  chips("f-metals", f.metals, rerun);
+  chips("f-bridge", f.bridge_classes, rerun);
+  chips("f-donor",  f.donor_types, rerun);
+  for(const m of f.multiplicities) $("f-mult").add(new Option(String(m), String(m)));
+  for(const t of f.tags) $("f-tag").add(new Option(t, t));
+  for(const x of f.fidelities) $("f-fid").add(new Option(`${x} and above`, String(x)));
+  if(f.charge){ $("f-qmin").placeholder = f.charge.min; $("f-qmax").placeholder = f.charge.max; }
+  if(f.energy && f.energy.min!==null){
+    $("f-emin").placeholder = Number(f.energy.min).toFixed(1);
+    $("f-emax").placeholder = Number(f.energy.max).toFixed(1);
+  }
+  $("f-nmin").placeholder = f.n_metals.min; $("f-nmax").placeholder = f.n_metals.max;
+
+  // Reserved columns: keep the control visible but disabled, so the sidebar does not
+  // change shape when M4/M8 fill them in.
+  const inactive = new Set((f.reserved_inactive||[]).map(r=>r.column));
+  if(inactive.has("donor_types") && inactive.has("n_open_sites")) $("fs-donor").disabled = true;
+  if(inactive.has("depth")) $("fs-depth").disabled = true;
+
+  $("f-q").oninput = debounce(rerun, 220);
+  for(const id of ["f-nmin","f-nmax","f-qmin","f-qmax","f-mult","f-mm","f-open","f-fid",
+                   "f-conv","f-emin","f-emax","f-route","f-depth","f-tag"])
+    $(id).onchange = rerun;
+  $("f-limit").onchange = () => { state.limit = Number($("f-limit").value); rerun(); };
+  $("prev").onclick = () => { state.offset = Math.max(0, state.offset-state.limit); load(); };
+  $("next").onclick = () => { state.offset += state.limit; load(); };
+  $("reset").onclick = () => {
+    $("sidebar").querySelectorAll("input").forEach(i=>i.value="");
+    $("sidebar").querySelectorAll("select").forEach(s=>{ if(s.id!=="f-limit") s.value=""; });
+    $("sidebar").querySelectorAll(".chip.on").forEach(c=>c.classList.remove("on"));
+    rerun();
+  };
+  $("style-stick").onclick = () => { state.style="stick"; applyStyle(); };
+  $("style-ball").onclick  = () => { state.style="ball";  applyStyle(); };
+  $("style-sphere").onclick= () => { state.style="sphere";applyStyle(); };
+  $("recenter").onclick    = () => { if(viewer){ viewer.zoomTo(); viewer.render(); } };
+
+  renderHead();
+  await load();
+}
+boot();
+</script>
+</body>
+</html>

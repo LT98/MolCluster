@@ -1,0 +1,47 @@
+{
+  "algo_versions": {
+    "canonical_order": "ir1",
+    "graph_schema": "1",
+    "l0_composition": "1",
+    "l1_certificate": "cert1",
+    "l2_isomer_tag": "0-stub",
+    "l3_conformer_id": "0-stub",
+    "wl_index": "wl3-nx"
+  },
+  "l0": {
+    "btc": "C9H3O6_q-3_s1",
+    "btc_h3": "C9H6O6_q0_s1",
+    "cu_paddlewheel": "Cu2_C4H4O8_q0_s1|Cu(+2,hs),Cu(+2,hs)",
+    "cyclohexane": "C6H12_q0_s1",
+    "fe3_mu3_oxo_233": "Fe3_C6H6O13_q0_s15|Fe(+2,hs),Fe(+3,hs),Fe(+3,hs)",
+    "fe3_mu3_oxo_333": "Fe3_C6H6O13_q1_s16|Fe(+3,hs),Fe(+3,hs),Fe(+3,hs)",
+    "fe_hexaaqua_hs": "Fe1_H12O6_q2_s5|Fe(+2,hs)",
+    "fe_hexaaqua_ls": "Fe1_H12O6_q2_s1|Fe(+2,ls)",
+    "formate": "CHO2_q-1_s1",
+    "formic_acid": "CH2O2_q0_s1",
+    "pt_ammine_dichloride_a": "Pt1_H6Cl2N2_q0_s1|Pt(+2,ls)",
+    "pt_ammine_dichloride_b": "Pt1_H6Cl2N2_q0_s1|Pt(+2,ls)",
+    "two_cyclopropanes": "C6H12_q0_s1",
+    "water": "H2O_q0_s1",
+    "zn2_bridged": "Zn2_C2H2O4_q2_s1|Zn(+2,ls),Zn(+2,ls)",
+    "zn2_chelated": "Zn2_C2H2O4_q2_s1|Zn(+2,ls),Zn(+2,ls)"
+  },
+  "l1": {
+    "btc": "bdf2511d76405f210b37d2e2e57c6ae75927e070813f902d5b07e6da5b8347ac",
+    "btc_h3": "7f4019e92bc9cf97674d616f149c22381178f199bc3d5f2f27f8756ea55493ad",
+    "cu_paddlewheel": "aed8d6a834418f38510ba7bc9512b8c59c981fbb50b9f55b1147e26f5bd3b498",
+    "cyclohexane": "cd8ce12ace56900e973801bfdda1cd87ae8d08da42749dd3b99577872a5d94b0",
+    "fe3_mu3_oxo_233": "7db325e8a2cd50f3f9670745c905a269a81714c7bc85032026f14bc68aae9598",
+    "fe3_mu3_oxo_333": "9a3022deefc43daea2da49159db6b117b12372d1208b84341563c56541afadba",
+    "fe_hexaaqua_hs": "fe13cfbf2a5b5fc2cf24368dd12bf55b86506f8ade71f8b39fcad7825bb73b21",
+    "fe_hexaaqua_ls": "803670da929dc921198c1b5e88d8f0391ce9661681c9cc30529a3c66c458b59b",
+    "formate": "0a3430ca0889b4c54f1ddecda886db3d95248e921c2cd84353b19263cae7e88c",
+    "formic_acid": "6b8cc52dcdd0a267fd3bff4025d3b9e4b958074bd80e758b28ae2bb140fd450f",
+    "pt_ammine_dichloride_a": "5e65d01130b349e5657eaee0c3ba0bd09d76ec6f81a9bd4e4fcdb8bf17c3a774",
+    "pt_ammine_dichloride_b": "5e65d01130b349e5657eaee0c3ba0bd09d76ec6f81a9bd4e4fcdb8bf17c3a774",
+    "two_cyclopropanes": "3a0ffb52b2cb5ecc22f8134b58c5c464ec5ccb69aa40570af517d222ccf8f429",
+    "water": "f95165077456782a443254659ae13092afbb7d19129a95b04504825174ddb677",
+    "zn2_bridged": "0431c0255c733d25f117f40d2f62038e4cb1b9078c5eaff8b367a2442ae1a907",
+    "zn2_chelated": "f2a2e667e5bb4701cfa7f0cf5394ba0fc003e1f4303512421452a58243deeb85"
+  }
+}

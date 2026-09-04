@@ -12,6 +12,8 @@ dependencies:
   - tblite-python     # GFN2-xTB backend, cross-platform via conda-forge
   - jupyterlab
   - pytest
+  - fastapi           # read-only registry viewer (M3.5)
+  - uvicorn
   - pip
   # ---- optional extras (uncomment as needed) ----
   # - pymatgen        # StructureMatcher / MoleculeMatcher for L3 dedup

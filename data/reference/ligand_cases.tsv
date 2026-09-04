@@ -1,0 +1,36 @@
+# Reference cases for donor perception, protomer enumeration and chelate detection.
+#
+# THIS FILE IS THE INTERFACE FOR ADDING TEST CASES.  Add a row, run
+#     python scripts/check_cases.py
+# and the whole set is re-checked.  `python -m pytest` runs it too, so a case added here
+# becomes a permanent regression guard rather than something that scrolled past once.
+#
+# It lives under data/reference/ because that is the one place in data/ that IS tracked
+# by git (see NOTES.md) — everything else there is regenerable and deliberately ignored.
+#
+# Columns (tab separated; "-" means "do not check this"):
+#   name              free text, for the report
+#   smiles            the molecule
+#   multiplicity      spin multiplicity; never guessed
+#   chelates          yes | no  — does the NEUTRAL molecule present any chelate pocket
+#   ring              expected chelate ring size, or -
+#   donors            expected donor types in the pocket, "+"-joined and sorted, or -
+#   protomers         expected number of DISTINCT protomers, or -
+#   note              why this case is here
+#
+name	smiles	multiplicity	chelates	ring	donors	protomers	note
+catechol	Oc1ccccc1O	1	yes	5	phenolate_O+phenolate_O	3	canonical catecholate chelator
+benzene-1,4-diol	Oc1ccc(O)cc1	1	no	-	-	3	para diol cannot chelate: metal would sit in the ring
+resorcinol	Oc1cccc(O)c1	1	no	-	-	3	meta diol cannot chelate either
+phenol	Oc1ccccc1	1	no	-	-	2	one donor, nothing to chelate with
+salicylic-acid	OC(=O)c1ccccc1O	1	yes	6	carboxylate_O+phenolate_O	4	6-ring chelate; missed entirely by adjacency-only pocket finding
+acetylacetone	CC(=O)CC(C)=O	1	yes	6	carbonyl_O+carbonyl_O	1	beta-diketone, flexible 6-ring
+2,2-bipyridine	c1ccc(-c2ccccn2)nc1	1	yes	5	pyridyl_N+pyridyl_N	1	free conformer is anti; must still be recognised
+1,10-phenanthroline	c1ccc2ccc3cccnc3c2n1	1	yes	5	pyridyl_N+pyridyl_N	1	rigid analogue of bipy — no rotation available
+ethylenediamine	NCCN	1	yes	5	amine_N+amine_N	1	neutral N donors, flexible backbone
+oxalic-acid	OC(=O)C(O)=O	1	yes	5	carboxylate_O+carboxylate_O	3	EXPECTATION CORRECTED: 2 acidic H, the two mono choices are symmetry-equivalent, so 3 not 4
+biphenyl-2,2-diol	Oc1ccccc1-c1ccccc1O	1	yes	7	phenolate_O+phenolate_O	3	large ring, reachable only by rotation
+benzene	c1ccccc1	1	no	-	-	1	no donors at all
+ethanol	CCO	1	no	-	-	2	one weak donor
+THQ	OC1=C(O)C(=O)C(O)=C(O)C1=O	1	yes	5	carbonyl_O+enol_O	7	16 subsets collapse to 7 protomers by symmetry
+BTC	OC(=O)c1cc(C(O)=O)cc(C(O)=O)c1	1	yes	4	carboxylate_O+carboxylate_O	4	EXPECTATION CORRECTED: a carboxylate chelates through its OWN two oxygens (4-ring); the arms are still one configuration, hence 4 protomers
