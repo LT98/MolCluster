@@ -21,7 +21,7 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from mofsbu import library
-from mofsbu.energy.relax import available_modes
+from mofsbu.energy.relax import mode_status
 from mofsbu.geometry.placer import GEOMETRIES
 from mofsbu.spec import RUN_MODES, BuildSpec
 from mofsbu._types import MofsbuError
@@ -60,14 +60,17 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
         """What the pipeline can actually do.  The page renders from this, so an
         unimplemented option is labelled by the backend rather than by a hard-coded
         string in the markup that can drift out of date."""
-        modes = available_modes()
+        status = mode_status()
+        labels = {"construct": "Construct only",
+                  "ml_go": "ML geometry optimisation (MACE)",
+                  "xtb_go": "GFN2-xTB geometry optimisation",
+                  "dft_go": "DFT geometry optimisation"}
         return {
             "run_modes": [
-                {"id": m, "available": modes.get(m, False),
-                 "label": {"construct": "Construct only",
-                           "ml_go": "ML geometry optimisation",
-                           "dft_go": "DFT geometry optimisation"}[m],
-                 "note": "" if modes.get(m) else "not implemented — M7 (energy backends)"}
+                {"id": m, "available": status.get(m, {}).get("available", False),
+                 "label": labels[m],
+                 "backend": status.get(m, {}).get("backend"),
+                 "note": status.get(m, {}).get("note", "")}
                 for m in RUN_MODES],
             "max_degree_implemented": 1,
             "degree_note": ("degree 1 = complete one centre's coordination sphere. "

@@ -56,6 +56,27 @@ Both find the registry themselves: the real one if it exists, otherwise the demo
 `--db` is resolved against the working directory, then `MOFSBU_DATA`, then the repo root, so the
 command behaves the same wherever it is run from.
 
+## Energies (M7)
+
+`python -m pytest` passes with no quantum-chemistry stack installed: the backends are behind
+a protocol, and the tests that need one skip themselves. What a machine can actually run is
+reported by the code rather than assumed — `mofsbu.energy.available_backends()` and
+`mode_status()` are what the builder page's disabled options are drawn from.
+
+    conda install -c conda-forge tblite-python ase     # GFN2-xTB (also: pip install tblite ase)
+    pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install mace-torch
+
+`tblite` publishes working PyPI wheels, so the pip line is a real alternative to conda —
+worth knowing, because `legacy/energy_model.py` records the opposite for the sandbox it was
+written in. DFT has no backend wired up and asking for one raises rather than substituting
+something cheaper.
+
+Energies are only ever subtracted through `mofsbu.energy.reference`, which refuses equations
+it cannot justify — see `docs/PLAN_implementation.md` rev 16 for why a *balanced* equation is
+not enough. The archived Fe(III) references can be re-derived with:
+
+    python scripts/regress_m7.py --refs
+
 If that install fails with *"build backend is missing the 'build_editable' hook"*, the environment's
 setuptools predates PEP 660 — `pip install -U setuptools` and retry.
 

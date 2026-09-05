@@ -14,6 +14,9 @@ ALGO_VERSIONS: dict[str, str] = {
     "canonical_order": "ir1",     # individualisation-refinement canonical labelling
     "l2_isomer_tag":   "0-stub",  # M5
     "l3_conformer_id": "0-stub",  # M5
+    "energy_backends":  "1",      # backend protocol + how a MethodSpec is filled in
+    "reference_scheme": "balanced1",   # reaction-balanced energies (M7)
+    "spin_convention":  "hs1",    # high_spin_multiplicity: d-count table + charge
 }
 
 

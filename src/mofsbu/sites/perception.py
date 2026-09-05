@@ -41,11 +41,47 @@ LABILE_DONOR_PATTERNS: list[tuple[str, str, int]] = [
     ("sulfinate_O",   "[SX3](=[OX1])[OX2H1]", -1),
     ("phosphonate_O", "[PX4](=[OX1])([#6,#8])[OX2H1]", -1),
     ("boronate_O",    "[BX3]([#6,#8])[OX2H1]", -1),
-    ("thiolate_S",    "[#6][SX2H1]", -1),
+    # acyl sulfonamide before plain sulfonamide: both end on the same N, and the first
+    # pattern to claim an atom wins, so the more specific one has to come first or it
+    # can never fire.
+    ("acyl_sulfonamide_N",
+     "[NX3H1;$([NX3H1]([CX3]=[OX1])[SX4](=[OX1])(=[OX1]))]", -1),   # ~4, COOH bioisostere
     ("sulfonamide_N", "[SX4](=[OX1])(=[OX1])[NX3H1]", -1),
     ("azolate_N",     "[nX3H1]", -1),
+    ("hydroxamate_O", "[CX3](=[OX1])[NX3;H1][OX2H1]", -1),          # pKa ~9, siderophore motif
+    ("oxime_O",       "[#6X3]=[NX2][OX2H1]", -1),                   # ~11
+    ("nhydroxy_O",    "[NX3;H0,H1]([#6])[OX2H1]", -1),              # N-hydroxy heterocycles
+    # Written as a single-atom recursive match on purpose.  The donor is the LAST atom of
+    # the match (see the module docstring), so the obvious spelling
+    # `[CX3](=[OX1])[NX3H1][CX3]=[OX1]` ends on a carbonyl oxygen that carries no H: the
+    # pattern matches, the h_idx check then discards it, and it looks like coverage while
+    # being dead.  `$(...)` puts the environment inside the donor atom instead.
+    ("imide_N",       "[NX3H1;$([NX3H1]([CX3]=[OX1])[CX3]=[OX1])]", -1),  # succinimide, ~9
+    ("thiophosphate_S", "[PX4](=[OX1,SX1])[SX2H1]", -1),
+    ("selenol_Se",    "[#6][SeX2H1]", -1),                          # ~5, beats thiol
+    ("peroxy_O",      "[#6][OX2][OX2H1]", -1),                      # hydroperoxide / peracid
+    ("thiolate_S",    "[#6][SX2H1]", -1),
     ("alkoxide_O",    "[CX4][OX2H1]", -1),
+    # A free hydrohalic acid, HX -> X- + H+.  This is the ONLY halide case that belongs in
+    # a *labile* list: a halide reached as a ligand is already X- (a whole ligand, and so
+    # a `co_ligand` entry such as `[Cl-]`), and a halogen on carbon is a leaving group,
+    # not a donor.  Named for what it is, so nobody expects it to find halide sites on a
+    # linker.  `_classify_anionic` recognises the X- it leaves behind, without which the
+    # site would exist at build time and vanish on recall.
+    ("hydrohalide_X", "[F,Cl,Br,I;H1;X1]", -1),
 ]
+
+# Deliberately NOT in the list above, each for a reason that has already cost time:
+#
+# * `phosphinate_O` -- `[PX4](=[OX1])([#6])([#6])[OX2H1]` is real chemistry and redundant
+#   here: `phosphonate_O` already matches it (its second neighbour is `[#6,#8]`), claims
+#   the atom first, and types the site `phosphonate_O`.  Two names for one site is how a
+#   query starts missing rows.
+# * `dicarbonyl_CH` / `nitro_CH` -- the acidic proton really is on carbon, but the DONOR
+#   is the delocalised oxygen (enolate, nitronate), not the carbanion.  Recording carbon
+#   as the donor hands `site_frame` an atom with no lone pair and no entry in
+#   `IDEAL_MDA_ANGLE`, which falls back to 120 degrees without saying so.  The enol
+#   tautomer of a 1,3-diketone is already caught by `enol_O`.
 
 _LABILE = [(name, Chem.MolFromSmarts(smarts), q) for name, smarts, q in LABILE_DONOR_PATTERNS]
 _CARBOXYLATE_C = Chem.MolFromSmarts("[CX3](=[OX1])[OX1,OX2]")
@@ -125,6 +161,12 @@ def _classify_anionic(atom: Chem.Atom) -> str | None:
         return "thiolate_S"
     if sym == "N":
         return "amide_N"
+    if sym in ("F", "Cl", "Br", "I"):
+        # A halide arrives already anionic -- as a co-ligand `[Cl-]`, or as what
+        # `hydrohalide_X` leaves behind.  Without this branch the site created by
+        # deprotonating HX is invisible the moment the structure is read back, which
+        # breaks perceive-once (D5): activation would destroy the site it creates.
+        return f"halide_{sym}"
     return None
 
 

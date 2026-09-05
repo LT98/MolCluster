@@ -442,6 +442,17 @@ with a test that fails if it is reversed. None is in the locked ledger yet.
   that enters identity but not the total. This is safe *because* hydrogens are explicit nodes:
   protomers stay distinct through the H count, not through where the charge was written.
   Bond order is excluded from the hash for the same reason (Kekulé forms, C=O/C–O resonance).
+- **D17 (proposed)** **An energy difference requires an isodesmic equation, not merely a
+  balanced one.** Raised while implementing M7. Balance in atoms and charge is necessary
+  and demonstrably not sufficient: the archived `E(EBU) − E(M^q+) − Σ E(anion)` scheme
+  satisfies it and still reversed its own qualitative verdict once a medium was added.
+  `energy.reference` therefore refuses, by default, any equation containing a bare metal
+  ion, a metal-free species with |charge| > 1, or a net change in metal–donor bond count.
+  Reproducing a legacy number needs `strict=False`, and the resulting value carries
+  `isodesmic=False` into anything that stores it. The cost of this decision is that some
+  equations a user considers reasonable will be refused; the alternative is a table of
+  numbers that all look equally good.
+
 - **D16 (proposed)** **L1 = sha256 of the canonical certificate, not the WL hash.** D3 makes WL
   the primary stored key. It cannot be: **1-WL does not separate a µ2-bridging carboxylate from
   a chelating one** — an 8-membered M–O–C–O–M–O–C–O ring versus two 4-membered chelate rings
@@ -510,15 +521,34 @@ carries M–M + µ-bridges + per-center labels from the start.
 
 ## 11. Known risks / weaknesses to keep in view
 
-- Gas-phase GFN2-xTB on isolated highly-charged anions: only within-metal *relative* rankings are
+- ~~Gas-phase GFN2-xTB on isolated highly-charged anions: only within-metal *relative* rankings are
   trustworthy; a better reference scheme (reaction-balanced, consistent-charge, protonation-aware)
-  is needed before energies drive route viability quantitatively.
+  is needed before energies drive route viability quantitatively.~~ **Addressed in M7, and the
+  diagnosis above was half wrong.** "Consistent-charge" was already true: the archived equation
+  `E(EBU) − E(M^q+) − Σ E(ligand anion)` balances in atoms *and* in charge, which is why nothing
+  caught it. What makes it untrustworthy is that its reference species are not comparable to its
+  product — a bare cation with no ligand field, a polyanion with nowhere to put its charge, and
+  **six metal–donor bonds appearing out of nothing**. `energy.reference` therefore checks two
+  things: balance (necessary) and an isodesmic condition (sufficient in practice) whose sharpest
+  rule is that the dative-bond count must be equal on both sides. Absolute energies at this level
+  of theory are still not claimable; what is now enforced is that a *difference* is only computed
+  between species the method describes comparably.
 - No topology/tiling check yet — a correct node+linker doesn't prove it forms a periodic net.
 - Canonical-hash reproducibility depends on pinning the algorithm + method versions (store them).
 - Activation ease as a single scalar is lossy — the named-component design mitigates but the
   partner/condition dependence (C7) is real.
 
 ## 12. Changelog
+
+- *(M7 implementation session)* Built the energy backends and the reference scheme. The
+  session's finding is a correction to §11's first bullet: **the archived formation-energy
+  equation is charge-balanced, and that is exactly why it went undetected.** A
+  reaction-balance check — the fix §11 proposed — would have passed it. The rule that
+  actually catches it is conservation of metal–donor bonds across the arrow, which
+  distinguishes a ligand-exchange equation (errors cancel) from a formation-from-free-ions
+  equation (they do not). See `docs/PLAN_implementation.md` rev 16. **D17 (proposed)**
+  below follows from it.
+
 
 - *(M2 implementation session)* Built the typed graph, canonicalisation and L0/L1 keys against
   hand-written polynuclear fixtures (paddlewheel, Fe₃-µ₃-oxo in two valence patterns, a

@@ -17,7 +17,11 @@ from mofsbu.graph import BridgeClass, EdgeType, TypedGraph, canonical_order, cer
 from mofsbu.identity import block_id, hill_formula, l0_composition, l2_isomer_tag, wl_index
 from mofsbu.naming import compose_label, decompose
 from mofsbu.registry.db import Registry, utcnow
-from mofsbu._types import Fidelity, MofsbuError
+# MethodSpec lives in `_types` beside `Fidelity` so that `energy` (which produces
+# numbers) and this module (which stores them) share one definition without either
+# importing the other.  Re-exported here because callers have always imported it
+# from `mofsbu.registry`.
+from mofsbu._types import Fidelity, MethodSpec, MofsbuError
 from mofsbu.versions import ALGO_VERSIONS
 
 _BRIDGE_RANK = {BridgeClass.NONE: 0, BridgeClass.TERMINAL: 1, BridgeClass.MU2: 2,
@@ -33,19 +37,6 @@ class Put(NamedTuple):
 
 class RegistryError(MofsbuError):
     pass
-
-
-@dataclass(frozen=True)
-class MethodSpec:
-    """What produced a number.  Ground rule 3: no bare floats anywhere."""
-
-    code: str                       # tblite | mace | heuristic | legacy | construct
-    code_version: str
-    method: str                     # GFN2-xTB | MACE-MP-0 | raw-construct
-    solvent: str | None = None
-    charge: int | None = None
-    multiplicity: int | None = None
-    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

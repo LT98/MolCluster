@@ -716,6 +716,102 @@ your head is how the two documents drift apart.
 
 ## 9. Changelog
 
+- *(rev 17)* **Labile-pattern audit: four of twelve new SMARTS could never match.**
+  Twelve donor patterns were added to `sites/perception.py` (hydroxamate, oxime, imide,
+  acyl sulfonamide, thiophosphate, selenol, peroxy, halide, and three that are gone
+  again).  Probing each one against a molecule it must recognise found that **four never
+  fired and one fired on the wrong atom**, and that nothing anywhere would have said so.
+
+  The cause is a convention the module documents and the patterns did not follow: the
+  donor is the **last atom of the match**.  Spelled the obvious way, an imide
+  (`[CX3](=[OX1])[NX3H1][CX3]=[OX1]`) ends on a carbonyl oxygen that carries no hydrogen,
+  so the match is made and then silently discarded by the `h_idx` lookup.  Four patterns
+  failed exactly this way; `peroxy_O` as `[OX2H1][OX2][#6]` ended on **carbon** and
+  duly offered to deprotonate the methyl of CH3OOH to a carbanion.
+  * Fixed by putting the donor last, with `$(...)` recursive SMARTS where the environment
+    has to be described around it.  `nhydroxy_N` renamed `nhydroxy_O` (its donor is the
+    hydroxyl O, not the N).  `acyl_sulfonamide_N` moved **above** `sulfonamide_N`, which
+    was claiming the same nitrogen first.  `phosphinate_O` dropped as redundant —
+    `phosphonate_O` already matches it — and `dicarbonyl_CH` / `nitro_CH` dropped because
+    carbon is not a donor type this package can place; their real donor is the
+    delocalised enolate/nitronate oxygen, which `enol_O` already covers.
+  * **Halides.**  A halide almost never belongs in a *labile* list: as a ligand it is
+    already X- (a whole ligand, i.e. a `co_ligand` such as `[Cl-]`), and on carbon it is
+    a leaving group.  The one protic case is free HX, so the pattern is named
+    `hydrohalide_X` for what it does.  It exposed a real gap underneath:
+    `_classify_anionic` handled O, S and N and returned `None` for everything else, so
+    the chloride produced by activating HCl **perceived no donor at all on recall** —
+    activation destroying the site it creates, which is the opposite of perceive-once
+    (D5).  A `halide_X` branch closes it.
+  * `tests/test_donor_patterns.py` is the gate: every pattern must have a probe molecule,
+    must fire on it, and must land on the element its own name promises.  A SMARTS added
+    without a probe fails the suite, which is the check that was missing.
+
+- *(rev 16)* **M7 first half: energy backends, and a reference scheme that refuses bad
+  subtractions.**  `energy/backends.py` puts xTB (tblite), MACE and a test double behind
+  one protocol; `energy/relax.py` gets the body its signature has been waiting for since
+  M3; `energy/reference.py` is the new part.
+
+  **The thing that was actually wrong is not what §11 said it was.**  The risk register
+  described the archived formation energies as "gas-phase GFN2-xTB on isolated highly
+  charged anions", and the fix was assumed to be a *balanced* equation.  Writing the
+  balance checker disproved that: the legacy scheme
+
+      E_form = E(EBU, q) - E(M^q+) - SUM E(free ligand anion)
+
+  **balances**.  Atoms and charge both.  `docs/reports/ni_btc_report.md` even calls it
+  "charge-conserving", correctly.  A balance check alone would have passed the equation
+  whose Ni/EDTA verdict later reversed from "-8.5 eV, a deep trap" to "-0.3 eV, near
+  parity" the moment a medium was added.  Balance is necessary and **not sufficient**,
+  and a scheme that only checked it would have been a fix in name.
+
+  So there are two gates, not one.  The second asks whether the two sides are comparable
+  chemistry, and fails the legacy equation on three counts it can measure off the typed
+  graph: a **bare ion** (a lone charged metal atom, the `E(M^q+)` term), a **naked
+  polyanion** (a metal-free species with |charge| > 1, the `E(BTC^3-)` term), and
+  **coordination change** — the count of metal-donor dative bonds must be equal on both
+  sides.  That last one is the sharp instrument: it is what separates a ligand-exchange
+  equation, where the metal is coordinated throughout and the errors cancel, from a
+  formation-from-free-ions equation, where six bonds appear out of nothing.  A test
+  asserts the archived equation balances *and* is still refused, so the distinction
+  cannot quietly collapse back into a single check.
+  * `strict=False` reproduces a legacy number on purpose; the result carries
+    `isodesmic=False` and `store_reaction_energy` refuses it without `force=True`,
+    stamping `NOT-ISODESMIC:bare_ion,...` into the note when forced.  The caveat travels
+    with the number instead of living in a report nobody re-reads.
+  * Mixed levels of theory in one equation are refused; a **charge-blind** backend (MACE
+    sees elements and positions, not formal charge) is refused on any charged equation,
+    which is a property of the `methods` row, not a docstring.  A species with no energy
+    is **named**, never skipped — dropping a term from a balanced equation is how you get
+    a confidently wrong number.
+  * The equation's fidelity is the **weakest** rung in it.  An xTB product minus a
+    raw-construct reagent is a raw-construct number.
+  * **The spin convention is code now.**  The archived runs used minimal spin for Ni(II)
+    and a fixed sextet for Fe(III), passed in through `METAL_MULT`.  Both come out of
+    `high_spin_multiplicity` / `minimal_multiplicity`, and which one was used lands in
+    the stored `MethodSpec`.  `check_spin` refuses a multiplicity the electron count
+    cannot reach — xTB will happily return a number for an even-electron doublet.
+  * `MethodSpec` moved to `_types` beside `Fidelity` (one definition, no energy->registry
+    dependency; re-exported so every existing import still works).  `xtb_go` joins
+    `RUN_MODES` and `SPEC_VERSION` is 3 — no field changed, but a v3 spec must be refused
+    by a v2 build with "newer than I understand" rather than a bare run_mode error.
+  * `available_modes()` now asks the backends whether they import, so the UI's disabled
+    options track the machine.  DFT stays a `NotBuiltYet` — there is no external code
+    wired up, and an option that silently ran xTB instead is the failure ground rule 8
+    exists for.  `EnergyBackendUnavailable` ("install it") is deliberately a different
+    exception from `NotBuiltYet` ("it is not written"): the laptop and the workstation
+    give different answers to the first and the same answer to the second.
+
+  **Exit gate: half done, and the other half is blocked on missing data.**
+  `scripts/regress_m7.py --refs` recomputes the four archived Fe(III) reference energies
+  from `legacy/fe_btc_refs.json` — same species, same method — which checks the backend
+  is the calculator that produced the archived numbers.  The ranking regression the plan
+  asks for cannot run: `ni_btc_report.md` cites `ni_btc_outputs/` and
+  `ni_btc_xtb_results.csv`, neither is in the repo, and `legacy/ni_btc_results.csv` has an
+  **empty `formation_eV` column**.  The archived ranking currently exists only as a table
+  in a markdown report.  Stage 2 is a declared stub that says exactly this rather than
+  regressing against numbers that are not there.
+
 - *(rev 15)* **Migrations that actually migrate.**  Submitting a run against a registry
   created one revision earlier failed with `no such column: runs.diagnostics_json`:
   `migrate()` only ran `CREATE TABLE IF NOT EXISTS`, which does nothing to an existing

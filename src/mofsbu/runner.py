@@ -32,7 +32,7 @@ from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import chelate_pockets, find_pockets, perceive
 from mofsbu.sites.protomers import enumerate_protomers
 from mofsbu.spec import BuildSpec
-from mofsbu._types import Fidelity, MofsbuError
+from mofsbu._types import EnergyBackendUnavailable, Fidelity, MofsbuError
 
 FF = MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF")
 BUILD = MethodSpec(code="mofsbu", code_version="0.0.1", method="frame-directed-placement")
@@ -51,13 +51,16 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
         grow(None, (), degree=spec.degree)      # raises NotBuiltYet, loudly and with why
 
     if spec.run_mode != "construct":
-        from mofsbu._types import Fidelity
-        from mofsbu.energy.relax import relax_geometry
+        from mofsbu.energy.relax import mode_status
 
         # Refuse before any work is queued rather than building structures and failing at
-        # the optimisation step, which would leave a half-done run to interpret.
-        relax_geometry(None, [], charge=0, multiplicity=1,
-                       target=Fidelity.ML if spec.run_mode == "ml_go" else Fidelity.DFT)
+        # the optimisation step, which would leave a half-done run to interpret.  Asking
+        # the backend whether it is installed is not the same question as whether the
+        # code exists, and the two get different answers on the laptop.
+        status = mode_status().get(spec.run_mode)
+        if status is None or not status["available"]:
+            note = (status or {}).get("note") or f"run mode {spec.run_mode!r} cannot execute"
+            raise EnergyBackendUnavailable(f"{spec.run_mode}: {note}")
 
     run_id = create_run(reg, spec)
     n = 0

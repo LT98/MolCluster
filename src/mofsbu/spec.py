@@ -16,12 +16,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 2
+SPEC_VERSION = 3
 
-# What to do with each structure once it is constructed.  Only the first is implemented;
-# the others are settled names with no body yet (ground rule 7), so a spec can ask for
-# them and be refused with a reason rather than silently getting something less.
-RUN_MODES = ("construct", "ml_go", "dft_go")
+# What to do with each structure once it is constructed.  Whether a mode can RUN is a
+# property of the machine, not of the spec: `energy.relax.mode_status()` asks the
+# backends, and the planner refuses with that reason.  `dft_go` is still a settled name
+# with no body (ground rule 7) — there is no external code wired up.
+RUN_MODES = ("construct", "ml_go", "xtb_go", "dft_go")
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class BuildSpec:
     # off by default, because quietly building something smaller than you asked for is
     # exactly the failure this project keeps running into.
     allow_unsaturated: bool = False
-    run_mode: str = "construct"          # construct | ml_go (M7) | dft_go (M7)
+    run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -119,6 +120,10 @@ class BuildSpec:
             d.pop("relax_to", None)             # v1 field, replaced by run_mode
             d.setdefault("run_mode", "construct")
             d.setdefault("allow_unsaturated", False)
+        # v2 -> v3 adds no field: `xtb_go` joins RUN_MODES, so every v2 spec is already a
+        # valid v3 one and there is nothing to rewrite.  The version still moves, because
+        # a v3 spec saying `run_mode: xtb_go` must be REFUSED by a v2 build with "this is
+        # newer than I understand" rather than with a bare "not a valid run_mode".
         return d
 
     @classmethod
