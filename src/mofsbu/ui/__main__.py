@@ -16,10 +16,23 @@ from pathlib import Path
 from mofsbu.config import REPO_ROOT, data_root, registry_path, store_root
 
 
+def discover_databases(root: Path | None = None) -> list[Path]:
+    """Every SQLite file under the data root, newest first."""
+
+    base = Path(root or data_root())
+    if not base.exists():
+        return []
+    found = [p for p in base.glob("*.db") if p.is_file()]
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 def _candidates(given: Path | None, *defaults: Path) -> list[Path]:
-    """Where to look, in order.  A relative path is tried against cwd, then the data
-    root, then the repo root — a relative path typed from `src/` should still find
-    `data/` at the top of the checkout rather than failing with a bare 'not found'."""
+    """Where to look, in order.
+
+    A relative path is tried against cwd, then the data root, then the repo root — a
+    relative path typed from `src/` should still find `data/` at the top of the checkout
+    rather than failing with a bare 'not found'.
+    """
     if given is None:
         return list(defaults)
     if given.is_absolute():
@@ -27,8 +40,23 @@ def _candidates(given: Path | None, *defaults: Path) -> list[Path]:
     return [given, data_root() / given.name, REPO_ROOT / given]
 
 
-def _first_existing(paths: list[Path]) -> Path | None:
-    return next((p for p in paths if p.exists()), None)
+def resolve_database(given: Path | None) -> tuple[Path, list[Path], str]:
+    """Pick a database.  Returns (chosen, others_available, how_it_was_chosen)."""
+    if given is not None:
+        for candidate in _candidates(given):
+            if candidate.exists():
+                return candidate, [], "given"
+        # An explicitly named database that does not exist is still honoured: the user
+        # said which file they meant, and it will be created on first write.
+        return _candidates(given)[0], discover_databases(), "given (will be created)"
+
+    discovered = discover_databases()
+    preferred = registry_path()
+    if preferred.exists():
+        return preferred, [p for p in discovered if p != preferred], "the default registry"
+    if discovered:
+        return discovered[0], discovered[1:], "newest in the data folder"
+    return preferred, [], "nothing found yet — will be created on first write"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,22 +67,35 @@ def main(argv: list[str] | None = None) -> int:
                         "(default: the real registry if present, else the demo one)")
     p.add_argument("--store", type=Path, default=None,
                    help="blob store root holding the .xyz payloads")
+    p.add_argument("--list-db", action="store_true",
+                   help="list the databases that can be seen, then exit")
     p.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="uvicorn autoreload (development)")
     a = p.parse_args(argv)
 
-    db_candidates = _candidates(a.db, registry_path(), data_root() / "demo_registry.db")
-    db = _first_existing(db_candidates)
-    if db is None:
-        looked = "\n  ".join(str(c) for c in db_candidates)
-        p.error(
-            "no registry database found. Looked in:\n  " + looked +
-            "\n\nSeed the demo one with:  python scripts/seed_demo_registry.py"
-        )
+    if a.list_db:
+        found = discover_databases()
+        print(f"data folder: {data_root()}")
+        if not found:
+            print("  no databases yet — one is created when you submit a run at /builder")
+        for path in found:
+            size = path.stat().st_size / 1e6
+            print(f"  {path.name:28s} {size:8.2f} MB   {path}")
+        return 0
 
-    store = _first_existing(_candidates(a.store, store_root(), db.parent / "store")) \
-        or store_root()
+    db, others, why = resolve_database(a.db)
+    store = a.store or store_root()
+
+    print(f"mofsbu  db={db}  ({why})")
+    if others:
+        print("  also available: " + ", ".join(o.name for o in others)
+              + "   — pass --db to choose")
+    if not db.exists():
+        print("  this file does not exist yet; open /builder and submit a run to create it")
+    print(f"  store={store}")
+    print(f"  → http://{a.host}:{a.port}/         registry viewer (read-only)")
+    print(f"  → http://{a.host}:{a.port}/builder  spec builder")
 
     import uvicorn
 
