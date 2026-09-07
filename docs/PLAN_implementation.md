@@ -716,6 +716,83 @@ your head is how the two documents drift apart.
 
 ## 9. Changelog
 
+- *(rev 18)* **Every halide co-ligand was rejected by construction, and the message said
+  "2 clash(es)".**  Trying iodide in place of the water that fills leftover coordination
+  sites produced a run of rejections with no way to tell why.  The cause was one line:
+  `placer.D_ML` held a distance per METAL and applied it to every donor, so a Zn(II)
+  centre placed an iodide at 2.00 A.  Zn-I is 2.60.  The clash check then compared the
+  short bond against van der Waals radii — iodine's 1.98 A against oxygen's 1.52 — and
+  the two errors compounded.  Water passed the same test by 0.04 A, which is how a
+  systematically wrong table survived: it was only ever asked about oxygen.
+
+  * **`geometry/distances.py`** is the new node.  `d(M, D) = base(M) + delta(element)`,
+    where `base` IS the old `D_ML` table (so every O/N-donor geometry ever built is
+    bit-identical) and `delta` is a per-element offset **calibrated against typical
+    divalent bond lengths, not derived from radii** — radii were tried first and are
+    wrong in a consistent direction, because a dative M-O bond is ~0.12 A longer than
+    r_cov(M)+r_cov(O) while M-I is about right, so the residual is not a constant.
+    Unknown pairs fall back to covalent radii and **carry `source="covalent-radii"`**,
+    which travels into the choice vector, the QC notes and the inspector: a QC verdict
+    on an uncalibrated pair is evidence about this table, not about the chemistry.
+  * The donor's **element is read off the molecule**, never parsed from the donor-type
+    name.  `hydrohalide_X` and `halide_I` name the same iodine, and a donor type added
+    later must not silently inherit oxygen's bond length.
+  * The placer now assigns vertices on **unit** vectors (assignment scores angles, which
+    are scale-free) and scales each one by its own donor's distance.  The chelate branch
+    takes its bite angle from the law of cosines instead of a symmetric arcsine, so a
+    mixed N,O or S,O pocket gets both bonds right; with d1 == d2 it reduces exactly to
+    the old expression.  `d_ml=` still overrides everything, which is what the tests
+    that pin an exact bond length use.
+  * Result: THQ + iodide on Fe(III) builds clean at CN 4 and 6, as `[I-]` and as neutral
+    HI.  Cl, Br the same.  *This is not a claim that Zn/I is good chemistry* — it is that
+    the refusal now has to come from the chemistry rather than from a table that had
+    never heard of iodine.
+
+- *(rev 18)* **The run inspector: a refusal has to say what it refused.**  The console was
+  the only place a run's reasoning appeared, and a console that refreshes a progress line
+  is not somewhere you can read a rejection.  Everything below is stored on the task row,
+  so it is still readable tomorrow.
+
+  * **Structured outcomes.**  `tasks` gains `error_code`, `detail_json`,
+    `structure_created`, `geometry_created`.  The message is for reading; the **code** is
+    for grouping (200 rejections with one cause should be one line, and free text cannot
+    be grouped — "closest 1.40 A" and "closest 1.41 A" are one finding and two strings);
+    the **detail** is for diagnosis without re-running anything.
+  * **QC reports carry their evidence.**  A clash now records both atoms, their elements,
+    which ligand each came from, the measured distance, the limit it was measured
+    against, and the overlap; a bad M-L bond records its target distance and where that
+    number came from.  `QCReport.code` and `elements_involved()` are what turn a pile of
+    refusals into "×212 qc_clash, elements Fe/I".
+  * **Regenerated vs skipped, at a glance.**  `structure_created=False` is the D2
+    idempotency case — the task ran and wrote nothing because the registry already had
+    that identity.  That is a *success*, and it was indistinguishable from building
+    something new, so a run of pure duplicates looked exactly like a run of discoveries.
+    `attempts > 1` marks a task that had to be re-run.  Both are summary cards and
+    per-task badges.
+  * **Embed provenance.**  `embed_with_report` records the ETKDG random-coordinates
+    retry, whether MMFF or **UFF** parameterised the relaxation, and the exception that
+    used to be swallowed by a bare `except: pass`.  A UFF-relaxed conformer is not
+    comparable to an MMFF one and a QC clash after a retried embed is as likely to be
+    about the embed as about the chemistry — neither was visible.
+  * **`co_ligand` with no perceivable donor is an ANSWER.**  This was `perceive(co)[0]`
+    and an `IndexError` reported as a machinery failure, for what is a plain statement
+    about the co-ligand.  It is now `co_ligand_no_donor` with a hint naming the fix.
+  * **`/runs`** renders it: summary cards, causes grouped with counts (click one to filter
+    the task list), the planner's never-queued skips beside the workers' rejections, and
+    per-task rows saying what was attempted, what came back, and which flags fired.  It
+    reads through a read-only connection — the builder writes specs and queues, the
+    inspector does not write at all.
+  * Gates: `tests/test_distances.py`, `tests/test_run_inspector.py`.
+
+- *(rev 18)* **A latent migration bug, surfaced by adding four columns at once.**
+  `_reconcile_columns` stamped every added column with the same migration version
+  (`SCHEMA_VERSION * 1000 + len(added)`), which is a UNIQUE violation on
+  `migrations.version` as soon as one revision adds more than one column — and the whole
+  migration then rolls back.  No revision ever had, so it sat there until rev 18 added
+  four to `tasks`; the failure mode would have been every existing registry refusing to
+  open after a `git pull`.  One row and one version per column now, verified against a
+  real 125-task `runs.db` and gated by `test_several_columns_can_be_added_in_one_revision`.
+
 - *(rev 17)* **Labile-pattern audit: four of twelve new SMARTS could never match.**
   Twelve donor patterns were added to `sites/perception.py` (hydroxamate, oxime, imide,
   acyl sulfonamide, thiophosphate, selenol, peroxy, halide, and three that are gone

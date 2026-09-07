@@ -17,14 +17,20 @@ from dataclasses import dataclass, field
 import numpy as np
 from rdkit import Chem
 
+from mofsbu.geometry.distances import (
+    BASE_MO, DEFAULT_BASE_MO, Distance, donor_elements, metal_donor_distance,
+)
 from mofsbu.geometry.embed import coordinates
 from mofsbu.geometry.qc import QCReport, qc
 from mofsbu.sites.frames import BindingMode, SiteFrame, site_frame, torsion_wells
 
-# Ideal metal-donor distances, angstrom.  Coarse, per metal; refined by relaxation.
-D_ML: dict[str, float] = {"Zn": 2.00, "Cu": 1.98, "Ni": 2.06, "Co": 2.08, "Fe": 2.10,
-                          "Mn": 2.18, "Cr": 2.00, "Mg": 2.10, "Ca": 2.40, "Cd": 2.28}
-DEFAULT_D_ML = 2.05
+# Ideal metal-donor distances, angstrom.  This table is now the M-O BASE of the model in
+# `geometry.distances`, not the whole of it: the distance a donor is actually placed at
+# depends on the donor's element as well as the metal.  Kept under its old name because
+# it is what several tests and the choice vectors of every structure built so far refer
+# to, and because as the O-donor case it is still exactly right.
+D_ML: dict[str, float] = BASE_MO
+DEFAULT_D_ML = DEFAULT_BASE_MO
 
 GEOMETRIES: dict[str, dict[int, str]] = {
     "linear": {2: "linear"}, "trigonal": {3: "trigonal"},
@@ -61,7 +67,16 @@ def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray:
     vecs = table[g]
     if len(vecs) != n:
         raise ValueError(f"{geometry} has {len(vecs)} sites, asked for {n}")
-    return d * vecs
+    # `d` may be one distance or one per vertex.  Unit vectors are the honest internal
+    # form — the polyhedron is a set of DIRECTIONS, and only the donor decides how far
+    # along one it sits — but the scalar signature is kept because the vertices are also
+    # used as a length-scaled point set by callers and tests.
+    scale = np.asarray(d, dtype=float)
+    if scale.ndim == 0:
+        return float(scale) * vecs
+    if scale.shape != (n,):
+        raise ValueError(f"{scale.shape[0]} distances for {n} sites")
+    return scale[:, None] * vecs
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -186,6 +201,11 @@ class PlacementResult:
     report: QCReport
     choice_vector: dict = field(default_factory=dict)
     atom_offsets: list[int] = field(default_factory=list)
+    #: Which ligand each atom came from, parallel to `symbols`.  A clash is only
+    #: interpretable if you know whether it is intra-ligand or between two ligands.
+    owners: list[str] = field(default_factory=list)
+    #: The M-L distance each donor was placed at, and where that number came from.
+    donor_distances: list[Distance] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -206,21 +226,44 @@ def place_mononuclear(
     d_ml: float | None = None,
     seed: int = 0,
 ) -> PlacementResult:
-    """Assemble one coordination centre from ligands whose frames are already known."""
-    d = d_ml if d_ml is not None else D_ML.get(metal, DEFAULT_D_ML)
-    n_sites = sum(lig.denticity for lig in ligands)
-    targets = site_vectors(geometry, n_sites, d)
+    """Assemble one coordination centre from ligands whose frames are already known.
 
-    per_ligand_targets = _assign_targets(targets, ligands)
+    Each donor is placed at ITS OWN distance from the metal (`geometry.distances`), read
+    from the donor atom's element.  A centre carrying a water and an iodide has two
+    different M-L distances and always did; giving both 2.00 A put the iodide 0.6 A too
+    close and every halide co-ligand was then refused by the clash check.  `d_ml`
+    overrides all of them, which is what the tests that pin an exact bond length use.
+    """
+    n_sites = sum(lig.denticity for lig in ligands)
+    # The polyhedron chooses DIRECTIONS; the donor chooses how far along one it sits.
+    # So assignment happens on unit vectors — it scores angles, which are scale-free —
+    # and the scaling is applied per donor afterwards.
+    unit_targets = site_vectors(geometry, n_sites, 1.0)
+    per_ligand_units = _assign_targets(unit_targets, ligands)
+
+    per_ligand_d: list[list[Distance]] = []
+    for lig in ligands:
+        elements = donor_elements(lig.mol, lig.donor_idxs)
+        per_ligand_d.append([metal_donor_distance(metal, el, override=d_ml)
+                             for el in elements])
+    per_ligand_targets = [units * np.array([x.value for x in dists])[:, None]
+                          for units, dists in zip(per_ligand_units, per_ligand_d)]
+    # Reported as the centre's nominal distance where one number is still wanted (the
+    # choice vector's `d_ml`, the M-O base).  It is the base, explicitly, not a mean of
+    # whatever happened to be coordinated.
+    d = float(d_ml) if d_ml is not None else D_ML.get(metal, DEFAULT_D_ML)
 
     symbols: list[str] = [metal]
     coords: list[np.ndarray] = [np.zeros(3)]
     bonded: set[tuple[int, int]] = set()
     donor_idxs: list[int] = []
+    donor_targets: list[float] = []
+    donor_sources: list[str] = []
+    owners: list[str] = [f"{metal}(centre)"]
     offsets: list[int] = []
     choices: list[dict] = []
 
-    for lig, assigned in zip(ligands, per_ligand_targets):
+    for lig, assigned, dists in zip(ligands, per_ligand_targets, per_ligand_d):
         base = len(symbols)
         offsets.append(base)
         mol, conf = lig.mol, lig.mol.GetConformer()
@@ -240,7 +283,8 @@ def place_mononuclear(
             choices.append({"ligand": lig.name, "mode": lig.mode.value,
                             "donors": list(lig.donor_idxs),
                             "torsion_well": lig.torsion_well,
-                            "torsion_deg": wells[lig.torsion_well % len(wells)]})
+                            "torsion_deg": wells[lig.torsion_well % len(wells)],
+                            "distances": [x.to_dict() for x in dists]})
         elif lig.denticity == 2:
             # A chelate's bite angle is a property of the LIGAND, not of the idealised
             # polyhedron.  Forcing its two donors onto fixed vertices strains one bond
@@ -250,34 +294,42 @@ def place_mononuclear(
             # which makes the two-point alignment exact and both bonds correct.
             p_donors = np.array([f.origin for f in frames])
             d_oo = float(np.linalg.norm(p_donors[1] - p_donors[0]))
+            d1, d2 = dists[0].value, dists[1].value
             bisector = _unit(assigned.mean(axis=0))
             normal = np.cross(_unit(assigned[0]), _unit(assigned[1]))
             if float(np.linalg.norm(normal)) < 1e-6:
                 normal = _perpendicular(bisector)
             normal = _unit(normal)
-            half = float(np.arcsin(min(1.0, d_oo / (2.0 * d))))
-            t1 = d * _unit(_axis_rotation(normal, +half) @ bisector)
-            t2 = d * _unit(_axis_rotation(normal, -half) @ bisector)
+            # The bite angle now comes from the law of cosines rather than a symmetric
+            # arcsine, because the two donors may sit at DIFFERENT distances (an N,O
+            # chelate; an S,O chelate).  With d1 == d2 this reduces exactly to the old
+            # `2*asin(d_oo/2d)`, so nothing already built moves.
+            cos_bite = (d1 * d1 + d2 * d2 - d_oo * d_oo) / (2.0 * d1 * d2)
+            gamma = float(np.arccos(max(-1.0, min(1.0, cos_bite))))
+            t1 = d1 * _unit(_axis_rotation(normal, +gamma / 2) @ bisector)
+            t2 = d2 * _unit(_axis_rotation(normal, -gamma / 2) @ bisector)
             fitted = np.array([t1, t2])
 
-            # exact two-point alignment, then the remaining roll about the donor-donor
-            # axis is set by pointing the ligand's bulk away from the metal
+            # exact two-point alignment (anchored on donor 0, so donor 1 lands on t2 by
+            # construction), then the remaining roll about the donor-donor axis is set
+            # by pointing the ligand's bulk away from the metal
             rot1 = _rotation_between(p_donors[1] - p_donors[0], fitted[1] - fitted[0])
-            moved = (rot1 @ (xyz - p_donors.mean(axis=0)).T).T
+            moved = (rot1 @ (xyz - p_donors[0]).T).T
             axis = _unit(fitted[1] - fitted[0])
             mid = fitted.mean(axis=0)
             best, best_score = None, -np.inf
             for k in range(72):
                 theta = 2 * np.pi * k / 72
-                cand = (_axis_rotation(axis, theta) @ moved.T).T + mid
+                cand = (_axis_rotation(axis, theta) @ moved.T).T + t1
                 score = float(np.dot(_unit(cand.mean(axis=0) - mid), _unit(mid)))
                 if score > best_score:
                     best, best_score = cand, score
             placed = best
-            bite = np.degrees(2 * half)
+            bite = np.degrees(gamma)
             choices.append({"ligand": lig.name, "mode": lig.mode.value,
                             "donors": list(lig.donor_idxs), "bite_angle_deg": round(bite, 1),
-                            "donor_donor_A": round(d_oo, 3)})
+                            "donor_donor_A": round(d_oo, 3),
+                            "distances": [x.to_dict() for x in dists]})
         else:
             p_donors = np.array([f.origin for f in frames])
             centroid = xyz.mean(axis=0)
@@ -287,23 +339,40 @@ def place_mononuclear(
                                  np.vstack([assigned, assigned.mean(axis=0) + outward * span]))
             placed = (rot @ xyz.T).T + trans
             choices.append({"ligand": lig.name, "mode": lig.mode.value,
-                            "donors": list(lig.donor_idxs)})
+                            "donors": list(lig.donor_idxs),
+                            "distances": [x.to_dict() for x in dists]})
 
+        owner = lig.name or f"ligand{len(offsets)}"
         for atom, position in zip(mol.GetAtoms(), placed):
             symbols.append(atom.GetSymbol())
             coords.append(position)
+            owners.append(owner)
         for bond in mol.GetBonds():
             bonded.add((base + bond.GetBeginAtomIdx(), base + bond.GetEndAtomIdx()))
-        for idx in lig.donor_idxs:
+        for idx, dist in zip(lig.donor_idxs, dists):
             donor_idxs.append(base + idx)
+            donor_targets.append(dist.value)
+            donor_sources.append(dist.source)
             bonded.add((0, base + idx))
 
     arr = np.array(coords)
-    report = qc(symbols, arr, bonded, metal_idx=0, donor_idxs=donor_idxs, d_ml=d)
+    report = qc(symbols, arr, bonded, metal_idx=0, donor_idxs=donor_idxs,
+                d_ml=donor_targets, owners=owners, sources=donor_sources)
+    estimated = sorted({x.donor_element for dists in per_ligand_d for x in dists
+                        if x.estimated})
+    if estimated:
+        # Not a failure — a caveat that has to travel with the geometry, so a QC verdict
+        # on a pair nobody calibrated is not read as a statement about the chemistry.
+        report.notes.append("M-L distance estimated from covalent radii for: "
+                            + ", ".join(estimated))
     return PlacementResult(symbols, arr, 0, donor_idxs, bonded, report,
                            choice_vector={"metal": metal, "geometry": geometry,
-                                          "d_ml": d, "seed": seed, "ligands": choices},
-                           atom_offsets=offsets)
+                                          "d_ml": d, "seed": seed, "ligands": choices,
+                                          "donor_distances": [
+                                              x.to_dict() for dists in per_ligand_d
+                                              for x in dists]},
+                           atom_offsets=offsets, owners=owners,
+                           donor_distances=[x for dists in per_ligand_d for x in dists])
 
 
 def to_rdkit(metal: str, ligands: list[LigandPlacement], result: PlacementResult,

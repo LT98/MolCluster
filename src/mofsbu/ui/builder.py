@@ -30,6 +30,22 @@ STATIC = Path(__file__).parent / "static"
 MAX_PREVIEW_ATOMS = 300
 
 
+class _ReadOnlyRegistry:
+    """Enough of `Registry` for the read-side job queries, over a read-only connection.
+
+    `jobs.task_rows` and `jobs.outcome_summary` want a `Registry` because that is where
+    the connection lives; they only ever read.  Handing them a real `Registry` here would
+    open a WRITABLE connection from a page whose whole contract is that it does not write
+    to the registry (see the module docstring).  This shim keeps that boundary intact and
+    keeps the queries in one place rather than copied into the router.
+    """
+
+    __slots__ = ("conn",)
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+
 def _depict(mol) -> str:
     """2D SVG depiction.  RDKit draws it; no chemistry library is needed in the browser."""
     from rdkit.Chem import rdDepictor
@@ -54,6 +70,16 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
     @router.get("/builder", response_class=HTMLResponse)
     def builder_page() -> str:
         return (STATIC / "builder.html").read_text(encoding="utf-8")
+
+    @router.get("/runs", response_class=HTMLResponse)
+    def runs_page() -> str:
+        """The run inspector.  Read-only over runs and tasks.
+
+        This exists because the console was the only place a run's reasoning appeared,
+        and a console that refreshes a progress line is not a place you can read a
+        rejection.  Everything shown here is stored, so it is still readable tomorrow.
+        """
+        return (STATIC / "runs.html").read_text(encoding="utf-8")
 
     @router.get("/api/capabilities")
     def capabilities() -> dict[str, Any]:
@@ -253,6 +279,64 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
         threading.Thread(target=execute, daemon=True, name=f"mofsbu-run-{run_id}").start()
         return JSONResponse({"run_id": run_id, "tasks": n_tasks, "digest": spec.digest,
                              "diagnostics": diagnostics}, status_code=202)
+
+    def _ro():
+        from mofsbu.ui.app import open_read_only
+
+        if not db_path.exists():
+            raise HTTPException(503, f"registry not found: {db_path}")
+        return open_read_only(db_path)
+
+    @router.get("/api/runs/{run_id}")
+    def get_run(run_id: int) -> dict[str, Any]:
+        """One run: its spec, why candidates were not queued, and what happened to the
+        ones that were.  The planner's skips and the workers' rejections are different
+        facts about the same run and belong on one page."""
+        from mofsbu.registry.jobs import get_diagnostics, outcome_summary
+
+        con = _ro()
+        try:
+            shim = _ReadOnlyRegistry(con)
+            row = con.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, f"no run {run_id}")
+            item = dict(row)
+            spec_json = item.pop("spec_json", "")
+            try:
+                spec = json.loads(spec_json)
+            except json.JSONDecodeError:
+                spec = None
+            item["diagnostics"] = json.loads(item.pop("diagnostics_json", "[]") or "[]")
+            item["thread"] = running.get(run_id, "")
+            return {"run": item, "spec": spec,
+                    "summary": outcome_summary(shim, run_id),
+                    "planner_skips": get_diagnostics(shim, run_id)}
+        finally:
+            con.close()
+
+    @router.get("/api/runs/{run_id}/tasks")
+    def get_run_tasks(run_id: int, status: str | None = None,
+                      code: str | None = None,
+                      limit: int = 300, offset: int = 0) -> dict[str, Any]:
+        """The tasks themselves, with what was attempted and what came back.
+
+        `code` filters by the grouping key, which is the whole reason it exists: after
+        the summary says "×212 qc_clash", this is how you look at those 212.
+        """
+        from mofsbu.registry.jobs import task_rows
+
+        con = _ro()
+        try:
+            shim = _ReadOnlyRegistry(con)
+            rows = task_rows(shim, run_id, status=status,
+                             limit=max(1, min(limit, 2000)), offset=max(0, offset))
+            if code:
+                rows = [r for r in rows if (r.get("error_code") or "(uncoded)") == code]
+            total = con.execute("SELECT COUNT(*) FROM tasks WHERE run_id=?",
+                                (run_id,)).fetchone()[0]
+            return {"run_id": run_id, "total": total, "returned": len(rows), "tasks": rows}
+        finally:
+            con.close()
 
     @router.get("/api/runs")
     def list_runs(limit: int = 20) -> dict[str, Any]:

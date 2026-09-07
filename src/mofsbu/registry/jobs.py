@@ -108,22 +108,101 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
 
 
 def complete_task(reg: Registry, task_id: int, *, structure_id: int | None = None,
-                  geometry_id: int | None = None) -> None:
+                  geometry_id: int | None = None,
+                  structure_created: bool | None = None,
+                  geometry_created: bool | None = None,
+                  detail: dict[str, Any] | None = None) -> None:
+    """Finish a task, recording whether it WROTE anything.
+
+    `structure_created=False` is the idempotency case (D2): the task ran, produced a
+    structure the registry already had, and wrote no new row.  That is a success, and it
+    used to be indistinguishable from a task that built something new — which is the
+    difference between "the enumerator covered ground it had already covered" and "the
+    enumerator produced 400 structures".
+    """
     reg.conn.execute(
         "UPDATE tasks SET status=?, structure_id=?, geometry_id=?, error=NULL, "
+        "error_code=NULL, structure_created=?, geometry_created=?, detail_json=?, "
         "finished_at=? WHERE id=?",
-        (DONE, structure_id, geometry_id, utcnow(), task_id))
+        (DONE, structure_id, geometry_id,
+         None if structure_created is None else int(structure_created),
+         None if geometry_created is None else int(geometry_created),
+         json.dumps(detail) if detail else None, utcnow(), task_id))
 
 
-def fail_task(reg: Registry, task_id: int, error: str, *, rejected: bool = False) -> None:
+def fail_task(reg: Registry, task_id: int, error: str, *, rejected: bool = False,
+              code: str | None = None, detail: dict[str, Any] | None = None) -> None:
     """`rejected` means the task was well-formed and the answer was no.
 
     A candidate that fails QC is not a failure of the machinery, and conflating the two
     makes a run that produced nothing look identical to a run that crashed.
+
+    `code` and `detail` are the second half of that distinction.  The message is for
+    reading; the code is for GROUPING (200 rejections that are all one cause should say
+    so in one line); the detail is for diagnosis without re-running anything — which
+    atoms, which elements, which distance against which limit.
     """
     reg.conn.execute(
-        "UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=?",
-        (REJECTED if rejected else FAILED, error[:2000], utcnow(), task_id))
+        "UPDATE tasks SET status=?, error=?, error_code=?, detail_json=?, "
+        "finished_at=? WHERE id=?",
+        (REJECTED if rejected else FAILED, error[:2000], code,
+         json.dumps(detail) if detail else None, utcnow(), task_id))
+
+
+def task_rows(reg: Registry, run_id: int, *, status: str | None = None,
+              limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+    """Task records with their JSON columns decoded.  The inspector's data source."""
+    sql = ("SELECT * FROM tasks WHERE run_id=?" + (" AND status=?" if status else "")
+           + " ORDER BY id LIMIT ? OFFSET ?")
+    args: tuple[Any, ...] = ((run_id, status, limit, offset) if status
+                             else (run_id, limit, offset))
+    out = []
+    for row in reg.conn.execute(sql, args):
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        item["detail"] = json.loads(item.pop("detail_json") or "null")
+        out.append(item)
+    return out
+
+
+def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
+    """A run at a glance: what happened, how often, and to what.
+
+    Everything here is one GROUP BY over the task table — which is the point of putting
+    the codes and flags in columns rather than in a message.  Reading a run no longer
+    means scrolling a console that has already refreshed.
+    """
+    counts = task_counts(reg, run_id)
+    by_code = [
+        {"status": r["status"], "code": r["error_code"] or "(uncoded)", "count": r["n"],
+         "example": r["example"], "example_task": r["example_task"]}
+        for r in reg.conn.execute(
+            "SELECT status, error_code, COUNT(*) AS n, MIN(id) AS example_task, "
+            "       MIN(error) AS example "
+            "FROM tasks WHERE run_id=? AND status IN ('failed','rejected') "
+            "GROUP BY status, error_code ORDER BY n DESC", (run_id,))]
+    reuse = reg.conn.execute(
+        "SELECT SUM(structure_created=1) AS new_structures, "
+        "       SUM(structure_created=0) AS reused_structures, "
+        "       SUM(geometry_created=1) AS new_geometries, "
+        "       SUM(geometry_created=0) AS reused_geometries, "
+        "       SUM(attempts > 1)       AS retried "
+        "FROM tasks WHERE run_id=? AND status='done'", (run_id,)).fetchone()
+    # A retried embed means ETKDG failed and the random-coordinates fallback carried the
+    # geometry.  Cheap to spot with LIKE; the alternative is decoding every detail blob.
+    embeds = reg.conn.execute(
+        "SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND detail_json LIKE ?",
+        (run_id, '%"retried": true%')).fetchone()
+    return {
+        "counts": counts,
+        "by_code": by_code,
+        "new_structures": reuse["new_structures"] or 0,
+        "reused_structures": reuse["reused_structures"] or 0,
+        "new_geometries": reuse["new_geometries"] or 0,
+        "reused_geometries": reuse["reused_geometries"] or 0,
+        "retried_tasks": reuse["retried"] or 0,
+        "embed_retries": embeds["n"] or 0,
+    }
 
 
 def finish_run(reg: Registry, run_id: int) -> str:

@@ -104,3 +104,32 @@ def test_an_unexpected_extra_column_is_reported_not_dropped(tmp_path):
         notes = [r[0] for r in reg.conn.execute("SELECT note FROM migrations")]
     assert "somebodys_experiment" in columns
     assert any("not in the schema" in n for n in notes)
+
+
+def test_several_columns_can_be_added_in_one_revision(tmp_path):
+    """Every added column got the SAME migration version — `SCHEMA_VERSION * 1000 +
+    len(added)` — so a revision adding more than one violated the UNIQUE constraint on
+    `migrations.version` and the whole migration rolled back.  No revision had ever added
+    two, so it sat undiscovered until rev 18 added four to `tasks`; the failure mode is
+    that every existing registry refuses to open after a `git pull`.
+    """
+    db = tmp_path / "old.db"
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        for column in ("error_code", "detail_json", "structure_created",
+                       "geometry_created"):
+            reg.conn.execute(f"ALTER TABLE tasks DROP COLUMN {column}")
+        reg.conn.execute(
+            "INSERT INTO tasks (run_id, kind, payload_json, status, created_at) "
+            "SELECT 1, 'place', '{}', 'done', '2020-01-01' WHERE EXISTS "
+            "(SELECT 1 FROM runs)")
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()                                  # this is what used to raise
+        columns = {r[1] for r in reg.conn.execute("PRAGMA table_info(tasks)")}
+    assert {"error_code", "detail_json", "structure_created", "geometry_created"} <= columns
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()                                  # and it stays idempotent
+        versions = [r[0] for r in reg.conn.execute("SELECT version FROM migrations")]
+    assert len(versions) == len(set(versions))

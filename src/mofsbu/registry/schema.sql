@@ -265,6 +265,24 @@ CREATE TABLE IF NOT EXISTS tasks (
     structure_id INTEGER REFERENCES structures(id) ON DELETE SET NULL,
     geometry_id  INTEGER REFERENCES geometries(id) ON DELETE SET NULL,
     error        TEXT,
+    -- A stable machine-readable reason, so a run's outcomes can be GROUPED.  Free text
+    -- cannot be: "2 clash(es), closest 1.40 A" and "...1.41 A" are one finding and two
+    -- strings.  Set for rejected and failed tasks alike (`qc_clash`, `placer_refused`,
+    -- `IndexError`, ...).
+    error_code   TEXT,
+    -- Everything the outcome was actually made of: the QC report with atoms, elements,
+    -- measured distances and the limits they were measured against; the M-L distance
+    -- each donor was placed at and whether that number was calibrated or estimated; the
+    -- embed report (retry / force field); and whether the structure and geometry were
+    -- newly written or recognised as already present.  A run's diagnosis has to be
+    -- readable AFTER the console has scrolled away.
+    detail_json  TEXT,
+    -- Did this task write a new registry row, or recognise one that already existed?
+    -- Idempotency on identity is the design (D2), which means a task doing nothing new
+    -- is the SUCCESS case — and until now it was indistinguishable from one that built
+    -- something.  NULL = not applicable / not recorded.
+    structure_created INTEGER,
+    geometry_created  INTEGER,
     created_at   TEXT NOT NULL,
     finished_at  TEXT
 );

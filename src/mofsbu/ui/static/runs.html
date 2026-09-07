@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mofsbu run inspector</title>
+<style>
+:root{
+  --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
+  --accent:#2f6f9f; --accent-soft:#e6f0f8; --warn:#9a6b00; --warn-soft:#fdf3dd;
+  --bad:#a33; --bad-soft:#fbeaea; --good:#2c7a4b; --good-soft:#e8f4ec;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#16181c; --panel:#1e2126; --ink:#e6e8ea; --muted:#9aa1aa; --line:#31353c;
+         --accent:#79b8e8; --accent-soft:#243444; --warn:#d9ad57; --warn-soft:#332d1c;
+         --bad:#e88; --bad-soft:#3a2426; --good:#7fc99b; --good-soft:#1f3229; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+#app{display:grid;grid-template-columns:230px minmax(480px,1fr);height:100vh}
+.pane{overflow:auto;padding:12px 14px}
+#side{border-right:1px solid var(--line);background:var(--panel)}
+h1{font-size:14px;margin:0 0 8px;letter-spacing:.02em}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+   margin:18px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+a{color:var(--accent)}
+.muted{color:var(--muted)}
+.mono{font-family:var(--mono);font-size:11px}
+.nav{display:flex;gap:10px;font-size:12px;margin-bottom:10px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--bg);font-size:11px;text-transform:uppercase;
+   letter-spacing:.05em;color:var(--muted);z-index:2}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.runlist{list-style:none;margin:0;padding:0}
+.runlist li{padding:6px 7px;border:1px solid var(--line);border-radius:5px;margin-bottom:5px;cursor:pointer}
+.runlist li:hover{background:var(--accent-soft)}
+.runlist li.sel{background:var(--accent-soft);border-color:var(--accent)}
+.badge{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;
+       border:1px solid var(--line);margin:0 3px 3px 0;white-space:nowrap}
+.badge b{font-variant-numeric:tabular-nums}
+.b-good{background:var(--good-soft);border-color:var(--good);color:var(--good)}
+.b-warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.b-bad{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+.b-info{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.cards{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}
+.card{border:1px solid var(--line);border-radius:6px;padding:7px 11px;background:var(--panel);min-width:104px}
+.card .n{font-size:19px;font-variant-numeric:tabular-nums;line-height:1.1}
+.card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.group{border:1px solid var(--line);border-radius:6px;background:var(--panel);
+       padding:8px 10px;margin-bottom:6px;cursor:pointer}
+.group:hover{border-color:var(--accent)}
+.group.sel{border-color:var(--accent);background:var(--accent-soft)}
+.group .msg{margin-top:3px;font-family:var(--mono);font-size:11px;color:var(--muted);
+            overflow-wrap:anywhere}
+details{margin-top:4px}
+summary{cursor:pointer;color:var(--accent);font-size:11.5px}
+pre{font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;overflow-wrap:anywhere;
+    background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:7px;margin:5px 0 0}
+.empty{color:var(--muted);padding:26px 8px;text-align:center}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
+select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+              border-radius:4px;padding:3px 7px}
+button{cursor:pointer}
+.filterchip{border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);
+            border-radius:11px;padding:1px 9px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <aside id="side" class="pane">
+    <h1>run inspector</h1>
+    <div class="nav"><a href="/">registry</a><a href="/builder">builder</a></div>
+    <div class="muted" style="font-size:11.5px">
+      What each run planned, skipped, built, reused and refused — read from the task
+      table, so it survives the console.
+    </div>
+    <h2>runs</h2>
+    <ul class="runlist" id="runs"><li class="muted">loading…</li></ul>
+  </aside>
+
+  <main id="main" class="pane">
+    <div id="detail"><div class="empty">Pick a run.</div></div>
+  </main>
+
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(u){ const r = await fetch(u); if(!r.ok) throw new Error((await r.text()).slice(0,300)); return r.json(); }
+
+const state = {runId: null, code: null, status: null, tasks: []};
+
+// ── run list ────────────────────────────────────────────────────────────────
+async function loadRuns(){
+  let runs = [];
+  try { runs = (await api('/api/runs?limit=40')).runs; }
+  catch(e){ $('#runs').innerHTML = `<li class="muted">${esc(e.message)}</li>`; return; }
+  if(!runs.length){ $('#runs').innerHTML = '<li class="muted">no runs yet</li>'; return; }
+  $('#runs').innerHTML = runs.map(r => `
+    <li data-run="${r.id}" class="${r.id === state.runId ? 'sel' : ''}">
+      <b>run ${r.id}</b>
+      <span class="muted">${esc(r.thread === 'running' ? 'running' : r.status)}</span><br>
+      <span class="mono muted">${r.n_done}/${r.n_tasks} done${r.n_rejected ? ' · ' + r.n_rejected + ' rej' : ''}${r.n_failed ? ' · ' + r.n_failed + ' fail' : ''}</span>
+      ${r.note ? `<br><span class="muted" style="font-size:11px">${esc(r.note)}</span>` : ''}
+    </li>`).join('');
+  $('#runs').querySelectorAll('li[data-run]').forEach(li =>
+    li.onclick = () => selectRun(+li.dataset.run));
+  if(state.runId === null && runs.length) selectRun(runs[0].id);
+}
+
+function selectRun(id){
+  state.runId = id; state.code = null; state.status = null;
+  $('#runs').querySelectorAll('li[data-run]').forEach(li =>
+    li.classList.toggle('sel', +li.dataset.run === id));
+  render();
+}
+
+// ── the run ─────────────────────────────────────────────────────────────────
+async function render(){
+  if(state.runId === null) return;
+  let run, tasks;
+  try {
+    run = await api(`/api/runs/${state.runId}`);
+    const q = new URLSearchParams();
+    if(state.status) q.set('status', state.status);
+    if(state.code) q.set('code', state.code);
+    tasks = await api(`/api/runs/${state.runId}/tasks?` + q);
+  } catch(e){ $('#detail').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  state.tasks = tasks.tasks;
+  const s = run.summary, c = s.counts || {};
+  const spec = run.spec || {};
+
+  // At a glance.  "Reused" is the D2 idempotency case: the task ran and wrote nothing
+  // because the registry already had that identity — a success, not a no-op.
+  const cards = [
+    ['done', c.done || 0, ''],
+    ['rejected', c.rejected || 0, (c.rejected ? 'b-warn' : '')],
+    ['failed', c.failed || 0, (c.failed ? 'b-bad' : '')],
+    ['pending', (c.pending || 0) + (c.claimed || 0), ''],
+    ['new structures', s.new_structures, 'b-good'],
+    ['reused (skipped)', s.reused_structures, 'b-info'],
+    ['re-attempted', s.retried_tasks, s.retried_tasks ? 'b-warn' : ''],
+    ['embed retries', s.embed_retries, s.embed_retries ? 'b-warn' : ''],
+  ];
+
+  $('#detail').innerHTML = `
+    <h1>run ${run.run.id}
+      <span class="muted" style="font-weight:400">
+        ${esc(run.run.thread === 'running' ? 'running' : run.run.status)} ·
+        ${esc(run.run.created_at || '')}</span></h1>
+    ${run.run.note ? `<div class="muted">${esc(run.run.note)}</div>` : ''}
+
+    <div class="cards">${cards.map(([k, n, cls]) =>
+      `<div class="card"><div class="n ${cls ? 'b-x' : ''}" style="${cls === 'b-bad' ? 'color:var(--bad)' : cls === 'b-warn' ? 'color:var(--warn)' : cls === 'b-good' ? 'color:var(--good)' : cls === 'b-info' ? 'color:var(--accent)' : ''}">${n ?? 0}</div>
+        <div class="k">${k}</div></div>`).join('')}</div>
+
+    <h2>spec</h2>
+    <div class="mono">
+      ${(spec.molecules || []).map(m => esc(m.name) + ' <span class="muted">' + esc(m.smiles) + '</span>').join(' · ') || '<span class="muted">none</span>'}
+      ${(spec.metals || []).length ? ' + ' + spec.metals.map(m => esc(m.symbol) + (m.oxidation_state >= 0 ? '+' : '') + m.oxidation_state).join(', ') : ' <span class="muted">(metal-free)</span>'}
+      <br>CN ${(spec.coordination || []).join('/')} · co-ligand
+      <b>${spec.co_ligand ? esc(spec.co_ligand) : '<span class="muted">none</span>'}</b>
+      · binding ${(spec.binding || []).join('+')} · ${esc(spec.run_mode || '')}
+    </div>
+
+    ${run.planner_skips && run.planner_skips.length ? `
+      <h2>never queued (planner)</h2>
+      ${run.planner_skips.map(d => `<div class="group" style="cursor:default">
+        <b>×${d.count}</b> ${esc(d.reason)}
+        <div class="msg">→ ${esc(d.hint || '')}</div></div>`).join('')}` : ''}
+
+    ${s.by_code && s.by_code.length ? `
+      <h2>outcomes by cause ${state.code ? `<span class="filterchip">${esc(state.code)} ✕</span>` : ''}</h2>
+      <div id="codes">${s.by_code.map(g => `
+        <div class="group ${state.code === g.code ? 'sel' : ''}" data-code="${esc(g.code)}" data-status="${esc(g.status)}">
+          <span class="badge ${g.status === 'failed' ? 'b-bad' : 'b-warn'}">${esc(g.status)}</span>
+          <b>×${g.count}</b> <span class="mono">${esc(g.code)}</span>
+          <div class="msg">${esc((g.example || '').split('\\n')[0].slice(0, 260))}</div>
+        </div>`).join('')}</div>` : ''}
+
+    <h2>tasks <span class="muted" style="font-weight:400">${tasks.returned} of ${tasks.total}</span></h2>
+    <div class="toolbar">
+      <select id="fstatus">
+        <option value="">all statuses</option>
+        ${['done','rejected','failed','pending','claimed'].map(x =>
+          `<option ${state.status === x ? 'selected' : ''}>${x}</option>`).join('')}
+      </select>
+      ${state.code ? `<button id="clearcode">clear cause filter</button>` : ''}
+      <button id="refresh">refresh</button>
+    </div>
+    <table><thead><tr>
+      <th>#</th><th>kind</th><th>status</th><th>what was attempted</th>
+      <th>result</th><th>flags</th></tr></thead>
+      <tbody>${state.tasks.map(taskRow).join('') ||
+        '<tr><td colspan="6" class="empty">nothing matches</td></tr>'}</tbody></table>`;
+
+  $('#detail').querySelectorAll('.group[data-code]').forEach(g => g.onclick = () => {
+    state.code = state.code === g.dataset.code ? null : g.dataset.code;
+    state.status = state.code ? g.dataset.status : null;
+    render();
+  });
+  const fs = $('#fstatus');
+  if(fs) fs.onchange = () => { state.status = fs.value || null; render(); };
+  if($('#clearcode')) $('#clearcode').onclick = () => { state.code = null; render(); };
+  if($('#refresh')) $('#refresh').onclick = render;
+}
+
+// ── one task ────────────────────────────────────────────────────────────────
+function attempted(t){
+  const p = t.payload || {};
+  if(t.kind === 'ligand')
+    return `molecule ${p.molecule} <span class="muted">protomer ${esc(p.label || '·')} q=${p.charge}</span>`;
+  const bits = [`molecule ${p.molecule}`, `metal ${p.metal}`,
+    `CN ${p.cn} ${esc(p.geometry || '')}`,
+    `${p.n_ligands}×${(p.donors || []).length}-dentate ${esc(p.mode || '')}`];
+  if(p.n_co) bits.push(`+${p.n_co} co-ligand`);
+  if(p.label) bits.push(`protomer ${esc(p.label)}`);
+  return bits.join(' · ');
+}
+
+function flags(t){
+  const d = t.detail || {}, out = [];
+  // The two questions asked most often, answered without opening anything.
+  if(t.structure_created === 0) out.push('<span class="badge b-info">reused structure</span>');
+  if(t.structure_created === 1) out.push('<span class="badge b-good">new structure</span>');
+  if(t.geometry_created === 0) out.push('<span class="badge b-info">reused geometry</span>');
+  if(t.attempts > 1) out.push(`<span class="badge b-warn">attempt ${t.attempts}</span>`);
+  const embeds = [d.embed, d.co_ligand_embed].filter(Boolean);
+  if(embeds.some(e => e.retried)) out.push('<span class="badge b-warn">embed retried</span>');
+  if(embeds.some(e => e.ff === 'UFF')) out.push('<span class="badge b-warn">UFF fallback</span>');
+  if(embeds.some(e => e.relax_error)) out.push('<span class="badge b-bad">relax failed</span>');
+  if(embeds.some(e => e.ff === null && !e.relaxed)) out.push('<span class="badge">unrelaxed</span>');
+  for(const x of (d.distances || []))
+    if(x.estimated) out.push(`<span class="badge b-warn">${esc(x.metal)}–${esc(x.donor)} estimated</span>`);
+  return out.join(' ') || '<span class="muted">—</span>';
+}
+
+function result(t){
+  const d = t.detail || {};
+  if(t.status === 'done'){
+    const dist = (d.distances || []).map(x =>
+      `${esc(x.metal)}–${esc(x.donor)} ${x.d} Å <span class="muted">(${esc(x.source)})</span>`);
+    return `<a href="/?id=${t.structure_id}">structure ${t.structure_id}</a>
+      <span class="muted">geom ${t.geometry_id ?? '—'}</span>
+      ${dist.length ? `<div class="mono">${[...new Set(dist)].join(' · ')}</div>` : ''}`;
+  }
+  if(!t.error) return '<span class="muted">—</span>';
+  const qc = (d.qc || {});
+  const detail = (qc.clashes || []).map(c =>
+      `${esc(c.sym_i)}${c.i}${c.owner_i ? '[' + esc(c.owner_i) + ']' : ''} ··· ` +
+      `${esc(c.sym_j)}${c.j}${c.owner_j ? '[' + esc(c.owner_j) + ']' : ''} ` +
+      `${c.distance} Å vs limit ${c.limit} <b>(over by ${c.overlap})</b>`)
+    .concat((qc.bad_bonds || []).map(b =>
+      `M–${esc(b.sym)}${b.atom} ${b.distance} Å vs target ${b.target} ±${b.tol} ` +
+      `<span class="muted">(${esc(b.source)})</span>`));
+  return `<div class="mono">${esc(t.error.split('\n')[0].slice(0, 300))}</div>
+    ${detail.length ? `<div class="mono muted">${detail.join('<br>')}</div>` : ''}
+    ${qc.elements && qc.elements.length ?
+      `<div>elements involved: ${qc.elements.map(e => `<span class="badge">${esc(e)}</span>`).join('')}</div>` : ''}
+    ${d.hint ? `<div class="muted">→ ${esc(d.hint)}</div>` : ''}
+    <details><summary>full record</summary><pre>${esc(t.error)}\n\n${esc(JSON.stringify(t.detail, null, 1))}</pre></details>`;
+}
+
+function taskRow(t){
+  const cls = t.status === 'failed' ? 'b-bad' : t.status === 'rejected' ? 'b-warn'
+            : t.status === 'done' ? 'b-good' : '';
+  return `<tr>
+    <td class="num">${t.id}</td>
+    <td>${esc(t.kind)}</td>
+    <td><span class="badge ${cls}">${esc(t.status)}</span>
+        ${t.error_code ? `<br><span class="mono muted">${esc(t.error_code)}</span>` : ''}</td>
+    <td>${attempted(t)}</td>
+    <td>${result(t)}</td>
+    <td>${flags(t)}</td></tr>`;
+}
+
+loadRuns();
+setInterval(() => { loadRuns(); if(state.runId !== null) render(); }, 4000);
+</script>
+</body>
+</html>

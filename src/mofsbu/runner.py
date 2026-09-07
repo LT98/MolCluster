@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import itertools
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mofsbu.config import max_workers, parallel_enabled
-from mofsbu.geometry.embed import embed_molecule, to_xyz
+from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry.placer import GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
@@ -26,13 +27,30 @@ from mofsbu.registry import (
 )
 from mofsbu.registry.jobs import (
     add_task, claim_task, complete_task, create_run, fail_task, finish_run,
-    set_diagnostics, task_counts,
+    outcome_summary, set_diagnostics, task_counts,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import chelate_pockets, find_pockets, perceive
 from mofsbu.sites.protomers import enumerate_protomers
 from mofsbu.spec import BuildSpec
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MofsbuError
+
+@dataclass(frozen=True)
+class Outcome:
+    """What a task produced, and whether any of it was NEW.
+
+    `structure_created=False` means the registry already had this identity: the task
+    succeeded and wrote nothing.  Under D2 that is the expected outcome for a large part
+    of any enumeration, and it has to be visible or a run of pure duplicates looks
+    exactly like a run of discoveries.
+    """
+
+    structure_id: int | None
+    geometry_id: int | None
+    structure_created: bool | None = None
+    geometry_created: bool | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+
 
 FF = MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF")
 BUILD = MethodSpec(code="mofsbu", code_version="0.0.1", method="frame-directed-placement")
@@ -149,13 +167,15 @@ def _protomer_mol(spec: BuildSpec, payload: dict[str, Any]):
     if selection:
         sites = labile_sites(base)
         base, _ = deprotonate(base, [sites[i] for i in selection])
-    return embed_molecule(base, seed=spec.seed or 7), molecule
+    mol, embed_report = embed_with_report(base, seed=spec.seed or 7)
+    return mol, molecule, embed_report
 
 
-def execute(reg: Registry, task, spec: BuildSpec) -> tuple[int | None, int | None]:
-    """Run one task.  Returns (structure_id, geometry_id)."""
+def execute(reg: Registry, task, spec: BuildSpec) -> "Outcome":
+    """Run one task.  Returns what it produced AND what it took to produce it."""
     payload = task.payload
-    mol, molecule = _protomer_mol(spec, payload)
+    mol, molecule, embed_report = _protomer_mol(spec, payload)
+    detail: dict[str, Any] = {"embed": embed_report}
     name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
 
     if task.kind == "ligand":
@@ -166,7 +186,7 @@ def execute(reg: Registry, task, spec: BuildSpec) -> tuple[int | None, int | Non
         put_sites(reg, put.id, perceive(mol))
         for frag in decompose(g):
             alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
-        return put.id, geom.id
+        return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":
         metal = spec.metals[payload["metal"]]
@@ -179,8 +199,29 @@ def execute(reg: Registry, task, spec: BuildSpec) -> tuple[int | None, int | Non
             mode=BindingMode(payload["mode"]), name=molecule.name)
             for _ in range(payload["n_ligands"])]
         if payload["n_co"]:
-            co = embed_molecule(mol_from_smiles(spec.co_ligand), seed=3)
-            co_site = perceive(co)[0]
+            co, co_embed = embed_with_report(mol_from_smiles(spec.co_ligand), seed=3)
+            detail["co_ligand_embed"] = co_embed
+            co_sites = perceive(co)
+            if not co_sites:
+                # This used to be `perceive(co)[0]` and an IndexError, reported as a
+                # crash with a traceback — for what is a plain statement about the
+                # co-ligand: nothing in it can bind.  `[SiH4]` and `CC` reach here, and
+                # so does any donor type perception does not yet cover.
+                raise _Rejected(
+                    f"co-ligand {spec.co_ligand!r} has no perceivable donor atom, so it "
+                    f"cannot occupy a coordination site",
+                    code="co_ligand_no_donor",
+                    detail={"co_ligand": spec.co_ligand,
+                            "hint": "give the co-ligand as the species that actually "
+                                    "binds — '[I-]' rather than 'I2', 'O' for water, "
+                                    "'[OH-]' for hydroxide — or add its donor type to "
+                                    "sites.perception"})
+            co_site = co_sites[0]
+            detail["co_ligand"] = {"smiles": spec.co_ligand,
+                                   "donor_type": co_site.donor_type,
+                                   "donor_element":
+                                       co.GetAtomWithIdx(co_site.atom_idx).GetSymbol(),
+                                   "n": payload["n_co"]}
             ligands += [LigandPlacement(mol=co, donor_idxs=(co_site.atom_idx,),
                                         donor_types=(co_site.donor_type,),
                                         name=spec.co_ligand)
@@ -193,9 +234,20 @@ def execute(reg: Registry, task, spec: BuildSpec) -> tuple[int | None, int | Non
             # ligand cannot span a linear two-coordinate centre, and saying so is the
             # correct behaviour.  Reporting it as `failed` would make a run full of sound
             # chemistry look like a run full of bugs.
-            raise _Rejected(str(exc)) from exc
+            raise _Rejected(str(exc), code="placer_refused",
+                            detail={**detail, "geometry": payload["geometry"],
+                                    "cn": payload["cn"]}) from exc
+        detail["distances"] = [x.to_dict() for x in result.donor_distances]
         if not result.ok:
-            raise _Rejected(str(result.report))
+            # The QC report is stored STRUCTURED, not just stringified: which atoms,
+            # which elements, how far inside which limit, and where each target M-L
+            # distance came from.  That is the difference between "2 clash(es), closest
+            # 1.40 A" — which is what a whole run used to collapse into — and a finding
+            # you can group, sort and act on.
+            raise _Rejected(str(result.report), code=result.report.code,
+                            detail={**detail, "qc": result.report.to_dict(),
+                                    "geometry": payload["geometry"],
+                                    "cn": payload["cn"]})
         complex_mol = to_rdkit(metal.symbol, ligands, result)
         charge = metal.oxidation_state + payload["charge"] * payload["n_ligands"]
         g = from_rdkit(complex_mol, charge=charge, multiplicity=metal.multiplicity,
@@ -208,13 +260,24 @@ def execute(reg: Registry, task, spec: BuildSpec) -> tuple[int | None, int | Non
                             method=BUILD, choice_vector=result.choice_vector,
                             seed=spec.seed, qc=result.report.to_dict())
         put_sites(reg, put.id, perceive(complex_mol))
-        return put.id, geom.id
+        detail["qc"] = result.report.to_dict()
+        return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     raise MofsbuError(f"no executor for task kind {task.kind!r}")
 
 
 class _Rejected(MofsbuError):
-    """The task was well formed and the answer was no.  Not a failure of the machinery."""
+    """The task was well formed and the answer was no.  Not a failure of the machinery.
+
+    Carries a `code` for grouping and a `detail` dict for diagnosis.  A rejection whose
+    only content is a sentence is a rejection nobody can count.
+    """
+
+    def __init__(self, message: str, *, code: str = "rejected",
+                 detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail or {}
 
 
 def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = None) -> int:
@@ -225,12 +288,22 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
         if task is None:
             break
         try:
-            structure_id, geometry_id = execute(reg, task, spec)
-            complete_task(reg, task.id, structure_id=structure_id, geometry_id=geometry_id)
+            out = execute(reg, task, spec)
+            complete_task(reg, task.id, structure_id=out.structure_id,
+                          geometry_id=out.geometry_id,
+                          structure_created=out.structure_created,
+                          geometry_created=out.geometry_created,
+                          detail=out.detail)
         except _Rejected as exc:
-            fail_task(reg, task.id, str(exc), rejected=True)
+            fail_task(reg, task.id, str(exc), rejected=True,
+                      code=exc.code, detail=exc.detail)
         except Exception as exc:                                   # noqa: BLE001
-            fail_task(reg, task.id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+            # An unexpected exception is a bug, and the type is the most useful thing to
+            # group by — twenty tasks dying of one IndexError is one problem, not twenty.
+            fail_task(reg, task.id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                      code=type(exc).__name__,
+                      detail={"traceback": traceback.format_exc()[-4000:],
+                              "task_kind": task.kind, "payload": task.payload})
         done += 1
     return done
 
@@ -266,4 +339,5 @@ def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[s
     relabel_all(reg)          # labels are a projection; refresh once the fragments exist
     status = finish_run(reg, run_id)
     return {"run_id": run_id, "tasks": n_tasks, "status": status,
-            "counts": task_counts(reg, run_id), "workers": n_workers}
+            "counts": task_counts(reg, run_id), "workers": n_workers,
+            "summary": outcome_summary(reg, run_id)}

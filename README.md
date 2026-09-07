@@ -56,6 +56,26 @@ Both find the registry themselves: the real one if it exists, otherwise the demo
 `--db` is resolved against the working directory, then `MOFSBU_DATA`, then the repo root, so the
 command behaves the same wherever it is run from.
 
+## Reading a run (`/runs`)
+
+The console shows a progress line, not a diagnosis. `/runs` is the inspector: what the run
+planned, what it never queued and why, what it built, what it *reused* rather than built, and
+what it refused — grouped by cause, with the evidence attached.
+
+* **Causes are grouped.** Every rejection carries a machine-readable `error_code`, so 200
+  refusals with one cause are one line. Click it to filter the task list.
+* **A refusal names what it refused.** A QC clash records both atoms, their elements, which
+  ligand each came from, the measured distance and the limit — not just "2 clash(es)".
+* **New vs reused.** `reused structure` means the task ran and wrote nothing because the
+  registry already had that identity. Under D2 that is a success; it used to be
+  indistinguishable from building something new.
+* **Re-attempted / embed retried / UFF fallback** are badges, because each changes what a
+  geometry is worth and none of them were visible before.
+
+Metal–donor distances are per *pair*, not per metal (`geometry/distances.py`): a centre carrying
+a water and an iodide has two different M–L distances. A pair the table has not calibrated is
+still placed, but its distance is labelled an estimate everywhere it appears.
+
 ## Energies (M7)
 
 `python -m pytest` passes with no quantum-chemistry stack installed: the backends are behind

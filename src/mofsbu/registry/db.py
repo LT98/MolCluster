@@ -75,12 +75,17 @@ class Registry:
         self.conn.executescript(schema)
         self._recreate_views(schema)
         added = self._reconcile_columns(schema)
-        if added:
-            for table, column in added:
-                self.conn.execute(
-                    "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?)",
-                    (SCHEMA_VERSION * 1000 + len(added), utcnow(),
-                     f"added {table}.{column}"))
+        for i, (table, column) in enumerate(added, start=1):
+            # One row per column, and therefore one VERSION per column.  This used to be
+            # `SCHEMA_VERSION * 1000 + len(added)` — the same number for every column in
+            # the batch — which is a UNIQUE violation the moment a revision adds more
+            # than one.  It never had, so the bug sat here until rev 18 added four to
+            # `tasks` at once and every existing registry refused to migrate.
+            self.conn.execute(
+                "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
+                "ON CONFLICT(version) DO NOTHING",
+                (SCHEMA_VERSION * 1000 + self._next_migration_slot(i), utcnow(),
+                 f"added {table}.{column}"))
         cur = self.conn.execute("SELECT 1 FROM migrations WHERE version = ?", (SCHEMA_VERSION,))
         if cur.fetchone() is None:
             self.conn.execute(
@@ -89,6 +94,17 @@ class Registry:
             )
         self.record_algo_versions()
         self.conn.commit()
+
+    def _next_migration_slot(self, offset: int) -> int:
+        """A free slot above whatever this database has already recorded.
+
+        Migration versions are only ever bookkeeping — they say what was applied, in
+        order — so the requirement is uniqueness, not a globally meaningful number.
+        """
+        top = self.conn.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM migrations WHERE version >= ?",
+            (SCHEMA_VERSION * 1000,)).fetchone()[0]
+        return max(int(top) - SCHEMA_VERSION * 1000, 0) + offset
 
     def _target_schema(self, schema: str) -> sqlite3.Connection:
         """The schema as it SHOULD be, built in memory so SQLite itself parses it."""
