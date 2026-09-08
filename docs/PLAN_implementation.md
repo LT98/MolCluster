@@ -716,6 +716,60 @@ your head is how the two documents drift apart.
 
 ## 9. Changelog
 
+- *(rev 19)* **M1 descriptor layer — and no run mode had ever relaxed anything.**
+
+  **The bug first, because it invalidates a run's label.**  A 500-structure `ml_go` build
+  left the GPU idle.  Not a device problem: `relax_geometry` and `single_point` are called
+  from **nowhere outside `mofsbu/energy/`**.  `plan()` checked whether the backend was
+  importable and then queued ordinary `place` tasks; `execute()` never branches on
+  `run_mode` and only ever writes `fidelity=RAW`.  The registry says it plainly — 281 RAW
+  geometries, 17 FF, **none at ML**, no `mace` row in `methods` — while `runs` records the
+  spec as `ml_go` and the status as `done`.  Rev 16 shipped the pre-flight without the
+  executor, which is worse than shipping neither: the check made the option look wired.
+  * `energy.relax.RELAXATION_IS_EXECUTED = False` is the one flag, and `mode_status()`
+    now reports **two independent facts** — `backend_available` (installed on this
+    machine) and `wired` (the pipeline calls it).  Collapsing them is exactly how "MACE
+    imports" reached the user as "MACE will run".  `available` is the AND of the two.
+  * `plan()` refuses an unwired mode with `NotBuiltYet`, not `EnergyBackendUnavailable`:
+    a missing body and a missing install are different failures, and installing MACE does
+    not fix this one.
+  * Latent behind it: `MACEBackend` defaults to `device="cpu"`, so even once wired the GPU
+    stays idle until a device is chosen.  Both are M7b, sequenced next as a separate
+    `relax` task kind so a failed relax retries without rebuilding.
+  * The 281 stored geometries are **not corrupt** — they are correctly labelled RAW with
+    the placer as their method.  What was wrong was the label on the run, not the data.
+
+  **M1, with C8 resolved: the two halves are sourced differently on purpose.**
+  * `data/reference/donor_descriptors.tsv` — 36 rows, **hand-curated**, one per donor type
+    `sites.perception` can emit.  Aqueous pKa is context-dependent and no package covers
+    these classes, so each row names its class of reference and rows that are judgement
+    say `estimate` rather than borrowing a citation they do not have.
+  * `data/reference/metal_descriptors.tsv` — 35 ions, **generated** by
+    `scripts/build_metal_descriptors.py` from `mendeleev` (Shannon radii by charge, CN and
+    spin state), with HSAB class, preferred CN and water-exchange lability curated inside
+    that generator because no package carries them.  The package version lands in every
+    row, so regenerating against a different `mendeleev` is a visible diff (ground rule 6).
+    `mendeleev` is a dev dependency; the TSV is what ships.
+  * **`pka` runs in one direction only**: the pKa of the acid whose deprotonation exposes
+    this donor.  A neutral donor needing no activation (amine, pyridyl, ether) has an
+    EMPTY pka — a meaningful answer, not a missing value.  Storing basicity in the same
+    column would have put two quantities under one name; a test pins the ordering
+    sulfonate < carboxylate < phenolate < alkoxide, which only holds if the sign is
+    consistent throughout.
+  * `live_dof` is **not** in the TSV despite being a schema column: it is defined by
+    `sites.frames.live_dof()` and filled in at load, so the torsion model keeps one home.
+  * `donor()` and `metal()` **raise on an unknown key**.  A default row would make "never
+    characterised" indistinguishable from a measurement, inside a screening loop.
+  * `descriptors/ease.py` is a declared stub naming the checkpoint that blocks it — C5 for
+    `activation_ease`, C7 for `hsab_match`.  Both stay open: the tables are facts, the
+    ease model is a policy, and shipping the policy unratified is how a leaning becomes a
+    decision by accident.
+  * `tests/test_descriptors.py` gates coverage **both ways** — every perceivable donor
+    type has a row, and no row exists for a type nothing emits.  The perceivable set is
+    read out of `perception.py` rather than hand-listed, so it cannot drift.
+
+  268 passed, 1 skipped.
+
 - *(rev 18)* **Every halide co-ligand was rejected by construction, and the message said
   "2 clash(es)".**  Trying iodide in place of the water that fills leftover coordination
   sites produced a run of rejections with no way to tell why.  The cause was one line:

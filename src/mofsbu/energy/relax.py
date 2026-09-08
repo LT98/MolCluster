@@ -16,6 +16,18 @@ from mofsbu.energy.backends import RelaxResult, backend_for
 
 # Which fidelity each run mode is asking for.  One place, because the spec, the planner
 # and the capability read-out all need the same answer.
+# Whether the RUNNER actually performs a relaxation.  It does not: `runner.execute`
+# places a structure, stores it at RAW, and returns — `relax_geometry` is called from
+# nowhere outside this package.  Until that is wired, a run mode whose backend imports
+# cleanly would pass the planner's pre-flight and then quietly produce raw constructs
+# under a label saying they were optimised, which is exactly the "stub that answers"
+# ground rule 8 forbids.  One flag, flipped when the executor lands, rather than a
+# comment nobody reads.
+#
+# Discovered the honest way: a 500-structure `ml_go` run left the GPU idle and the
+# registry holding 281 RAW geometries, no ML row, and no `mace` entry in `methods`.
+RELAXATION_IS_EXECUTED = False
+
 MODE_FIDELITY: dict[str, Fidelity] = {
     "construct": Fidelity.RAW,
     "ml_go": Fidelity.ML,
@@ -63,30 +75,35 @@ def available_modes() -> dict[str, bool]:
     `xtb_go` enabled on the workstation and disabled on a laptop without xTB, with no
     code change and no stale string in the markup.
     """
-    modes = {"construct": True}
-    for mode, fidelity in MODE_FIDELITY.items():
-        if mode == "construct":
-            continue
-        try:
-            modes[mode] = backend_for(fidelity).available()
-        except Exception:                       # no backend serves that rung at all
-            modes[mode] = False
-    return modes
+    return {mode: entry["available"] for mode, entry in mode_status().items()}
 
 
 def mode_status() -> dict[str, dict[str, Any]]:
     """`available_modes` plus the reason, for a UI that has to explain a disabled option."""
     out: dict[str, dict[str, Any]] = {
-        "construct": {"available": True, "backend": "placer", "note": ""}}
+        "construct": {"available": True, "backend": "placer", "backend_available": True,
+                      "wired": True, "note": ""}}
     for mode, fidelity in MODE_FIDELITY.items():
         if mode == "construct":
             continue
         try:
             backend = backend_for(fidelity)
         except Exception as exc:                                        # noqa: BLE001
-            out[mode] = {"available": False, "backend": None, "note": str(exc)}
+            out[mode] = {"available": False, "backend": None, "backend_available": False,
+                         "wired": RELAXATION_IS_EXECUTED, "note": str(exc)}
             continue
-        ok = backend.available()
-        out[mode] = {"available": ok, "backend": backend.name,
-                     "note": "" if ok else f"not installed here — {backend.install_hint()}"}
+        # Two independent questions, kept apart on purpose: is the stack installed on
+        # this machine, and does the pipeline call it?  Collapsing them is how "MACE is
+        # importable" got reported to the user as "MACE will run".
+        installed = backend.available()
+        note = ""
+        if not RELAXATION_IS_EXECUTED:
+            note = ("the runner does not execute relaxations yet: `runner.execute` stores "
+                    "the raw construct and never calls the backend, so this mode would "
+                    "silently return unoptimised geometries")
+        elif not installed:
+            note = f"not installed here — {backend.install_hint()}"
+        out[mode] = {"available": installed and RELAXATION_IS_EXECUTED,
+                     "backend": backend.name, "backend_available": installed,
+                     "wired": RELAXATION_IS_EXECUTED, "note": note}
     return out

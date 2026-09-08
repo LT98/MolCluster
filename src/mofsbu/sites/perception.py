@@ -62,26 +62,8 @@ LABILE_DONOR_PATTERNS: list[tuple[str, str, int]] = [
     ("peroxy_O",      "[#6][OX2][OX2H1]", -1),                      # hydroperoxide / peracid
     ("thiolate_S",    "[#6][SX2H1]", -1),
     ("alkoxide_O",    "[CX4][OX2H1]", -1),
-    # A free hydrohalic acid, HX -> X- + H+.  This is the ONLY halide case that belongs in
-    # a *labile* list: a halide reached as a ligand is already X- (a whole ligand, and so
-    # a `co_ligand` entry such as `[Cl-]`), and a halogen on carbon is a leaving group,
-    # not a donor.  Named for what it is, so nobody expects it to find halide sites on a
-    # linker.  `_classify_anionic` recognises the X- it leaves behind, without which the
-    # site would exist at build time and vanish on recall.
     ("hydrohalide_X", "[F,Cl,Br,I;H1;X1]", -1),
 ]
-
-# Deliberately NOT in the list above, each for a reason that has already cost time:
-#
-# * `phosphinate_O` -- `[PX4](=[OX1])([#6])([#6])[OX2H1]` is real chemistry and redundant
-#   here: `phosphonate_O` already matches it (its second neighbour is `[#6,#8]`), claims
-#   the atom first, and types the site `phosphonate_O`.  Two names for one site is how a
-#   query starts missing rows.
-# * `dicarbonyl_CH` / `nitro_CH` -- the acidic proton really is on carbon, but the DONOR
-#   is the delocalised oxygen (enolate, nitronate), not the carbanion.  Recording carbon
-#   as the donor hands `site_frame` an atom with no lone pair and no entry in
-#   `IDEAL_MDA_ANGLE`, which falls back to 120 degrees without saying so.  The enol
-#   tautomer of a 1,3-diketone is already caught by `enol_O`.
 
 _LABILE = [(name, Chem.MolFromSmarts(smarts), q) for name, smarts, q in LABILE_DONOR_PATTERNS]
 _CARBOXYLATE_C = Chem.MolFromSmarts("[CX3](=[OX1])[OX1,OX2]")
@@ -256,9 +238,7 @@ def find_donor_sites(mol: Chem.Mol) -> list[DonorSite]:
 def deprotonate(mol: Chem.Mol, sites: list[DonorSite]) -> tuple[Chem.Mol, list[DonorSite]]:
     """Remove the labile H of each given site and set the resulting formal charges.
 
-    Re-indexing goes through atom map numbers rather than index arithmetic: the old
-    `d - 1 if d > hidx else d` shuffle, applied once per removed H, drifts wrong on any
-    molecule with several labile sites — and THQ has four.
+    Re-indexing goes through atom map numbers
     """
     rw = Chem.RWMol(mol)
     for atom in rw.GetAtoms():

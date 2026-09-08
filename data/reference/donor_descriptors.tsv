@@ -1,0 +1,61 @@
+# donor_descriptors — the per-donor half of the M1 descriptor layer (DESIGN §6.6).
+#
+# CURATED BY HAND, on purpose (C8).  Aqueous pKa is context-dependent and has no clean
+# machine-readable source that covers these donor classes, so every row is entered with
+# the class of reference it came from.  The metal half IS generated from a package
+# (scripts/build_metal_descriptors.py) because ionic radii and electronegativity really
+# are standard; mixing the two sourcing styles is the decision, not an inconsistency.
+#
+# pka  — pKa of the acid whose DEPROTONATION EXPOSES THIS DONOR, in water, at 25 C, for
+#        the parent compound.  One direction only.  A neutral donor that needs no
+#        activation (an amine, a pyridyl N, an ether O) has NO such acid and its pka is
+#        left EMPTY, which is a meaningful answer -- "no activation step" -- and not a
+#        missing value.  Basicity of a neutral donor is a different quantity; when it is
+#        needed it gets its own column with its own name rather than a second meaning
+#        loaded onto this one.
+# pka_sigma — honest spread, not a measurement error.  Wide where the donor class covers
+#        chemically different parents (hydrohalide_X spans HF at 3.2 and HI at -10).
+# hsab — hard | borderline | soft.
+# default_denticity — how the GROUP usually binds: 2 for the O,O-chelators, else 1.
+# source — CRC: a tabulated parent acid.  estimate: chemical judgement, no single parent.
+#
+# live_dof is deliberately NOT a column here.  It is defined by
+# `mofsbu.sites.frames.live_dof()` and filled in at load time from there, so the torsion
+# model has exactly one home.  A test asserts the stored column still agrees with it.
+donor_type	pka	pka_sigma	hsab	default_denticity	source
+carboxylate_O	4.76	0.8	hard	2	CRC
+phenolate_O	9.99	0.8	hard	1	CRC
+enol_O	9.0	1.5	hard	1	estimate
+enolate_O	9.0	1.5	hard	1	estimate
+alkoxide_O	15.9	1.0	hard	1	CRC
+hydroxide_O	15.7	0.5	hard	1	CRC
+aqua_O			hard	1	neutral-donor
+carbonyl_O			hard	1	neutral-donor
+ether_O			hard	1	neutral-donor
+sulfonate_O	-1.9	1.0	hard	1	CRC
+sulfinate_O	2.0	1.0	hard	1	estimate
+phosphonate_O	2.38	1.0	hard	2	CRC
+boronate_O	8.8	1.0	hard	2	CRC
+hydroxamate_O	9.4	0.8	hard	2	CRC
+oxime_O	12.2	1.0	hard	1	CRC
+nhydroxy_O	12.0	2.0	hard	1	estimate
+peroxy_O	11.6	2.0	hard	1	CRC
+azolate_N	14.5	2.5	borderline	1	CRC
+sulfonamide_N	10.1	1.5	borderline	1	CRC
+acyl_sulfonamide_N	4.5	1.0	borderline	1	estimate
+imide_N	9.6	1.5	borderline	1	CRC
+amide_N	15.0	2.0	borderline	1	estimate
+amine_N			borderline	1	neutral-donor
+imine_N			borderline	1	neutral-donor
+pyridyl_N			borderline	1	neutral-donor
+nitrile_N			borderline	1	neutral-donor
+thiolate_S	10.6	1.0	soft	1	CRC
+thioether_S			soft	1	neutral-donor
+thiophosphate_S	2.0	1.5	soft	1	estimate
+selenol_Se	5.2	1.0	soft	1	CRC
+phosphine_P			soft	1	neutral-donor
+hydrohalide_X	-6.0	4.0	borderline	1	estimate
+halide_F	3.17	0.3	hard	1	CRC
+halide_Cl	-6.0	1.0	borderline	1	CRC
+halide_Br	-9.0	1.0	soft	1	CRC
+halide_I	-10.0	1.0	soft	1	CRC

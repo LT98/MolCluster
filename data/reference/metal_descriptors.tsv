@@ -1,0 +1,44 @@
+# metal_descriptors — GENERATED, do not hand-edit.
+#   python scripts/build_metal_descriptors.py     (mendeleev 1.2.0)
+#
+# ionic_radius: Shannon effective ionic radius in angstrom, at the FIRST
+#   preferred_cn and, where it matters, the high-spin state -- from mendeleev.
+# hsab / preferred_cn / exchange_lability: curated in the generator, because no
+#   package carries them.  See the CURATED table there for the reasoning.
+# d_electrons: derived from group minus charge; empty for main-group ions.
+symbol	charge	ionic_radius	hsab	preferred_cn	d_electrons	exchange_lability	source	source_version
+Ag	1	0.670	soft	2,4	10	fast	mendeleev+curated	1.2.0
+Al	3	0.390	hard	4,6		slow	mendeleev+curated	1.2.0
+Au	1	1.370	soft	2	10	fast	mendeleev+curated	1.2.0
+Bi	3	1.030	borderline	6,8		fast	mendeleev+curated	1.2.0
+Ca	2	1.000	hard	6,7,8		fast	mendeleev+curated	1.2.0
+Cd	2	0.950	soft	6	10	fast	mendeleev+curated	1.2.0
+Ce	3	1.143	hard	8,9		fast	mendeleev+curated	1.2.0
+Ce	4	0.970	hard	8		moderate	mendeleev+curated	1.2.0
+Co	2	0.580	borderline	4,6	7	moderate	mendeleev+curated	1.2.0
+Co	3	0.545	hard	6	6	slow	mendeleev+curated	1.2.0
+Cr	3	0.615	hard	6	3	slow	mendeleev+curated	1.2.0
+Cu	1	0.460	soft	2,4	10	fast	mendeleev+curated	1.2.0
+Cu	2	0.570	borderline	4,5,6	9	fast	mendeleev+curated	1.2.0
+Fe	2	0.780	borderline	6	6	moderate	mendeleev+curated	1.2.0
+Fe	3	0.645	hard	6	5	moderate	mendeleev+curated	1.2.0
+Ga	3	0.470	hard	4,6		moderate	mendeleev+curated	1.2.0
+Hf	4	0.760	hard	7,8	0	slow	mendeleev+curated	1.2.0
+Hg	2	0.690	soft	2,4	10	fast	mendeleev+curated	1.2.0
+In	3	0.800	hard	6		moderate	mendeleev+curated	1.2.0
+La	3	1.160	hard	8,9		fast	mendeleev+curated	1.2.0
+Mg	2	0.720	hard	6		moderate	mendeleev+curated	1.2.0
+Mn	2	0.830	borderline	6	5	fast	mendeleev+curated	1.2.0
+Ni	2	0.550	borderline	4,6	8	moderate	mendeleev+curated	1.2.0
+Pb	2	1.190	borderline	6		fast	mendeleev+curated	1.2.0
+Pd	2	0.860	soft	4	8	slow	mendeleev+curated	1.2.0
+Pt	2	0.800	soft	4	8	slow	mendeleev+curated	1.2.0
+Rh	3	0.665	borderline	6	6	slow	mendeleev+curated	1.2.0
+Ru	3	0.680	borderline	6	5	slow	mendeleev+curated	1.2.0
+Sc	3	0.745	hard	6	0	fast	mendeleev+curated	1.2.0
+Ti	4	0.605	hard	6	0	slow	mendeleev+curated	1.2.0
+V	3	0.640	hard	6	2	moderate	mendeleev+curated	1.2.0
+V	4	0.530	hard	5,6	1	moderate	mendeleev+curated	1.2.0
+Y	3	1.019	hard	8	0	fast	mendeleev+curated	1.2.0
+Zn	2	0.600	borderline	4,6	10	fast	mendeleev+curated	1.2.0
+Zr	4	0.780	hard	7,8	0	slow	mendeleev+curated	1.2.0

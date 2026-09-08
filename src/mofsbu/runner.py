@@ -78,6 +78,13 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
         status = mode_status().get(spec.run_mode)
         if status is None or not status["available"]:
             note = (status or {}).get("note") or f"run mode {spec.run_mode!r} cannot execute"
+            # An unwired mode is a missing BODY, not a missing install, and the two get
+            # different exceptions (ground rule 8).  Getting this backwards is what let a
+            # 500-structure ml_go run report success while never leaving RAW.
+            if status is not None and status.get("backend_available") and not status.get("wired"):
+                from mofsbu.assembly.join import NotBuiltYet
+
+                raise NotBuiltYet(f"{spec.run_mode}: {note}")
             raise EnergyBackendUnavailable(f"{spec.run_mode}: {note}")
 
     run_id = create_run(reg, spec)

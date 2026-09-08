@@ -17,6 +17,7 @@ ALGO_VERSIONS: dict[str, str] = {
     "energy_backends":  "1",      # backend protocol + how a MethodSpec is filled in
     "reference_scheme": "balanced1",   # reaction-balanced energies (M7)
     "spin_convention":  "hs1",    # high_spin_multiplicity: d-count table + charge
+    "descriptor_tables": "1",     # curated donor table + generated metal table (M1, C8)
 }
 
 
