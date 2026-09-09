@@ -22,6 +22,10 @@ from mofsbu.registry.db import Registry, utcnow
 from mofsbu.spec import BuildSpec
 
 PENDING, CLAIMED, DONE, FAILED, REJECTED = "pending", "claimed", "done", "failed", "rejected"
+# A build you stopped on purpose is not a build that failed.  Keeping them apart is the
+# same rule as `rejected` vs `failed`: a run list where every abandoned experiment reads
+# as a crash is a run list nobody trusts.
+CANCELLING, CANCELLED = "cancelling", "cancelled"
 
 
 def worker_id() -> str:
@@ -74,6 +78,12 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
     interleave with another worker doing the same thing.  Without it two workers happily
     claim the same row and do the same job twice.
     """
+    if run_id is not None and cancel_requested(reg, run_id):
+        # Defence in depth.  `work()` checks before each claim, but a separate worker
+        # PROCESS can be mid-loop when the stop arrives, and the claim is the one
+        # chokepoint every worker passes through.
+        return None
+
     who = worker or worker_id()
     conn = reg.conn
     # sqlite3 opens an implicit transaction for DML, so an explicit BEGIN IMMEDIATE
@@ -205,7 +215,76 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
     }
 
 
+def request_cancel(reg: Registry, run_id: int) -> bool:
+    """Ask a run to stop.  Cooperative: nothing is killed.
+
+    Sets the run to `cancelling` and returns whether the request changed anything.  The
+    workers notice at their next claim, finish the task in hand, and stop — so every
+    structure already computed stays in the registry and no write is interrupted
+    part-way.  That matters more here than a fast stop: a worker killed mid-write is
+    exactly the concurrency case ground rule 1's single insert path exists to avoid, and
+    an hour of xTB thrown away to save ten seconds is a bad trade.
+    """
+    cur = reg.conn.execute(
+        "UPDATE runs SET status=? WHERE id=? AND status IN (?,?,?)",
+        (CANCELLING, run_id, PENDING, "running", CANCELLING))
+    reg.conn.commit()
+    return cur.rowcount > 0
+
+
+def cancel_requested(reg: Registry, run_id: int) -> bool:
+    """Has a stop been asked for?  Read fresh every time — the flag arrives from another
+    process (the UI thread, or another worker), so a cached answer is a worker that
+    never stops."""
+    row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+    return bool(row) and row["status"] in (CANCELLING, CANCELLED)
+
+
+def finalise_cancel(reg: Registry, run_id: int) -> dict[str, int]:
+    """Close out a stopped run: pending work is marked cancelled, not failed.
+
+    Claimed-but-unfinished tasks are returned to `pending` first, so a resumed run picks
+    them up rather than leaving them stranded in a state no one will claim.
+    """
+    returned = reset_stale_claims(reg, run_id)
+    cur = reg.conn.execute(
+        "UPDATE tasks SET status=?, finished_at=? WHERE run_id=? AND status=?",
+        (CANCELLED, utcnow(), run_id, PENDING))
+    reg.conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?",
+                     (CANCELLED, utcnow(), run_id))
+    reg.conn.commit()
+    return {"cancelled_tasks": cur.rowcount, "returned_claims": returned}
+
+
+def resume_run(reg: Registry, run_id: int) -> int:
+    """Undo a stop.  Returns how many tasks were revived.
+
+    Two states arrive here and both are legitimate.  A run already `cancelled` has its
+    tasks parked in `cancelled` and they are put back to `pending`.  A run still
+    `cancelling` — stopped, but no worker has closed it out yet — has tasks that never
+    left `pending`, so nothing is revived and clearing the flag is the whole job.  Zero
+    revived is therefore a success, not a no-op, which is why the caller is told which
+    case it was rather than just a count.
+    """
+    row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+    if row is None or row["status"] not in (CANCELLING, CANCELLED):
+        return 0
+    cur = reg.conn.execute(
+        "UPDATE tasks SET status=?, finished_at=NULL WHERE run_id=? AND status=?",
+        (PENDING, run_id, CANCELLED))
+    reg.conn.execute("UPDATE runs SET status=?, finished_at=NULL WHERE id=?",
+                     ("running", run_id))
+    reg.conn.commit()
+    return cur.rowcount
+
+
 def finish_run(reg: Registry, run_id: int) -> str:
+    row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+    if row and row["status"] in (CANCELLING, CANCELLED):
+        # A stop that was asked for must not be relabelled `done` by the worker loop
+        # exiting normally, which is exactly what it does on the way out.
+        finalise_cancel(reg, run_id)
+        return CANCELLED
     counts = task_counts(reg, run_id)
     status = FAILED if counts.get(FAILED) else DONE
     reg.conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?",

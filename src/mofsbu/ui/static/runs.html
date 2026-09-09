@@ -192,6 +192,7 @@ async function render(){
       </select>
       ${state.code ? `<button id="clearcode">clear cause filter</button>` : ''}
       <button id="refresh">refresh</button>
+      ${stopButton(run.run)}
     </div>
     <table><thead><tr>
       <th>#</th><th>kind</th><th>status</th><th>what was attempted</th>
@@ -208,6 +209,56 @@ async function render(){
   if(fs) fs.onchange = () => { state.status = fs.value || null; render(); };
   if($('#clearcode')) $('#clearcode').onclick = () => { state.code = null; render(); };
   if($('#refresh')) $('#refresh').onclick = render;
+  const stop = $('#stoprun');
+  if(stop) stop.onclick = async () => {
+    // No confirm() dialog: the action is reversible (resume puts the queue back) and
+    // the thing people actually want at this moment is for it to stop NOW.
+    stop.disabled = true; stop.textContent = 'stopping…';
+    try {
+      const r = await post(`/api/runs/${state.runId}/cancel`);
+      note(r.note);
+    } catch(e){ note(e.message, true); }
+    render();
+  };
+  const resume = $('#resumerun');
+  if(resume) resume.onclick = async () => {
+    resume.disabled = true;
+    try {
+      const r = await post(`/api/runs/${state.runId}/resume`);
+      note(`${r.revived} task(s) back in the queue — ${r.note}`);
+    } catch(e){ note(e.message, true); }
+    render();
+  };
+}
+
+// ── stopping a run ──────────────────────────────────────────────────────────
+async function post(u){
+  const r = await fetch(u, {method:'POST'});
+  if(!r.ok) throw new Error((await r.text()).slice(0,300));
+  return r.json();
+}
+
+function note(msg, bad){
+  const el = $('#runnote');
+  if(!el) return;
+  el.textContent = msg;
+  el.className = bad ? 'b b-bad' : 'b b-info';
+}
+
+function stopButton(run){
+  // Live if the run still has work that could be claimed.  A finished run gets nothing
+  // rather than a dead control, and a cancelled one gets the way back.
+  const live = ['pending','running','cancelling'].includes(run.status);
+  if(run.status === 'cancelled')
+    return `<button id="resumerun" title="put the remaining tasks back in the queue">resume run</button>
+            <span id="runnote" class="b b-warn">cancelled</span>`;
+  if(!live) return `<span id="runnote" class="muted"></span>`;
+  const stopping = run.status === 'cancelling';
+  return `<button id="stoprun" ${stopping ? 'disabled' : ''}
+            style="border-color:var(--bad);color:var(--bad)"
+            title="finish the task in hand, then stop claiming. Nothing already computed is lost.">
+            ${stopping ? 'stopping…' : 'stop run'}</button>
+          <span id="runnote" class="${stopping ? 'b b-warn' : 'muted'}">${stopping ? 'stopping' : ''}</span>`;
 }
 
 // ── one task ────────────────────────────────────────────────────────────────

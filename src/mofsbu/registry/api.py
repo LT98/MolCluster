@@ -108,6 +108,23 @@ def _derive_columns(g: TypedGraph) -> dict[str, Any]:
 
 # ── methods ──────────────────────────────────────────────────────────────────
 
+def find_method_id(reg: Registry, spec: MethodSpec) -> int | None:
+    """The id of an existing method row, or None.  Never inserts.
+
+    `method_id` registers on miss, which is right when you are about to store a number
+    and wrong when you are asking "has this already been computed?" — that question is
+    asked before deciding whether to spend an hour of xTB, and it must not have the side
+    effect of creating the row it was looking for.
+    """
+    row = reg.conn.execute(
+        "SELECT id FROM methods WHERE code=? AND code_version=? AND method=? "
+        "AND solvent IS ? AND charge IS ? AND multiplicity IS ? AND extras_json=?",
+        (spec.code, spec.code_version, spec.method, spec.solvent, spec.charge,
+         spec.multiplicity, json.dumps(spec.extras, sort_keys=True, separators=(",", ":")))
+    ).fetchone()
+    return None if row is None else int(row["id"])
+
+
 def method_id(reg: Registry, spec: MethodSpec) -> int:
     extras = json.dumps(spec.extras, sort_keys=True, separators=(",", ":"))
     key = (spec.code, spec.code_version, spec.method, spec.solvent,

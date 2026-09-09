@@ -716,6 +716,100 @@ your head is how the two documents drift apart.
 
 ## 9. Changelog
 
+- *(rev 21)* **A re-run recomputed everything, and a run could not be stopped.**
+
+  **The duplicate.**  Re-running an unchanged spec rebuilds the same constructs,
+  recognises them by identity (D2) and hands back the geometry ids it already had — and
+  rev 20's `queue_relax` then queued a relaxation for every one of them.  In the user's
+  registry: relax tasks pointing three deep at the same source geometry, and **124
+  completed relaxations whose result `put_geometry` discarded as a duplicate** — the
+  calculation had already been paid for by the time anything noticed.  Checking after the
+  compute is not checking.
+  * `existing_relaxation()` answers "has this already been done?" **before** the task is
+    queued, and again in the executor before the backend is called: between queueing and
+    claiming, another worker may have done it, and the check is one indexed SELECT
+    guarding an hour of xTB.
+  * It needed `registry.find_method_id()` — a SELECT-only twin of `method_id()`, which
+    registers on miss.  Right when you are about to store a number, wrong when you are
+    asking whether one exists: that question must not create the row it looked for.
+  * **The key is (source geometry, method, fidelity) — NOT the structure.**  Twelve raw
+    constructs of one identity are twelve different starting points; in run 11 they gave
+    two distinct minima 0.28 eV apart.  Deduplicating per structure would have collapsed
+    those and silently discarded the second, which is the information D10/D11 exist to
+    preserve.  `fidelity` is in the key as well as `method_id` because two rungs served by
+    backends that describe themselves identically would otherwise collide — a test that
+    asks for xTB and was handed an ML result is what put it there.
+  * Measured, three consecutive `xtb_go` runs of one spec: **1.77 s, 0.11 s, 0.12 s**, and
+    the relaxed-geometry count never moves off 9.
+  * The redundancy WITHIN a run (many constructs of one identity) is untouched and
+    deliberate: telling those apart is C2's θ_geom, which is still open.
+
+  **The kill switch.**  `POST /api/runs/{id}/cancel`, and a stop button in the run
+  inspector.  Cooperative, not a kill: the run is flagged `cancelling`, workers finish
+  the task in hand and stop claiming, and everything already computed stays in the
+  registry.  A worker killed mid-write is exactly the concurrency case ground rule 1's
+  single insert path exists to avoid, and throwing away an hour of xTB to save ten
+  seconds is a bad trade.
+  * `cancelled` is a task status and a run status of its own.  **A build you stopped is
+    not a build that failed** — the same distinction as `rejected` vs `failed`, and for
+    the same reason: a run list where every abandoned experiment reads as a crash is a
+    run list nobody trusts.  `finish_run` refuses to relabel a stop as `done`, which is
+    otherwise exactly what the worker loop exiting normally would do.
+  * `claim_task` refuses while a stop is in flight, not only `work()`: a separate worker
+    PROCESS can be mid-loop when the flag arrives, and the claim is the one chokepoint
+    every worker passes through.
+  * `POST /api/runs/{id}/resume` puts the queue back.  Zero revived is a success when the
+    run was still `cancelling` (its tasks never left `pending`), so the response says
+    which case it was rather than only a count.
+
+  292 passed, 1 skipped.
+
+- *(rev 20)* **M7b — the runner relaxes.  Verified against real GFN2-xTB, not a mock.**
+  Rev 19 recorded that no run mode had ever relaxed anything and put a flag in front of
+  the hole.  This lands the executor behind it.
+
+  * **A `relax` task, not a step inside the build.**  A completed `ligand` or `place`
+    task emits a follow-up `relax` task at `priority=-10`, so the cheap enumeration drains
+    first and what remains is all accelerator work.  The reasons are the ones the queue
+    exists for: a failed relaxation retries without rebuilding, it survives a closed
+    laptop, and one machine can drain a queue another filled.  `tasks.kind` already
+    reserved the name.
+  * **The construct is never replaced.**  `_execute_relax` writes a SECOND geometry row
+    chained by `relaxed_from`, which is §6.2's ladder made real: one identity, several
+    realisations, the cheap one recorded as having correctly pointed at the better one.
+    A test asserts a failed relax leaves every construct intact and marks only its own
+    task failed.
+  * **Ligands are relaxed too.**  `energy.reference` refuses to subtract energies computed
+    at different levels of theory, so a relaxed complex and an unrelaxed free ligand could
+    never appear in one equation — the reference scheme would have had nothing to say.
+  * **The device is declared, not detected.**  `config.compute_device()` reads
+    `MOFSBU_DEVICE` (cpu | cuda | cuda:N | mps) and `MACEBackend` takes it; the value
+    lands in the stored `methods` row, because one model on two pieces of hardware can
+    differ in the last decimals.  A run prints its device in its first line, since an idle
+    accelerator is otherwise only visible in `nvidia-smi`, an hour later, by accident.
+    Detection was considered and rejected for ground rule 9's reason: a build should not
+    decide on its own to seize hardware you are using for something else.
+  * `RELAXATION_IS_EXECUTED` flips to True.  The flag stays, and `mode_status()` keeps
+    reporting `backend_available` and `wired` separately, because "MACE imports" and
+    "MACE will run" are different claims and conflating them cost a 500-structure run.
+
+  **Verified end to end**, `run_mode="xtb_go"` against tblite 0.7.0:
+
+      mofsbu run 1: mode=xtb_go  device=cpu  workers=1
+      fidelity=RAW  n=  7   mofsbu/frame-directed-placement
+      fidelity=FF   n=  2   rdkit/ETKDGv3+MMFF
+      fidelity=XTB  n=  9   tblite/GFN2-xTB
+      ladder: geometry 10 <- 1, E = -393.472 eV, converged
+
+  **KNOWN GAP, recorded rather than hidden:** the relaxed coordinates are stored against
+  the SAME structure identity without re-deriving the typed graph from them.  A relaxation
+  that breaks or forms a bond should become a new L3 with a `derived_from` edge (D11,
+  §6.2), and detecting that needs a coordinates-to-graph path this package does not have.
+  Until it exists, a relax that tears a node apart will be filed under the identity of the
+  node it destroyed.  The stored `qc` report is the partial guard.
+
+  280 passed, 1 skipped.
+
 - *(rev 19)* **M1 descriptor layer — and no run mode had ever relaxed anything.**
 
   **The bug first, because it invalidates a run's label.**  A 500-structure `ml_go` build

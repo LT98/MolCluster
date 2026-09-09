@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mofsbu.config import max_workers, parallel_enabled
+from mofsbu.config import compute_device, device_note, max_workers, parallel_enabled
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry.placer import GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit
 from mofsbu.graph._types import TypedGraph
@@ -26,7 +26,8 @@ from mofsbu.registry import (
     MethodSpec, Provenance, Registry, alias_fragment, put_geometry, put_sites, put_structure,
 )
 from mofsbu.registry.jobs import (
-    add_task, claim_task, complete_task, create_run, fail_task, finish_run,
+    add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
+    finish_run,
     outcome_summary, set_diagnostics, task_counts,
 )
 from mofsbu.sites.frames import BindingMode
@@ -178,9 +179,147 @@ def _protomer_mol(spec: BuildSpec, payload: dict[str, Any]):
     return mol, molecule, embed_report
 
 
-def execute(reg: Registry, task, spec: BuildSpec) -> "Outcome":
+RELAX_PRIORITY = -10        # constructs drain first; relaxes are the expensive tail
+
+
+def relax_method_spec(reg: Registry, structure_id: int, target: Fidelity,
+                      solvent: str | None = None):
+    """The MethodSpec a relaxation WOULD produce, without running it.
+
+    This is what makes "has this already been computed?" answerable before spending the
+    compute rather than after.  The backend can describe itself — code, pinned version,
+    solvent, charge, multiplicity, device — from the structure's own charge and spin,
+    which is everything the `methods` row is keyed on.
+    """
+    from mofsbu.energy.relax import backend_for
+
+    row = reg.conn.execute(
+        "SELECT net_charge, multiplicity FROM structures WHERE id=?",
+        (structure_id,)).fetchone()
+    if row is None:
+        raise MofsbuError(f"no structure {structure_id}")
+    return backend_for(target).method_spec(
+        charge=int(row["net_charge"]), multiplicity=int(row["multiplicity"]),
+        solvent=solvent)
+
+
+def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity,
+                        structure_id: int, solvent: str | None = None) -> int | None:
+    """The geometry this exact relaxation already produced, or None.
+
+    Keyed on (source geometry, method row).  Deliberately NOT on the structure alone:
+    two raw constructs of one identity are two different starting points and may relax
+    into two different minima, and collapsing them here would silently discard the
+    second one.  What this catches is the genuine duplicate — the same starting
+    geometry, at the same level of theory, relaxed again, which is what a re-run of an
+    unchanged spec produces for every structure it already has.
+    """
+    from mofsbu.registry import find_method_id
+
+    try:
+        spec = relax_method_spec(reg, structure_id, target, solvent)
+    except Exception:                                                   # noqa: BLE001
+        # Cannot describe the method (backend gone?).  Say "unknown", not "no": the
+        # executor re-checks, and queueing a task that turns out redundant is cheap
+        # while skipping one that was needed is not.
+        return None
+    mid = find_method_id(reg, spec)
+    if mid is None:
+        return None
+    # `fidelity` is in the key as well as `method_id`, which looks redundant and is not:
+    # two rungs served by backends that describe themselves identically would otherwise
+    # collide, and a request for an xTB relaxation would be answered with an ML one that
+    # happened to share a method row.  A test asserts exactly this.
+    row = reg.conn.execute(
+        "SELECT id FROM geometries WHERE relaxed_from=? AND method_id=? AND "
+        "structure_id=? AND fidelity=? AND energy IS NOT NULL LIMIT 1",
+        (source_geometry_id, mid, structure_id, int(target))).fetchone()
+    return None if row is None else int(row["id"])
+
+
+def read_xyz(text: str) -> tuple[list[str], list[list[float]]]:
+    """Parse a stored .xyz back into symbols and coordinates."""
+    lines = text.strip().splitlines()
+    n = int(lines[0])
+    symbols: list[str] = []
+    coords: list[list[float]] = []
+    for line in lines[2:2 + n]:
+        parts = line.split()
+        symbols.append(parts[0])
+        coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    if len(symbols) != n:
+        raise MofsbuError(f"xyz claims {n} atoms and carries {len(symbols)}")
+    return symbols, coords
+
+
+def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
+    """Optimise a stored geometry and store the RESULT AS A SECOND ROW.
+
+    The raw construct is never replaced.  `geometries.relaxed_from` chains the two, which
+    is the fidelity ladder of §6.2: one identity, several realisations, and the cheap one
+    recorded as having correctly pointed at the better one.  It also means a relax that
+    fails costs nothing already built — the construct is still there and only this task
+    is marked failed.
+
+    KNOWN GAP, stated rather than hidden: the relaxed coordinates are stored against the
+    SAME structure identity without re-deriving the typed graph from them.  A relaxation
+    that breaks or forms a bond should become a new L3 with a `derived_from` edge (D11,
+    §6.2), and detecting that needs a coordinates -> graph path this package does not
+    have yet.  Until it does, a relax that tears a node apart will be filed under the
+    identity of the node it destroyed.  `qc` on the stored row is the partial guard.
+    """
+    from mofsbu.energy.relax import relax_geometry
+    from mofsbu.registry import geometry_xyz, get_graph
+
+    payload = task.payload
+    structure_id = int(payload["structure_id"])
+    source_gid = int(payload["geometry_id"])
+    target = Fidelity(int(payload["target"]))
+
+    graph = get_graph(reg, structure_id)
+    if graph.charge is None or graph.multiplicity is None:
+        raise MofsbuError(
+            f"structure {structure_id} has no recorded charge/multiplicity; a relaxation "
+            f"cannot be set up without both, and guessing either is how the archived runs "
+            f"ended up with a spin convention nobody could reconstruct")
+
+    # Checked again here, not only at queue time: between queueing and claiming, another
+    # worker may have done this exact relaxation.  The check is one indexed SELECT and
+    # the thing it guards is an hour of xTB, so it is worth doing twice.
+    already = existing_relaxation(reg, source_gid, target, structure_id,
+                                  payload.get("solvent"))
+    if already is not None:
+        return Outcome(structure_id, already, None, False,
+                       {"relax": {"skipped": "already relaxed at this level of theory",
+                                  "from_geometry": source_gid, "existing_geometry": already,
+                                  "target": target.name}})
+
+    symbols, coords = read_xyz(geometry_xyz(reg, source_gid))
+    result = relax_geometry(coords, symbols, charge=int(graph.charge),
+                            multiplicity=int(graph.multiplicity), target=target,
+                            solvent=payload.get("solvent"))
+
+    geom = put_geometry(
+        reg, structure_id, result.to_xyz(graph.name or ""), fidelity=result.fidelity,
+        method=result.method, energy=result.energy, converged=result.converged,
+        relaxed_from=source_gid)
+    detail = {"relax": {"from_geometry": source_gid, "target": target.name,
+                        "converged": result.converged, "steps": result.n_steps,
+                        "fmax": round(result.fmax, 4), "energy": result.energy,
+                        "relaxation_energy": result.relaxation_energy,
+                        "device": compute_device(),
+                        "method": result.method.describe()}}
+    return Outcome(structure_id, geom.id, None, geom.created, detail)
+
+
+def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Run one task.  Returns what it produced AND what it took to produce it."""
     payload = task.payload
+    if task.kind == "relax":
+        # Handled first: a relax payload carries a structure and a geometry, not a
+        # molecule index, so `_protomer_mol` has nothing to work with.
+        return _execute_relax(reg, task, spec)
+
     mol, molecule, embed_report = _protomer_mol(spec, payload)
     detail: dict[str, Any] = {"embed": embed_report}
     name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
@@ -287,10 +426,49 @@ class _Rejected(MofsbuError):
         self.detail = detail or {}
 
 
+def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | None:
+    """Emit the follow-up relaxation for a task that just built something.
+
+    A separate task rather than a step inside the build, because relaxation is the
+    expensive, resumable half: it retries without rebuilding, it survives a closed
+    laptop, and it lets one machine drain a queue another machine filled — which is the
+    entire point of the two-machine setup.  Lower priority than the constructs, so the
+    cheap enumeration finishes first and the queue that remains is all GPU work.
+
+    Ligands are relaxed too, not just complexes.  `energy.reference` refuses to subtract
+    energies computed at different levels of theory, so a relaxed complex and an
+    unrelaxed free ligand could never appear in the same equation — which would leave the
+    reference scheme with nothing to say.
+    """
+    from mofsbu.energy.relax import MODE_FIDELITY
+
+    if spec.run_mode == "construct" or task.kind == "relax":
+        return None
+    if out.structure_id is None or out.geometry_id is None:
+        return None
+    target = MODE_FIDELITY.get(spec.run_mode)
+    if target is None:
+        return None
+    if existing_relaxation(reg, out.geometry_id, target, out.structure_id) is not None:
+        # Re-running an unchanged spec rebuilds the same constructs, recognises them by
+        # identity (D2), and hands back the geometry ids it already had.  Without this,
+        # every one of them was queued for relaxation again -- the same starting
+        # geometry, the same level of theory, the same answer, at full price.
+        return None
+    return add_task(reg, task.run_id, "relax", {
+        "structure_id": out.structure_id, "geometry_id": out.geometry_id,
+        "target": int(target), "solvent": None,
+    }, priority=RELAX_PRIORITY)
+
+
 def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = None) -> int:
     """Claim and execute tasks until none remain.  In-process."""
     done = 0
     while limit is None or done < limit:
+        if cancel_requested(reg, run_id):
+            # Cooperative: the task in hand has already finished, and nothing new is
+            # claimed.  Everything computed so far is in the registry.
+            break
         task = claim_task(reg, run_id)
         if task is None:
             break
@@ -301,6 +479,7 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
                           structure_created=out.structure_created,
                           geometry_created=out.geometry_created,
                           detail=out.detail)
+            queue_relax(reg, spec, task, out)
         except _Rejected as exc:
             fail_task(reg, task.id, str(exc), rejected=True,
                       code=exc.code, detail=exc.detail)
@@ -327,6 +506,11 @@ def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[s
     run_id, n_tasks = plan(reg, spec)
     reg.conn.commit()
     n_workers = workers if workers is not None else max_workers()
+    if spec.run_mode != "construct":
+        # Printed before any work starts: an accelerator sitting idle for a whole run is
+        # otherwise only visible in nvidia-smi, an hour later, by accident.
+        print(f"mofsbu run {run_id}: mode={spec.run_mode}  {device_note()}  "
+              f"workers={n_workers}")
 
     if n_workers <= 1 or not parallel_enabled():
         work(reg, spec, run_id)

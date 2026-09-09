@@ -314,6 +314,52 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
         finally:
             con.close()
 
+    @router.post("/api/runs/{run_id}/cancel")
+    def cancel_run(run_id: int) -> dict[str, Any]:
+        """Ask a run to stop.  Cooperative, and it writes — so not the read-only path.
+
+        Nothing is killed.  The run is flagged, workers finish the task in hand and stop
+        claiming, and everything already computed stays in the registry.  A build stopped
+        on purpose is recorded as `cancelled`, never as `failed`: a run list where every
+        abandoned experiment reads as a crash is a run list nobody trusts.
+        """
+        from mofsbu.registry import BlobStore, Registry
+        from mofsbu.registry.jobs import request_cancel, task_counts
+
+        with Registry(db_path, BlobStore(store_path)) as reg:
+            row = reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                                   (run_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, f"no run {run_id}")
+            changed = request_cancel(reg, run_id)
+            counts = task_counts(reg, run_id)
+        return {"run_id": run_id, "requested": changed, "was": row["status"],
+                "pending": counts.get("pending", 0),
+                "in_flight": counts.get("claimed", 0),
+                "note": ("stopping — the task in hand will finish, then the workers stop "
+                         "claiming" if changed else
+                         f"nothing to stop: this run is {row['status']}")}
+
+    @router.post("/api/runs/{run_id}/resume")
+    def resume_run_route(run_id: int) -> dict[str, Any]:
+        """Put a cancelled run's remaining tasks back in the queue."""
+        from mofsbu.registry import BlobStore, Registry
+        from mofsbu.registry.jobs import resume_run
+
+        from mofsbu.registry.jobs import task_counts
+
+        with Registry(db_path, BlobStore(store_path)) as reg:
+            was = reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                                   (run_id,)).fetchone()
+            if was is None:
+                raise HTTPException(404, f"no run {run_id}")
+            revived = resume_run(reg, run_id)
+            pending = task_counts(reg, run_id).get("pending", 0)
+        note = (f"{pending} task(s) waiting — resubmit the spec to execute them"
+                if pending else "nothing left to do in this run")
+        return {"run_id": run_id, "revived": revived, "was": was["status"],
+                "pending": pending, "note": note}
+
     @router.get("/api/runs/{run_id}/tasks")
     def get_run_tasks(run_id: int, status: str | None = None,
                       code: str | None = None,

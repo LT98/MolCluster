@@ -258,6 +258,13 @@ class NullBackend(_Base):
     code = "null"
     method = "null-not-physical"
 
+    def __init__(self, *, fidelity: Fidelity = Fidelity.RAW) -> None:
+        # A test that exercises the fidelity LADDER needs a double that can sit on a rung
+        # above RAW.  Safe to allow because `code` stays "null": the reference scheme
+        # refuses these energies by code, not by rung, so a masquerading fidelity cannot
+        # smuggle a non-physical number into a reaction energy.
+        self.fidelity = fidelity
+
     def code_version(self) -> str:
         return "1"
 
@@ -404,8 +411,15 @@ class MACEBackend(_Base):
     code = "mace"
     method = "MACE-MP-0"
 
-    def __init__(self, *, model: str = "medium", device: str = "cpu",
+    def __init__(self, *, model: str = "medium", device: str | None = None,
                  default_dtype: str = "float64") -> None:
+        from mofsbu.config import compute_device
+
+        # `device="cpu"` used to be the hard default, so a workstation with a GPU ran the
+        # MLIP on its CPU and the only symptom was a card that never warmed up.  The
+        # device is DECLARED (`MOFSBU_DEVICE`), never detected, for the same reason
+        # parallelism is opt-in.
+        device = compute_device() if device is None else device
         self.model = model
         self.device = device
         self.default_dtype = default_dtype
@@ -431,7 +445,8 @@ class MACEBackend(_Base):
         if solvent is not None:
             raise ValueError("MACE-MP-0 has no solvation model; use xtb for a continuum")
         spec = super().method_spec(charge=charge, multiplicity=multiplicity, solvent=None)
-        return replace(spec, extras={**spec.extras, "model": self.model})
+        return replace(spec, extras={**spec.extras, "model": self.model,
+                                     "device": self.device})
 
     def _calculator(self):
         if self._calc_cache is None:

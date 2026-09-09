@@ -16,17 +16,17 @@ from mofsbu.energy.backends import RelaxResult, backend_for
 
 # Which fidelity each run mode is asking for.  One place, because the spec, the planner
 # and the capability read-out all need the same answer.
-# Whether the RUNNER actually performs a relaxation.  It does not: `runner.execute`
-# places a structure, stores it at RAW, and returns — `relax_geometry` is called from
-# nowhere outside this package.  Until that is wired, a run mode whose backend imports
-# cleanly would pass the planner's pre-flight and then quietly produce raw constructs
-# under a label saying they were optimised, which is exactly the "stub that answers"
-# ground rule 8 forbids.  One flag, flipped when the executor lands, rather than a
-# comment nobody reads.
+# Whether the RUNNER actually performs a relaxation.  It now does: a completed build task
+# emits a `relax` follow-up task, and `runner._execute_relax` stores the result as a
+# second geometry row chained by `relaxed_from`.
 #
-# Discovered the honest way: a 500-structure `ml_go` run left the GPU idle and the
-# registry holding 281 RAW geometries, no ML row, and no `mace` entry in `methods`.
-RELAXATION_IS_EXECUTED = False
+# The flag stays because the question it answers is a real one and was answered wrongly
+# for a whole milestone: rev 16 shipped the planner's pre-flight WITHOUT the executor, so
+# a 500-structure `ml_go` run passed every check, left the GPU idle, and wrote 281 raw
+# constructs under a label saying they had been optimised.  `mode_status()` reports
+# `backend_available` and `wired` separately for the same reason — "MACE imports" and
+# "MACE will run" are different claims.
+RELAXATION_IS_EXECUTED = True
 
 MODE_FIDELITY: dict[str, Fidelity] = {
     "construct": Fidelity.RAW,

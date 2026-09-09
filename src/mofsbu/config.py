@@ -71,3 +71,35 @@ def parallel_enabled() -> bool:
     that can leave orphans behind if a laptop is closed mid-build.
     """
     return max_workers() > 1
+
+
+# ── compute device: declared, never detected ─────────────────────────────────
+# Ground rule 9's stance applied to the accelerator.  `MACEBackend` used to default to
+# `device="cpu"` with no way to say otherwise, so a workstation with a GPU ran an MLIP on
+# its CPU and the only symptom was that the card never warmed up.  Detection was
+# considered and rejected for the same reason parallelism is opt-in: a build should not
+# decide on its own to seize hardware you are using for something else.
+
+CPU = "cpu"
+
+
+def compute_device() -> str:
+    """`MOFSBU_DEVICE` = cpu | cuda | cuda:N | mps.  Defaults to cpu.
+
+    Returned verbatim after a shape check so a typo fails at the backend with the string
+    you typed, rather than silently becoming "cpu" and looking like slow hardware.
+    """
+    value = (os.environ.get("MOFSBU_DEVICE") or CPU).strip().lower()
+    if value != CPU and not value.startswith(("cuda", "mps", "xpu")):
+        raise ValueError(
+            f"MOFSBU_DEVICE={value!r} is not a device torch would recognise; "
+            f"expected cpu, cuda, cuda:<n>, or mps")
+    return value
+
+
+def device_note() -> str:
+    """One line for a run's first line of output, so an idle GPU is visible immediately."""
+    device = compute_device()
+    if device == CPU:
+        return "device=cpu  (set MOFSBU_DEVICE=cuda to use a GPU)"
+    return f"device={device}"
