@@ -40,7 +40,7 @@ def null_ml(monkeypatch):
 def acetate_spec(**kw) -> BuildSpec:
     return BuildSpec(
         molecules=(MoleculeSpec(name="AcOH", smiles="CC(=O)O", max_deprotonations=1),),
-        metals=(MetalSpec(symbol="Zn", oxidation_state=2, multiplicity=1),),
+        metals=(MetalSpec(symbol="Zn", oxidation_state=2),),
         coordination=(4,), ligands_per_metal=(1,), binding=("mono",), co_ligand="O",
         **kw)
 

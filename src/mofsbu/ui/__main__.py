@@ -11,9 +11,14 @@ which needs no install.
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
-from mofsbu.config import REPO_ROOT, data_root, registry_path, store_root
+from mofsbu.config import (
+    REPO_ROOT, compute_device, data_root, machine_profile, max_workers, registry_path,
+    store_root,
+)
 
 
 def discover_databases(root: Path | None = None) -> list[Path]:
@@ -59,6 +64,45 @@ def resolve_database(given: Path | None) -> tuple[Path, list[Path], str]:
     return preferred, [], "nothing found yet — will be created on first write"
 
 
+def confirm_compute_settings() -> None:
+    """Ask, once at startup, how this server should use CUDA and in-process workers.
+
+    Ground rule 9 still holds — the device and worker count are DECLARED
+    (`MOFSBU_DEVICE`, `MOFSBU_WORKERS`/`MOFSBU_PROFILE`), never auto-detected — this
+    just puts that declaration in front of a human at the moment it matters, because
+    `viewer.py` is the process that actually runs any `ml_go`/`xtb_go` task submitted
+    through `/builder`, using whatever was already (maybe silently) set.  Skipped
+    outright without a TTY, so a systemd/docker/nohup launch never blocks on stdin.
+    """
+    if not sys.stdin.isatty():
+        return
+
+    device = compute_device()
+    hint = ""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            hint = f"  (torch sees a GPU: {torch.cuda.get_device_name(0)})"
+    except Exception:                                                    # noqa: BLE001
+        pass
+    print(f"\ncompute device: currently {device!r}{hint}")
+    answer = input("  use CUDA for this server's ml_go/xtb_go runs? [y/N]: ").strip().lower()
+    if answer in ("y", "yes"):
+        chosen = input("  device [cuda]: ").strip() or "cuda"
+        os.environ["MOFSBU_DEVICE"] = chosen
+    print(f"worker profile: currently {machine_profile()!r}, max_workers={max_workers()}")
+    answer = input("  allow more than one in-process worker (workstation profile)? "
+                   "[y/N]: ").strip().lower()
+    if answer in ("y", "yes"):
+        os.environ["MOFSBU_PROFILE"] = "workstation"
+        count = input(f"  how many workers? [{max_workers()}]: ").strip()
+        if count:
+            os.environ["MOFSBU_WORKERS"] = count
+    print(f"→ device={compute_device()}  profile={machine_profile()}  "
+          f"max_workers={max_workers()}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m mofsbu.ui",
                                 description=__doc__.splitlines()[0])
@@ -72,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="uvicorn autoreload (development)")
+    p.add_argument("--no-prompt", action="store_true",
+                   help="skip the CUDA/worker confirmation; use MOFSBU_DEVICE and "
+                        "MOFSBU_WORKERS/MOFSBU_PROFILE exactly as already declared")
     a = p.parse_args(argv)
 
     if a.list_db:
@@ -83,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
             size = path.stat().st_size / 1e6
             print(f"  {path.name:28s} {size:8.2f} MB   {path}")
         return 0
+
+    # `--reload` re-execs this process on every code change; asking again each time
+    # would be a prompt loop, not a confirmation.
+    if not a.no_prompt and not a.reload:
+        confirm_compute_settings()
 
     db, others, why = resolve_database(a.db)
     store = a.store or store_root()

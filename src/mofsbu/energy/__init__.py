@@ -10,8 +10,9 @@ from __future__ import annotations
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MethodSpec, ReferenceSchemeError
 from mofsbu.energy.backends import (
     ML_BACKENDS, EnergyBackend, EnergyResult, MACEBackend, MACEOmolBackend, NullBackend,
-    RelaxResult, XTBBackend, available_backends, backend_for, d_electrons, get_backend,
-    high_spin_multiplicity, minimal_multiplicity, ml_backend_key, check_spin,
+    RelaxResult, XTBBackend, available_backends, backend_for, combined_multiplicity,
+    d_electrons, get_backend, high_spin_multiplicity, minimal_multiplicity, ml_backend_key,
+    check_spin, spin_class_multiplicity,
 )
 from mofsbu.energy.reference import (
     BalanceReport, QualityIssue, ReactionEnergy, ReferenceQuality, Term, check_balance,
@@ -30,7 +31,8 @@ __all__ = [
     "QualityIssue", "ReactionEnergy", "ReferenceQuality", "ReferenceSchemeError",
     "RelaxResult", "Term", "XTBBackend", "available_backends", "available_modes",
     "backend_for", "check_balance", "check_reference_quality", "check_spin",
-    "d_electrons", "get_backend", "high_spin_multiplicity", "minimal_multiplicity",
-    "ml_backend_key", "ml_model_status", "mode_status", "put_balanced_reaction", "reaction_balanced_energy", "reaction_terms",
-    "relax_geometry", "single_point", "store_reaction_energy",
+    "combined_multiplicity", "d_electrons", "get_backend", "high_spin_multiplicity",
+    "minimal_multiplicity", "ml_backend_key", "ml_model_status", "mode_status",
+    "put_balanced_reaction", "reaction_balanced_energy", "reaction_terms",
+    "relax_geometry", "single_point", "spin_class_multiplicity", "store_reaction_energy",
 ]

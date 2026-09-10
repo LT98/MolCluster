@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from mofsbu.config import compute_device, device_note, max_workers, parallel_enabled
+from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry.placer import GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit
 from mofsbu.graph._types import TypedGraph
@@ -421,7 +422,13 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
                                     "cn": payload["cn"]})
         complex_mol = to_rdkit(metal.symbol, ligands, result)
         charge = metal.oxidation_state + payload["charge"] * payload["n_ligands"]
-        g = from_rdkit(complex_mol, charge=charge, multiplicity=metal.multiplicity,
+        # The complex's multiplicity is the metal centre's own (from its spin_class,
+        # not a stale literal) combined with the ligand's — unpaired electrons add,
+        # multiplicities don't.  See `spin_class_multiplicity`/`combined_multiplicity`.
+        metal_multiplicity = spin_class_multiplicity(
+            metal.symbol, metal.oxidation_state, metal.spin_class)
+        multiplicity = combined_multiplicity(metal_multiplicity, molecule.multiplicity)
+        g = from_rdkit(complex_mol, charge=charge, multiplicity=multiplicity,
                        oxidation_states={0: metal.oxidation_state},
                        spin_classes={0: metal.spin_class}, name="")
         put = put_structure(reg, g, tags=[molecule.name, "complex", metal.symbol],

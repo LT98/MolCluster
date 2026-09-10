@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 4
+SPEC_VERSION = 5
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -43,10 +43,20 @@ class MoleculeSpec:
 
 @dataclass(frozen=True)
 class MetalSpec:
+    """A coordination centre.  No `multiplicity` field on purpose.
+
+    There used to be one, defaulting to 1 and unconnected to `oxidation_state` or
+    `spin_class` — nothing kept it in sync, so a Cu(II) `MetalSpec` silently carried a
+    singlet (d9 has one unpaired electron; no singlet is reachable) until MACE-OMOL-0
+    started checking.  The complex's multiplicity is now DERIVED from `spin_class` at
+    build time (`runner.execute`, via `energy.backends.spin_class_multiplicity`), the
+    same way `high_spin_multiplicity` already was for a bare ion — stated once, as a
+    spin class, not copied around as a number that can go stale.
+    """
+
     symbol: str
     oxidation_state: int = 2
     spin_class: str = "ls"
-    multiplicity: int = 1
 
 
 @dataclass(frozen=True)
@@ -141,6 +151,14 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 4:
+            # v4 -> v5 drops `MetalSpec.multiplicity`.  It was never derived from
+            # `oxidation_state`/`spin_class`, so an old spec's stored value cannot be
+            # trusted to be the reachable one for a spin-aware backend — dropping it
+            # forces every metal centre back through `spin_class_multiplicity` instead
+            # of resurrecting a number that may be exactly the bug being fixed.
+            for m in d.get("metals", ()):
+                m.pop("multiplicity", None)
         # v2 -> v3 adds no field: `xtb_go` joins RUN_MODES, so every v2 spec is already a
         # valid v3 one and there is nothing to rewrite.  The version still moves, because
         # a v3 spec saying `run_mode: xtb_go` must be REFUSED by a v2 build with "this is

@@ -12,8 +12,8 @@ from mofsbu._types import EnergyBackendUnavailable, Fidelity, MethodSpec
 from mofsbu.assembly.join import NotBuiltYet
 from mofsbu.energy.backends import (
     ML_BACKENDS, MACEBackend, MACEOmolBackend, NullBackend, XTBBackend, available_backends,
-    backend_for, check_spin, d_electrons, electron_count, high_spin_multiplicity,
-    minimal_multiplicity, ml_backend_key,
+    backend_for, check_spin, combined_multiplicity, d_electrons, electron_count,
+    high_spin_multiplicity, minimal_multiplicity, ml_backend_key, spin_class_multiplicity,
 )
 from mofsbu.energy.relax import (
     MODE_FIDELITY, available_modes, ml_model_status, mode_status, relax_geometry,
@@ -65,6 +65,35 @@ def test_multiplicity_must_match_the_electron_count():
     with pytest.raises(ValueError, match="cannot give multiplicity"):
         check_spin(["O", "H", "H"], 0, 2)
     check_spin(["O", "H", "H"], 1, 2)          # 9 electrons: doublet is right
+
+
+def test_spin_class_multiplicity_routes_to_the_stated_convention():
+    assert spin_class_multiplicity("Zn", 2, "ls") == 1          # d10: closed shell either way
+    assert spin_class_multiplicity("Ni", 2, "hs") == 3          # matches high_spin_multiplicity
+    # Cu(II) is d9 — ONE unpaired electron no matter the convention.  This was the
+    # combination `MetalSpec.multiplicity` defaulted past as a bare singlet: a
+    # complex built from it asked MACE-OMOL-0 for a multiplicity no electron count
+    # of that parity can reach.
+    assert spin_class_multiplicity("Cu", 2, "ls") == 2
+    with pytest.raises(ValueError, match="no wired multiplicity convention"):
+        spin_class_multiplicity("Fe", 2, "is")
+
+
+def test_combined_multiplicity_adds_unpaired_not_multiplicities():
+    assert combined_multiplicity(1, 1) == 1                     # two closed shells: singlet
+    assert combined_multiplicity(2, 1) == 2                     # doublet metal + singlet ligand
+    assert combined_multiplicity(3, 3) == 5                     # two triplets: quintet, not 9
+
+
+def test_a_copper_ii_complex_reaches_a_multiplicity_check_spin_accepts():
+    """The bug: a Cu(II) mononuclear complex built at multiplicity=1 (odd electron
+    count, even multiplicity required) used to reach `check_spin` and fail for
+    roughly half of every run once MACE-OMOL-0 made the check matter."""
+    symbols = ["Cu"] + ["O", "H"] * 4                            # Cu(H2O)4-shaped stand-in
+    charge = 2
+    metal_mult = spin_class_multiplicity("Cu", 2, "ls")
+    mult = combined_multiplicity(metal_mult, 1)                 # closed-shell ligands
+    check_spin(symbols, charge, mult)                            # must not raise
 
 
 # ── the protocol ─────────────────────────────────────────────────────────────
