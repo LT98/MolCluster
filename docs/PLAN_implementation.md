@@ -1,5 +1,9 @@
 # Implementation Plan — code, functionalities, and milestone order
 
+> **Looking for the map, not the detail?** `docs/CODE_ARCHITECTURE.md` is the quick
+> reference: module table, invariants, decision ledger one-liners, known seams. This
+> document is the detail behind it — milestones, exit gates, and the changelog.
+
 **Companion to** [`DESIGN_registry_assembly.md`](DESIGN_registry_assembly.md). That doc says *what*
 is being built and *why* (ledger D1–D13). This doc says *what code exists*, *in what order*, and
 *what has to be true before the next thing starts*.
