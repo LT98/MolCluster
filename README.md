@@ -19,7 +19,7 @@ conditions), and store everything for recall and further construction.
       sites/           donor perception, frames + live-DOF tags (perceive-once)
       geometry/        multi-center placer, fidelity-laddered geometries
       registry/        SQLite registry + content-addressed blob store
-      energy/          xTB / MACE backends
+      energy/          xTB / MACE-MP-0 / MACE-OMOL-0 backends
       descriptors/     per-donor / per-metal tables
       assembly/        BuildingBlock, frame-alignment join, choice-vector
       pathways/        reactions + pathway scoring
@@ -105,6 +105,21 @@ elsewhere — a sync client copying a live SQLite file corrupts it, and none of 
 
     setx MOFSBU_DATA %LOCALAPPDATA%\mofsbu        # windows
     export MOFSBU_DATA=~/.local/share/mofsbu      # linux
+
+Three more things are **declared, never detected**, so a build cannot decide on its own to
+seize hardware or to switch theories:
+
+    MOFSBU_PROFILE   laptop | workstation        # how many workers may run
+    MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP runs
+    MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0     # WHICH MLIP; default mace-mp-0
+
+`ml_go` names a rung of the fidelity ladder, not a theory. **MACE-MP-0** (Materials
+Project) is blind to formal charge and spin, so the reference scheme refuses it on any
+charged equation; **MACE-OMOL-0** (OMol25, wB97M-V/def2-TZVPD) is given the total charge
+and spin multiplicity and is accepted. Their energies are on different scales and are
+never subtracted from one another — the `methods` row records which model produced each
+number, and nothing compares energies across method rows. A spec may pin the model
+(`ml_model`), and that beats the environment. MACE-OMOL-0 needs `mace-torch>=0.3.14`.
 
 ## Two-machine workflow (git is the bridge)
 

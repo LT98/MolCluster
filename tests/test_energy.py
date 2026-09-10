@@ -11,10 +11,13 @@ import pytest
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MethodSpec
 from mofsbu.assembly.join import NotBuiltYet
 from mofsbu.energy.backends import (
-    MACEBackend, NullBackend, XTBBackend, available_backends, backend_for, check_spin,
-    d_electrons, electron_count, high_spin_multiplicity, minimal_multiplicity,
+    ML_BACKENDS, MACEBackend, MACEOmolBackend, NullBackend, XTBBackend, available_backends,
+    backend_for, check_spin, d_electrons, electron_count, high_spin_multiplicity,
+    minimal_multiplicity, ml_backend_key,
 )
-from mofsbu.energy.relax import MODE_FIDELITY, available_modes, mode_status, relax_geometry
+from mofsbu.energy.relax import (
+    MODE_FIDELITY, available_modes, ml_model_status, mode_status, relax_geometry,
+)
 
 WATER = (["O", "H", "H"], [[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]])
 
@@ -85,14 +88,104 @@ def test_every_backend_reports_a_method_spec_with_charge_and_spin():
 
 
 def test_charge_blind_backends_say_so_in_the_stored_method():
-    """MACE cannot see formal charge; the method row carries that, not a docstring."""
+    """MACE-MP-0 cannot see formal charge; the method row carries that, not a docstring."""
     assert MACEBackend().method_spec(charge=-3, multiplicity=1).extras["charge_blind"] is True
+    assert MACEBackend().method_spec(charge=-3, multiplicity=1).extras["spin_blind"] is True
     assert "charge_blind" not in XTBBackend().method_spec(charge=-3, multiplicity=1).extras
 
 
 def test_mace_refuses_a_solvent_rather_than_ignoring_it():
     with pytest.raises(ValueError, match="no solvation model"):
         MACEBackend().method_spec(charge=0, multiplicity=1, solvent="water")
+    with pytest.raises(ValueError, match="no solvation model"):
+        MACEOmolBackend().method_spec(charge=0, multiplicity=1, solvent="water")
+
+
+# ── two MACE models on one rung ──────────────────────────────────────────────
+# MACE-OMOL-0 is not "a newer MACE".  It is trained on OMol25 and takes total charge and
+# spin multiplicity as inputs, which moves it across the line the reference scheme draws.
+# These tests exist because the thing that would hurt is not the model failing to load —
+# it is the two models being treated as one theory by anything downstream.
+
+def test_omol_is_not_charge_blind_and_mp_is():
+    """The flag is the whole point: same package, same rung, different theory."""
+    assert MACEBackend().charge_aware is False
+    assert MACEOmolBackend().charge_aware is True
+    assert MACEOmolBackend().spin_aware is True
+    omol = MACEOmolBackend().method_spec(charge=-3, multiplicity=6)
+    assert "charge_blind" not in omol.extras
+    assert "spin_blind" not in omol.extras
+
+
+def test_the_two_mace_models_are_never_the_same_theory():
+    """`same_theory` gates every subtraction; it must separate these two."""
+    mp = MACEBackend().method_spec(charge=0, multiplicity=1)
+    omol = MACEOmolBackend().method_spec(charge=0, multiplicity=1)
+    assert mp.code == omol.code == "mace"          # same package ...
+    assert mp.method != omol.method                # ... different theory
+    assert not mp.same_theory(omol)
+
+
+def test_a_stored_method_names_the_training_set():
+    """`code='mace'` alone cannot say which reference the number is against."""
+    assert "Materials Project" in MACEBackend().method_spec(
+        charge=0, multiplicity=1).extras["training_set"]
+    assert "OMol25" in MACEOmolBackend().method_spec(
+        charge=0, multiplicity=1).extras["training_set"]
+
+
+def test_omol_checks_the_multiplicity_it_is_handed():
+    """A model that is GIVEN a spin state must be given a reachable one."""
+    with pytest.raises(ValueError, match="cannot give multiplicity"):
+        MACEOmolBackend().single_point(*WATER, charge=0, multiplicity=2)
+
+
+def test_the_ml_rung_is_a_declared_choice_not_a_lookup(monkeypatch):
+    monkeypatch.delenv("MOFSBU_ML_MODEL", raising=False)
+    assert backend_for(Fidelity.ML).method == "MACE-MP-0"
+    assert backend_for(Fidelity.ML, ml_model="mace-omol-0").method == "MACE-OMOL-0"
+    monkeypatch.setenv("MOFSBU_ML_MODEL", "mace-omol-0")
+    assert backend_for(Fidelity.ML).method == "MACE-OMOL-0"
+    # the spec still wins over the machine
+    assert backend_for(Fidelity.ML, ml_model="mace-mp-0").method == "MACE-MP-0"
+
+
+def test_an_unknown_ml_model_refuses_rather_than_defaulting():
+    """A typo that silently selected the charge-blind model would be invisible."""
+    with pytest.raises(ValueError, match="unknown ML model"):
+        ml_backend_key("mace-omol-1")        # close, and not a model that exists
+    with pytest.raises(ValueError, match="unknown ML model"):
+        backend_for(Fidelity.ML, ml_model="omol25")
+
+
+def test_omol_reports_an_old_mace_as_not_installed_not_as_a_crash(monkeypatch):
+    """mace-torch 0.3.6 imports fine and has no `mace_omol`; that is a missing INSTALL.
+
+    Guarded on `mace.calculators`, NOT on `mace`.  The top-level package imports without
+    torch and the calculators subpackage does not, so a machine with a half-installed ML
+    stack (mace present, torch absent) passed `importorskip("mace")` and then died on the
+    next line — a collection error where a skip was meant.  Which is the same mistake the
+    code under test exists to prevent, made in the test that tests it: "importable" and
+    "usable" are different claims.
+    """
+    pytest.importorskip("torch", reason="the ML stack is not installed on this machine")
+    calculators = pytest.importorskip(
+        "mace.calculators", reason="mace-torch not installed on this machine")
+
+    monkeypatch.delattr(calculators, "mace_omol", raising=False)
+    assert MACEOmolBackend().available() is False
+    assert "0.3.14" in MACEOmolBackend().install_hint()
+
+
+def test_ml_model_status_names_both_models(monkeypatch):
+    monkeypatch.delenv("MOFSBU_ML_MODEL", raising=False)
+    status = ml_model_status()
+    assert set(status) == set(ML_BACKENDS)
+    assert status["mace"]["declared"] is True and status["mace_omol"]["declared"] is False
+    assert status["mace_omol"]["charge_aware"] is True
+    for entry in status.values():
+        if not entry["available"]:
+            assert entry["note"], "an unavailable model must say what would fix it"
 
 
 def test_xtb_refuses_an_unknown_solvent():
@@ -144,9 +237,9 @@ def test_relax_refuses_an_unavailable_backend_with_an_install_hint():
         relax_geometry(WATER[1], WATER[0], charge=0, multiplicity=1, target=Fidelity.XTB)
 
 
-def test_available_backends_answers_for_all_three():
+def test_available_backends_answers_for_all_four():
     got = available_backends()
-    assert set(got) == {"xtb", "mace", "null"}
+    assert set(got) == {"xtb", "mace", "mace_omol", "null"}
     assert got["null"] is True
 
 

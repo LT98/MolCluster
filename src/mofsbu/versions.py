@@ -14,7 +14,12 @@ ALGO_VERSIONS: dict[str, str] = {
     "canonical_order": "ir1",     # individualisation-refinement canonical labelling
     "l2_isomer_tag":   "0-stub",  # M5
     "l3_conformer_id": "0-stub",  # M5
-    "energy_backends":  "1",      # backend protocol + how a MethodSpec is filled in
+    # 2: the MACE backends became a family (MP-0 / OMOL-0).  A method row now records
+    #    `training_set`, and `spin_blind` alongside `charge_blind`, so a stored ML number
+    #    says which foundation model made it instead of only "mace".  Old rows keep
+    #    algo=1 and are never re-labelled (ground rule 6); they are simply not the same
+    #    method as anything computed from here on, which is correct — they are not.
+    "energy_backends":  "2",      # backend protocol + how a MethodSpec is filled in
     "reference_scheme": "balanced1",   # reaction-balanced energies (M7)
     "spin_convention":  "hs1",    # high_spin_multiplicity: d-count table + charge
     "descriptor_tables": "1",     # curated donor table + generated metal table (M1, C8)

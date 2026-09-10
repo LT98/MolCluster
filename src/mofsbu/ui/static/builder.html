@@ -140,6 +140,10 @@
     <label>what to do with each structure</label>
     <div id="modes"></div>
 
+    <label for="mlModel">ML potential (used by ML geometry optimisation)</label>
+    <select id="mlModel"></select>
+    <div class="notice" id="mlNote"></div>
+
     <label for="note">note</label>
     <input id="note" placeholder="what this run is for">
 
@@ -179,7 +183,32 @@ async function loadCaps() {
       <span>${m.label}${m.available ? '' :
         ` <span class="chip" style="border-color:var(--warn);color:var(--warn)">${m.note}</span>`}</span>
     </label>`).join('');
+  // Two MACE foundation models serve the ML rung and they are NOT the same theory, so
+  // the page names them instead of saying "MACE".  The blank option means "whatever the
+  // machine declares in MOFSBU_ML_MODEL" — the spec stays silent rather than recording
+  // a choice nobody made.
+  $('#mlModel').innerHTML = ['<option value="">machine default</option>'].concat(
+    state.caps.ml_models.map(m => `
+      <option value="${m.id}" ${m.available ? '' : 'disabled'}>${m.method}${
+        m.charge_aware ? ' — charge/spin aware' : ' — charge/spin blind'}${
+        m.available ? (m.declared ? ' (default here)' : '') : ' — not installed'}</option>`)
+  ).join('');
+  $('#mlModel').onchange = showMlNote;
+  showMlNote();
   $('#metalList').title = state.caps.metals_note;
+}
+
+function showMlNote() {
+  const chosen = state.caps.ml_models.find(m => m.id === $('#mlModel').value);
+  const declared = state.caps.ml_models.find(m => m.declared) || {};
+  const m = chosen || declared;
+  $('#mlNote').textContent = m.method
+    ? `${m.method} — trained on ${m.training_set}. ` + (m.charge_aware
+        ? 'Takes total charge and spin multiplicity as inputs, so the reference scheme '
+          + 'will accept its energies for charged species.'
+        : 'Blind to formal charge and spin: useful for ranking neutral isomers, refused '
+          + 'by the reference scheme on any charged equation.')
+    : '';
 }
 
 // ── molecule preview
@@ -332,6 +361,8 @@ function applySpec(spec) {
   $('#note').value = spec.note || '';
   const mode = document.querySelector(`input[name=mode][value="${spec.run_mode || 'construct'}"]`);
   if (mode && !mode.disabled) mode.checked = true;
+  $('#mlModel').value = spec.ml_model || '';
+  showMlNote();
 }
 
 function buildSpec() {
@@ -352,6 +383,7 @@ function buildSpec() {
     binding, pocket, seed: 0,
     allow_unsaturated: $('#unsat').checked,
     run_mode: document.querySelector('input[name=mode]:checked').value,
+    ml_model: $('#mlModel').value || null,
     note: $('#note').value,
   };
 }

@@ -215,6 +215,34 @@ def test_a_version_1_spec_still_loads(tmp_path):
     path.write_text(json.dumps(v1))
     spec = BuildSpec.load(path)
     assert spec.run_mode == "construct" and spec.allow_unsaturated is False
+    # v4 added `ml_model`.  A v1 spec never expressed a choice of ML potential, so it
+    # comes forward as None ("use what this machine declares") rather than being
+    # back-filled with "mace-mp-0", which would invent a decision nobody made.
+    assert spec.ml_model is None
+
+
+def test_a_version_3_spec_comes_forward_without_inventing_a_model(tmp_path):
+    spec = BuildSpec.from_dict({
+        "spec_version": 3, "run_mode": "ml_go",
+        "molecules": [{"name": "x", "smiles": "O", "multiplicity": 1,
+                       "max_deprotonations": None}]})
+    assert spec.ml_model is None
+    assert spec.to_dict()["spec_version"] == 4
+
+
+def test_a_spec_may_name_the_ml_potential_and_a_typo_is_refused():
+    """`ml_go` is a rung, not a theory; the spec is where the theory is recorded."""
+    mol = [{"name": "x", "smiles": "O", "multiplicity": 1, "max_deprotonations": None}]
+    spec = BuildSpec.from_dict({"spec_version": 4, "molecules": mol,
+                                "run_mode": "ml_go", "ml_model": "MACE-OMOL-0"})
+    assert spec.ml_model == "MACE-OMOL-0"
+    # Two specs differing only in the model are two different runs, not one.
+    other = BuildSpec.from_dict({"spec_version": 4, "molecules": mol,
+                                 "run_mode": "ml_go", "ml_model": "mace-mp-0"})
+    assert spec.digest != other.digest
+    with pytest.raises(ValueError, match="unknown ML model"):
+        BuildSpec.from_dict({"spec_version": 4, "molecules": mol,
+                             "run_mode": "ml_go", "ml_model": "mace-omol-1"})
 
 
 def test_a_future_spec_version_is_refused_not_guessed():

@@ -397,11 +397,16 @@ class XTBBackend(_Base):
 class MACEBackend(_Base):
     """MACE-MP-0, a universal MLIP — fast, and blind to charge and spin.
 
-    `charge_aware = False` is the whole point of the flag.  MACE sees elements and
+    `charge_aware = False` is the whole point of the flag.  MACE-MP-0 sees elements and
     positions; the formal charges this project tracks are invisible to it.  That makes
     it useful for polishing a construct and for ranking species of the SAME charge, and
     unusable for the reference scheme, which is exactly what `energy.reference` enforces
     rather than leaving to a docstring nobody reads at 2 a.m.
+
+    `MACEOmolBackend` below is the same code path with a different foundation model and
+    the flags flipped.  Everything the two share lives here; everything that differs is
+    a class attribute, so "does this model see charge?" is answered in one place and
+    travels into the `methods` row with every number.
     """
 
     name = "mace"
@@ -411,7 +416,16 @@ class MACEBackend(_Base):
     code = "mace"
     method = "MACE-MP-0"
 
-    def __init__(self, *, model: str = "medium", device: str | None = None,
+    #: the factory in `mace.calculators` that loads this foundation model
+    loader = "mace_mp"
+    #: default checkpoint size for that factory
+    default_model = "medium"
+    #: what the model was trained on — recorded in the method row, because two MLIPs on
+    #: the same rung of the ladder are still two different theories
+    training_set = "Materials Project (MPtrj)"
+    min_mace_version = "0.3.6"
+
+    def __init__(self, *, model: str | None = None, device: str | None = None,
                  default_dtype: str = "float64") -> None:
         from mofsbu.config import compute_device
 
@@ -420,54 +434,104 @@ class MACEBackend(_Base):
         # device is DECLARED (`MOFSBU_DEVICE`), never detected, for the same reason
         # parallelism is opt-in.
         device = compute_device() if device is None else device
-        self.model = model
+        self.model = self.default_model if model is None else model
         self.device = device
         self.default_dtype = default_dtype
         self._calc_cache: Any = None
 
+    # -- availability ---------------------------------------------------
+
     def available(self) -> bool:
         try:
             import ase  # noqa: F401
-            import mace  # noqa: F401
             import torch  # noqa: F401
+            from mace import calculators
         except Exception:
             return False
-        return True
+        # An installed mace-torch that predates this foundation model is NOT the same
+        # failure as no mace-torch at all, and collapsing the two is how "MACE is
+        # installed" becomes "MACE-OMOL-0 will run".  The loader either exists or it
+        # does not, and `install_hint` says which upgrade fixes it.
+        return hasattr(calculators, self.loader)
 
     def install_hint(self) -> str:
         return ("pip install torch --index-url https://download.pytorch.org/whl/cpu "
-                "&& pip install mace-torch ase")
+                f"&& pip install 'mace-torch>={self.min_mace_version}' ase")
 
     def code_version(self) -> str:
         return f"{_installed_version('mace-torch', 'mace')}/{self.model}"
 
+    # -- the method row -------------------------------------------------
+
     def method_spec(self, *, charge, multiplicity, solvent=None) -> MethodSpec:
         if solvent is not None:
-            raise ValueError("MACE-MP-0 has no solvation model; use xtb for a continuum")
+            raise ValueError(
+                f"{self.method} has no solvation model; use xtb for a continuum")
         spec = super().method_spec(charge=charge, multiplicity=multiplicity, solvent=None)
-        return replace(spec, extras={**spec.extras, "model": self.model,
-                                     "device": self.device})
+        extras = {**spec.extras, "model": self.model, "device": self.device,
+                  "training_set": self.training_set}
+        if not self.spin_aware:
+            # Same reasoning as `charge_blind`: the caveat is stored WITH the number.
+            # Without it, an MP-0 energy for a sextet and one for a singlet are the same
+            # float and nothing in the database says why.
+            extras["spin_blind"] = True
+        return replace(spec, extras=extras)
+
+    # -- running it -----------------------------------------------------
 
     def _calculator(self):
         if self._calc_cache is None:
-            from mace.calculators import mace_mp
+            from mace import calculators
 
-            self._calc_cache = mace_mp(model=self.model, device=self.device,
+            factory = getattr(calculators, self.loader, None)
+            if factory is None:                     # pragma: no cover - guarded by available()
+                raise EnergyBackendUnavailable(
+                    f"{self.name} backend: {self.install_hint()}")
+            self._calc_cache = factory(model=self.model, device=self.device,
                                        default_dtype=self.default_dtype)
         return self._calc_cache
 
-    def _atoms(self, symbols, positions):
+    def _atoms(self, symbols, positions, *, charge: int, multiplicity: int):
+        """Build the ASE object, handing the model the electronic state IF it takes one.
+
+        This is the one place the two MACE backends genuinely differ at run time.  A
+        charge-aware model reads `atoms.info["total_charge"]` and
+        `atoms.info["total_spin"]` (MACE maps those onto its internal `charge`/`spin`
+        config keys; OMol25's `spin` is the MULTIPLICITY, 2S+1, not the unpaired count).
+        Setting them on a charge-blind model would be worse than useless: the keys are
+        ignored, and the run would look configured.
+        """
         from ase import Atoms
 
         atoms = Atoms(symbols=list(symbols), positions=positions)
         atoms.pbc = False
+        if self.charge_aware:
+            atoms.info["total_charge"] = int(charge)
+        if self.spin_aware:
+            atoms.info["total_spin"] = int(multiplicity)
+        return atoms
+
+    def _prepare(self, symbols, positions, charge: int, multiplicity: int, solvent):
+        # The REQUEST is validated before the machine is: "you asked for a multiplicity
+        # this electron count cannot reach" is true on the laptop and on the workstation,
+        # and hiding it behind "mace-torch is not installed here" turns a permanent bug
+        # into an environment problem.
+        if solvent is not None:
+            raise ValueError(
+                f"{self.method} has no solvation model; use xtb for a continuum")
+        if self.spin_aware:
+            # A model that is GIVEN the multiplicity has to be given a reachable one.
+            # MP-0 is not asked, so there is nothing to check and pretending otherwise
+            # would reject perfectly good MP-0 work on a number the model never sees.
+            check_spin(list(symbols), charge, multiplicity)
+        self._require()
+        atoms = self._atoms(symbols, positions, charge=charge, multiplicity=multiplicity)
+        atoms.calc = self._calculator()
         return atoms
 
     def single_point(self, symbols, positions, *, charge, multiplicity,
                      solvent=None) -> EnergyResult:
-        self._require()
-        atoms = self._atoms(symbols, positions)
-        atoms.calc = self._calculator()
+        atoms = self._prepare(symbols, positions, charge, multiplicity, solvent)
         return EnergyResult(
             energy=float(atoms.get_potential_energy()),
             method=self.method_spec(charge=charge, multiplicity=multiplicity, solvent=solvent),
@@ -475,11 +539,9 @@ class MACEBackend(_Base):
 
     def relax(self, symbols, positions, *, charge, multiplicity, solvent=None,
               fmax=0.05, steps=250) -> RelaxResult:
-        self._require()
         from ase.optimize import LBFGS
 
-        atoms = self._atoms(symbols, positions)
-        atoms.calc = self._calculator()
+        atoms = self._prepare(symbols, positions, charge, multiplicity, solvent)
         e0 = float(atoms.get_potential_energy())
         opt = LBFGS(atoms, logfile=None)
         converged = bool(opt.run(fmax=fmax, steps=steps))
@@ -493,15 +555,71 @@ class MACEBackend(_Base):
             n_steps=int(opt.get_number_of_steps()), fmax=reached, initial_energy=e0)
 
 
+class MACEOmolBackend(MACEBackend):
+    """MACE-OMOL-0 — the same architecture, trained on OMol25, and NOT charge-blind.
+
+    Why this class exists at all, given `MACEBackend` already runs MACE: OMol25 labels
+    carry total charge and spin multiplicity, and the model takes both as inputs.  That
+    single difference moves the model across the line `energy.reference` draws.  MP-0
+    cannot be used on the charged species this project is made of — a bare Ni(2+), a
+    carboxylate anion — and OMOL-0 can, at ML cost instead of xTB cost.
+
+    Three things it is NOT:
+
+    * **not a drop-in replacement for MP-0 in stored data.**  Different training set,
+      different reference (wB97M-V/def2-TZVPD total energies, eV), different absolute
+      scale.  An MP-0 energy and an OMOL-0 energy share a rung on the fidelity ladder
+      and nothing else; `MethodSpec.same_theory` already refuses to mix them, and the
+      registry's best-geometry rule no longer compares them by magnitude.
+    * **not solvated.**  Gas phase, like MP-0.  A solvent request still raises.
+    * **not exempt from the spin convention.**  It is handed a multiplicity, so it is
+      handed a REACHABLE one: `check_spin` runs here and does not for MP-0.
+    """
+
+    name = "mace_omol"
+    charge_aware = True
+    spin_aware = True
+    method = "MACE-OMOL-0"
+
+    loader = "mace_omol"
+    default_model = "extra_large"
+    training_set = "OMol25 (wB97M-V/def2-TZVPD)"
+    #: `mace_omol` landed in mace-torch 0.3.14; an older install imports fine and has no
+    #: OMOL loader, which `available()` reports as "not installed" rather than crashing
+    #: halfway through a 500-structure run.
+    min_mace_version = "0.3.14"
+
+
 # ── selection ────────────────────────────────────────────────────────────────
 
-_BACKENDS: dict[str, Any] = {"xtb": XTBBackend, "mace": MACEBackend, "null": NullBackend}
+_BACKENDS: dict[str, Any] = {"xtb": XTBBackend, "mace": MACEBackend,
+                             "mace_omol": MACEOmolBackend, "null": NullBackend}
+
+#: Backend keys that serve the ML rung.  More than one, which is the whole point: the
+#: ladder says how good a number is, not which theory produced it.
+ML_BACKENDS = ("mace", "mace_omol")
 
 # Which backend serves each rung of the ladder.  FF is RDKit's MMFF, which lives in
 # `geometry.embed` and is not an EnergyBackend — it produces geometries, not comparable
 # energies.  DFT has no backend: there is no external code wired up, and inventing one
 # that silently ran xTB instead would be the exact failure ground rule 8 exists for.
-_BY_FIDELITY = {Fidelity.ML: "mace", Fidelity.XTB: "xtb"}
+#
+# ML is deliberately absent from this table.  It has two backends and picking between
+# them is a DECLARED choice (`MOFSBU_ML_MODEL`, or `BuildSpec.ml_model`), not a lookup —
+# see `ml_backend_key` below.
+_BY_FIDELITY = {Fidelity.XTB: "xtb"}
+
+
+def ml_backend_key(ml_model: str | None = None) -> str:
+    """Which ML backend a request means: the one named, else the one declared.
+
+    `None` is not "whichever" — it is "whatever this machine declares", which
+    `config.ml_backend()` answers and which lands in the `methods` row either way, so a
+    number never loses the name of the model that made it.
+    """
+    from mofsbu.config import resolve_ml_backend
+
+    return resolve_ml_backend(ml_model)
 
 
 def get_backend(name: str, **kwargs: Any) -> EnergyBackend:
@@ -512,8 +630,11 @@ def get_backend(name: str, **kwargs: Any) -> EnergyBackend:
     return cls(**kwargs)
 
 
-def backend_for(fidelity: Fidelity, **kwargs: Any) -> EnergyBackend:
+def backend_for(fidelity: Fidelity, *, ml_model: str | None = None,
+                **kwargs: Any) -> EnergyBackend:
     """The backend that produces geometries at this rung, or a reason why not."""
+    if fidelity is Fidelity.ML:
+        return get_backend(ml_backend_key(ml_model), **kwargs)
     if fidelity not in _BY_FIDELITY:
         from mofsbu.assembly.join import NotBuiltYet
 

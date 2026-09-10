@@ -30,8 +30,11 @@ are not comparable, and make the comparison the caller is actually entitled to:
 * every species must come from the **same level of theory** — same code, version, method
   and medium — since the difference of two energies from two theories is a difference of
   theories;
-* a **charge-blind backend** (MACE sees elements and positions, not formal charge) is
-  refused on any equation that involves charge at all;
+* a **charge-blind backend** is refused on any equation that involves charge at all.
+  "MACE" is not the test — MACE-MP-0 sees only elements and positions and is refused,
+  while MACE-OMOL-0 is given total charge and spin multiplicity and is not.  The flag
+  lives on the backend and is written into the `methods` row (`charge_blind`), so the
+  refusal reads the stored number's own provenance rather than its code name;
 * the non-physical test backend is refused unless the caller opts in by name.
 
 Each refusal raises with the specific imbalance named.  None of them returns the number
@@ -288,12 +291,21 @@ def _method_of(reg: Registry, method_id: int | None) -> MethodSpec:
 
 
 def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
-                solvent: str | None) -> Any:
+                solvent: str | None, method: str | None = None) -> Any:
     """The energy this species brings to the equation.
 
     Highest fidelity with an energy, or exactly the requested rung.  A species with no
     energy at all is named rather than skipped: dropping a term from a balanced equation
     is how you get a number that is confidently wrong.
+
+    `method` pins the THEORY, and exists because a rung is not one.  Since MACE-OMOL-0
+    joined MACE-MP-0 on the ML rung, "the best ML energy for this species" can mean two
+    numbers on two scales, and the old ordering picked whichever was numerically lower —
+    i.e. whichever model had the deeper reference, for every species, consistently
+    wrong.  `reaction_balanced_energy` pins it from the first term it resolves, so the
+    whole equation is answered in one theory or refuses; the tie-break below only
+    decides which theory that first term offers, and it prefers a charge-aware method,
+    never a smaller float.
     """
     sql = ("SELECT g.id, g.energy, g.converged, g.fidelity, g.method_id "
            "FROM geometries g JOIN methods m ON m.id = g.method_id "
@@ -302,7 +314,12 @@ def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
     if fidelity is not None:
         sql += " AND g.fidelity=?"
         args.append(int(fidelity))
-    sql += " ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, g.energy ASC LIMIT 1"
+    if method is not None:
+        sql += " AND m.method=?"
+        args.append(method)
+    sql += (" ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
+            "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
+            "         m.id ASC, g.energy ASC LIMIT 1")
     return reg.conn.execute(sql, args).fetchone()
 
 
@@ -355,14 +372,23 @@ def reaction_balanced_energy(
     contributions: list[tuple[int, int, float]] = []
 
     for term in balance.terms:
-        row = _energy_row(reg, term.structure_id, fidelity=fidelity, solvent=solvent)
+        # `method` is None for the first term and pinned for every one after it, so the
+        # equation cannot be assembled out of two theories that happen to share a rung.
+        # The `same_theory` check below still stands: it catches a mismatch in code
+        # version or medium that the method NAME alone would let through.
+        row = _energy_row(reg, term.structure_id, fidelity=fidelity, solvent=solvent,
+                          method=None if method is None else method.method)
         if row is None:
             medium = solvent or "gas phase"
             rung = f" at {fidelity.name}" if fidelity is not None else ""
+            theory = f" from {method.method}" if method is not None else ""
             raise ReferenceSchemeError(
-                f"structure {term.structure_id} ({term.role}) has no energy{rung} in "
-                f"{medium}; every species in the equation needs one, because dropping a "
-                f"term silently changes what the number means")
+                f"structure {term.structure_id} ({term.role}) has no energy{rung}{theory} "
+                f"in {medium}; every species in the equation needs one, because dropping "
+                f"a term silently changes what the number means"
+                + (f". It may have one from another method — a rung is not a theory, and "
+                   f"the equation was pinned to {method.method} by its first term"
+                   if method is not None else ""))
         spec = _method_of(reg, row["method_id"])
 
         if spec.code == "null" and not allow_null:
@@ -376,7 +402,9 @@ def reaction_balanced_energy(
                     f"structure {term.structure_id} was scored by a charge-blind backend "
                     f"({spec.method}) but the equation involves charged species "
                     f"({sorted(charges)}). That backend cannot see the difference between "
-                    f"them; use xtb for anything the reference scheme has to weigh.")
+                    f"them; use MACE-OMOL-0 (MOFSBU_ML_MODEL=mace-omol-0, or "
+                    f"ml_model='mace-omol-0' on the spec) at ML cost, or xtb, for "
+                    f"anything the reference scheme has to weigh.")
         if method is None:
             method = spec
         elif not method.same_theory(spec):

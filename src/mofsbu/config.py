@@ -103,3 +103,63 @@ def device_note() -> str:
     if device == CPU:
         return "device=cpu  (set MOFSBU_DEVICE=cuda to use a GPU)"
     return f"device={device}"
+
+# ── which ML potential serves the ML rung: declared, never guessed ───────────
+# There is more than one MACE foundation model and they are NOT interchangeable.
+# MACE-MP-0 is trained on Materials Project relaxations and is blind to formal charge
+# and spin; MACE-OMOL-0 is trained on OMol25 (wB97M-V/def2-TZVPD, eV) and takes total
+# charge and spin multiplicity as INPUTS, which is what makes it usable for the charged
+# species the reference scheme is built out of.  Their energies share a rung on the
+# ladder and nothing else: they are different theories and must never be subtracted from
+# one another.  Which one runs is therefore declared, like the device and the worker
+# count, and the choice is recorded in the `methods` row of every number it produces.
+
+MACE_MP = "mace"
+MACE_OMOL = "mace_omol"
+ML_BACKENDS = (MACE_MP, MACE_OMOL)
+
+_ML_ALIASES = {
+    "mace": MACE_MP, "mp": MACE_MP, "mace-mp": MACE_MP, "mace_mp": MACE_MP,
+    "mace-mp-0": MACE_MP, "mace_mp_0": MACE_MP, "macemp0": MACE_MP,
+    "mace_omol": MACE_OMOL, "omol": MACE_OMOL, "mace-omol": MACE_OMOL,
+    "mace-omol-0": MACE_OMOL, "mace_omol_0": MACE_OMOL, "maceomol0": MACE_OMOL,
+}
+
+
+def resolve_ml_backend(name: str | None) -> str:
+    """Map a user-facing model name onto a backend key, or refuse with the list.
+
+    Accepts the spellings people actually type ("MACE-OMOL-0", "omol", "mace_omol").
+    Refuses anything else rather than falling back to MP-0: a typo that silently
+    selected the charge-blind model would produce numbers that look fine and mean
+    something different.
+    """
+    if name is None:
+        return ml_backend()
+    key = _ML_ALIASES.get(str(name).strip().lower().replace(" ", ""))
+    if key is None:
+        raise ValueError(
+            f"unknown ML model {name!r}; expected one of "
+            f"{sorted({'mace-mp-0', 'mace-omol-0'})} "
+            f"(backend keys {list(ML_BACKENDS)})")
+    return key
+
+
+def ml_backend() -> str:
+    """`MOFSBU_ML_MODEL` = mace-mp-0 | mace-omol-0.  Defaults to MACE-MP-0.
+
+    MP-0 is the default only because it is what every stored ML number in this project
+    was produced with; it is not the better model for charged coordination complexes.
+    """
+    value = os.environ.get("MOFSBU_ML_MODEL")
+    if not value:
+        return MACE_MP
+    return resolve_ml_backend(value)
+
+
+def ml_note() -> str:
+    """One line for a run's header, next to `device_note()`."""
+    key = ml_backend()
+    label = "MACE-MP-0 (charge- and spin-blind)" if key == MACE_MP else \
+            "MACE-OMOL-0 (charge- and spin-aware)"
+    return f"ml_model={label}  (set MOFSBU_ML_MODEL to change)"

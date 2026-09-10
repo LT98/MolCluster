@@ -38,7 +38,8 @@ MODE_FIDELITY: dict[str, Fidelity] = {
 
 def relax_geometry(coords: Any, symbols: Sequence[str], *, charge: int, multiplicity: int,
                    target: Fidelity, solvent: str | None = None,
-                   max_steps: int = 500, fmax: float = 0.20) -> RelaxResult:
+                   max_steps: int = 500, fmax: float = 0.20,
+                   ml_model: str | None = None) -> RelaxResult:
     """Optimise a geometry to the requested fidelity, returning coords + energy.
 
     Raises `NotBuiltYet` if no backend serves that rung (DFT), and
@@ -46,7 +47,7 @@ def relax_geometry(coords: Any, symbols: Sequence[str], *, charge: int, multipli
     the workstation give different answers to the second question and the same answer
     to the first, which is why they are different exceptions.
     """
-    backend = backend_for(target)
+    backend = backend_for(target, ml_model=ml_model)
     if not backend.available():
         raise EnergyBackendUnavailable(
             f"{target.name} relaxation needs the {backend.name} backend: "
@@ -56,9 +57,10 @@ def relax_geometry(coords: Any, symbols: Sequence[str], *, charge: int, multipli
 
 
 def single_point(coords: Any, symbols: Sequence[str], *, charge: int, multiplicity: int,
-                 target: Fidelity, solvent: str | None = None):
+                 target: Fidelity, solvent: str | None = None,
+                 ml_model: str | None = None):
     """One energy, no relaxation.  The other half of what the reference scheme needs."""
-    backend = backend_for(target)
+    backend = backend_for(target, ml_model=ml_model)
     if not backend.available():
         raise EnergyBackendUnavailable(
             f"{target.name} single point needs the {backend.name} backend: "
@@ -67,7 +69,7 @@ def single_point(coords: Any, symbols: Sequence[str], *, charge: int, multiplici
                                 multiplicity=multiplicity, solvent=solvent)
 
 
-def available_modes() -> dict[str, bool]:
+def available_modes(ml_model: str | None = None) -> dict[str, bool]:
     """Which run modes can actually execute, asked of the backends, not asserted.
 
     `construct` is always true — it is the placer, not a backend.  Everything else is
@@ -75,22 +77,30 @@ def available_modes() -> dict[str, bool]:
     `xtb_go` enabled on the workstation and disabled on a laptop without xTB, with no
     code change and no stale string in the markup.
     """
-    return {mode: entry["available"] for mode, entry in mode_status().items()}
+    return {mode: entry["available"] for mode, entry in mode_status(ml_model).items()}
 
 
-def mode_status() -> dict[str, dict[str, Any]]:
-    """`available_modes` plus the reason, for a UI that has to explain a disabled option."""
+def mode_status(ml_model: str | None = None) -> dict[str, dict[str, Any]]:
+    """`available_modes` plus the reason, for a UI that has to explain a disabled option.
+
+    `ml_model` is the model a SPEC asks for.  It matters here and not only at run time:
+    a machine with mace-torch 0.3.6 can run `ml_go` with MACE-MP-0 and cannot run it
+    with MACE-OMOL-0, and a planner that answered "ml_go is available" without being
+    told which model would queue 500 tasks that all fail at the first import.
+    """
     out: dict[str, dict[str, Any]] = {
         "construct": {"available": True, "backend": "placer", "backend_available": True,
-                      "wired": True, "note": ""}}
+                      "wired": True, "note": "", "method": "raw-construct",
+                      "charge_aware": True}}
     for mode, fidelity in MODE_FIDELITY.items():
         if mode == "construct":
             continue
         try:
-            backend = backend_for(fidelity)
+            backend = backend_for(fidelity, ml_model=ml_model)
         except Exception as exc:                                        # noqa: BLE001
             out[mode] = {"available": False, "backend": None, "backend_available": False,
-                         "wired": RELAXATION_IS_EXECUTED, "note": str(exc)}
+                         "wired": RELAXATION_IS_EXECUTED, "note": str(exc),
+                         "method": None, "charge_aware": None}
             continue
         # Two independent questions, kept apart on purpose: is the stack installed on
         # this machine, and does the pipeline call it?  Collapsing them is how "MACE is
@@ -105,5 +115,33 @@ def mode_status() -> dict[str, dict[str, Any]]:
             note = f"not installed here — {backend.install_hint()}"
         out[mode] = {"available": installed and RELAXATION_IS_EXECUTED,
                      "backend": backend.name, "backend_available": installed,
-                     "wired": RELAXATION_IS_EXECUTED, "note": note}
+                     "wired": RELAXATION_IS_EXECUTED, "note": note,
+                     # Which THEORY, not just which rung.  Two ML models sit on the same
+                     # rung and produce numbers that must never be subtracted from one
+                     # another, so the name travels with the capability read-out.
+                     "method": getattr(backend, "method", None),
+                     "charge_aware": bool(getattr(backend, "charge_aware", True))}
+    return out
+
+
+def ml_model_status() -> dict[str, dict[str, Any]]:
+    """Both ML foundation models, side by side, for the UI's model picker.
+
+    Not folded into `mode_status()`: that answers "can this run mode execute", and this
+    answers "which theory would it be", which is the question the archived MP-0 numbers
+    could not answer about themselves.
+    """
+    from mofsbu.config import ml_backend
+    from mofsbu.energy.backends import ML_BACKENDS, get_backend
+
+    declared = ml_backend()
+    out: dict[str, dict[str, Any]] = {}
+    for key in ML_BACKENDS:
+        backend = get_backend(key)
+        out[key] = {"method": backend.method, "available": backend.available(),
+                    "declared": key == declared,
+                    "charge_aware": backend.charge_aware,
+                    "spin_aware": backend.spin_aware,
+                    "training_set": getattr(backend, "training_set", ""),
+                    "note": "" if backend.available() else backend.install_hint()}
     return out

@@ -76,7 +76,7 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
         # the optimisation step, which would leave a half-done run to interpret.  Asking
         # the backend whether it is installed is not the same question as whether the
         # code exists, and the two get different answers on the laptop.
-        status = mode_status().get(spec.run_mode)
+        status = mode_status(spec.ml_model).get(spec.run_mode)
         if status is None or not status["available"]:
             note = (status or {}).get("note") or f"run mode {spec.run_mode!r} cannot execute"
             # An unwired mode is a missing BODY, not a missing install, and the two get
@@ -182,8 +182,21 @@ def _protomer_mol(spec: BuildSpec, payload: dict[str, Any]):
 RELAX_PRIORITY = -10        # constructs drain first; relaxes are the expensive tail
 
 
+def resolve_ml_model(spec: BuildSpec) -> str:
+    """The ML model this run means, as a name, resolved once.
+
+    `BuildSpec.ml_model` may be None ("use what this machine declares").  Resolving it
+    at queue time and storing the ANSWER is the difference between a run that is
+    reproducible and one that depends on an environment variable at the moment a worker
+    happened to claim a task.
+    """
+    from mofsbu.config import resolve_ml_backend
+
+    return resolve_ml_backend(spec.ml_model)
+
+
 def relax_method_spec(reg: Registry, structure_id: int, target: Fidelity,
-                      solvent: str | None = None):
+                      solvent: str | None = None, ml_model: str | None = None):
     """The MethodSpec a relaxation WOULD produce, without running it.
 
     This is what makes "has this already been computed?" answerable before spending the
@@ -198,13 +211,14 @@ def relax_method_spec(reg: Registry, structure_id: int, target: Fidelity,
         (structure_id,)).fetchone()
     if row is None:
         raise MofsbuError(f"no structure {structure_id}")
-    return backend_for(target).method_spec(
+    return backend_for(target, ml_model=ml_model).method_spec(
         charge=int(row["net_charge"]), multiplicity=int(row["multiplicity"]),
         solvent=solvent)
 
 
 def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity,
-                        structure_id: int, solvent: str | None = None) -> int | None:
+                        structure_id: int, solvent: str | None = None,
+                        ml_model: str | None = None) -> int | None:
     """The geometry this exact relaxation already produced, or None.
 
     Keyed on (source geometry, method row).  Deliberately NOT on the structure alone:
@@ -217,7 +231,7 @@ def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity
     from mofsbu.registry import find_method_id
 
     try:
-        spec = relax_method_spec(reg, structure_id, target, solvent)
+        spec = relax_method_spec(reg, structure_id, target, solvent, ml_model)
     except Exception:                                                   # noqa: BLE001
         # Cannot describe the method (backend gone?).  Say "unknown", not "no": the
         # executor re-checks, and queueing a task that turns out redundant is cheap
@@ -230,6 +244,11 @@ def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity
     # two rungs served by backends that describe themselves identically would otherwise
     # collide, and a request for an xTB relaxation would be answered with an ML one that
     # happened to share a method row.  A test asserts exactly this.
+    #
+    # The converse now also matters: ONE rung served by two backends.  An MP-0 and an
+    # OMOL-0 relaxation of the same construct are both fidelity=ML and are different
+    # method rows, so this correctly reports "not done yet" for the second — a re-run
+    # that switches model recomputes instead of handing back the other model's answer.
     row = reg.conn.execute(
         "SELECT id FROM geometries WHERE relaxed_from=? AND method_id=? AND "
         "structure_id=? AND fidelity=? AND energy IS NOT NULL LIMIT 1",
@@ -286,8 +305,14 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     # Checked again here, not only at queue time: between queueing and claiming, another
     # worker may have done this exact relaxation.  The check is one indexed SELECT and
     # the thing it guards is an hour of xTB, so it is worth doing twice.
+    # The MODEL comes from the task payload, not from the environment, and not from the
+    # spec re-read at execution time.  A queue filled on the workstation and drained on
+    # the laptop must produce the same theory on both, and `MOFSBU_ML_MODEL` is per
+    # machine.  `spec.ml_model` is the fallback for tasks queued before this field
+    # existed; None then resolves to the declared default, as it always did.
+    ml_model = payload.get("ml_model", spec.ml_model)
     already = existing_relaxation(reg, source_gid, target, structure_id,
-                                  payload.get("solvent"))
+                                  payload.get("solvent"), ml_model)
     if already is not None:
         return Outcome(structure_id, already, None, False,
                        {"relax": {"skipped": "already relaxed at this level of theory",
@@ -297,7 +322,7 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     symbols, coords = read_xyz(geometry_xyz(reg, source_gid))
     result = relax_geometry(coords, symbols, charge=int(graph.charge),
                             multiplicity=int(graph.multiplicity), target=target,
-                            solvent=payload.get("solvent"))
+                            solvent=payload.get("solvent"), ml_model=ml_model)
 
     geom = put_geometry(
         reg, structure_id, result.to_xyz(graph.name or ""), fidelity=result.fidelity,
@@ -449,7 +474,8 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     target = MODE_FIDELITY.get(spec.run_mode)
     if target is None:
         return None
-    if existing_relaxation(reg, out.geometry_id, target, out.structure_id) is not None:
+    if existing_relaxation(reg, out.geometry_id, target, out.structure_id,
+                           None, spec.ml_model) is not None:
         # Re-running an unchanged spec rebuilds the same constructs, recognises them by
         # identity (D2), and hands back the geometry ids it already had.  Without this,
         # every one of them was queued for relaxation again -- the same starting
@@ -458,6 +484,9 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     return add_task(reg, task.run_id, "relax", {
         "structure_id": out.structure_id, "geometry_id": out.geometry_id,
         "target": int(target), "solvent": None,
+        # Resolved at QUEUE time and carried in the payload, so the theory is fixed by
+        # the run rather than by whichever machine happens to claim the task.
+        "ml_model": resolve_ml_model(spec) if target is Fidelity.ML else None,
     }, priority=RELAX_PRIORITY)
 
 

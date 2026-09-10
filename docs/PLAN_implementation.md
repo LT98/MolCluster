@@ -716,6 +716,54 @@ your head is how the two documents drift apart.
 
 ## 9. Changelog
 
+- *(rev 22)* **`ml_go` named a rung and was quietly one theory: MACE-OMOL-0 alongside
+  MACE-MP-0.**
+
+  MACE-MP-0 is trained on Materials Project relaxations and is **blind to formal charge
+  and spin**, which is why `energy.reference` refuses it on every charged equation — that
+  is, on nearly everything this project computes.  MACE-OMOL-0 is trained on OMol25
+  (wB97M-V/def2-TZVPD, eV) and takes **total charge and spin multiplicity as inputs**, so
+  the ML rung can now serve the reference scheme instead of only ranking neutral isomers.
+  * `MACEBackend` (MP-0) and `MACEOmolBackend` (OMOL-0) share one code path.  What differs
+    is declared as class attributes — `charge_aware`, `spin_aware`, the `mace.calculators`
+    loader, the checkpoint, the training set — so "does this model see charge?" is
+    answered in one place and travels into the `methods` row with every number.  OMOL-0
+    sets `atoms.info["total_charge"]` and `atoms.info["total_spin"]` (OMol25's spin is the
+    **multiplicity**, 2S+1, not the unpaired count) and runs `check_spin` on what it is
+    handed; MP-0 is never asked and so is never checked.
+  * **Which model runs is declared, never guessed** — `MOFSBU_ML_MODEL`, or `ml_model` on
+    the spec, which wins.  The default stays MP-0 only because that is what every stored
+    ML number was produced with.  A typo raises rather than falling back: a misspelling
+    that silently selected the charge-blind model would produce numbers that look fine.
+    `queue_relax` resolves the choice **at queue time** and stores the answer in the task
+    payload, so a queue filled on the workstation and drained on the laptop is one theory.
+  * **Two backends, one rung — the storage question.**  Nothing needed migrating: `method`,
+    `code_version` (which pins the checkpoint) and `extras_json` are already in the
+    `methods` UNIQUE key, and `method_id` is in the `geometries` one, so the same construct
+    relaxed by both models is two rows.  What DID need fixing is every query that ordered
+    by energy across method rows.  `_refresh_best_geometry` and
+    `energy.reference._energy_row` said "highest rung, then lowest energy" — and MP-0 and
+    OMOL-0 total energies are different quantities on different scales, so between them
+    that rule picks a *model*, not a geometry, for every species, consistently, with
+    nothing in the database saying so.  Energies are now compared only within a method
+    row; between methods the rule is **stated**: charge-aware outranks charge-blind, then
+    the older method row wins, so the pointer is deterministic and does not move when an
+    unrelated model is installed.  `reaction_balanced_energy` additionally **pins the
+    equation to the theory of its first term**, so a species that has an energy from the
+    other model is named as missing rather than substituted.
+  * An installed `mace-torch` that predates the `mace_omol` loader (< 0.3.14) reports as
+    **not installed** for OMOL-0 and available for MP-0, with the upgrade in the hint —
+    the same distinction rev 19 drew between a missing body and a missing install, one
+    level down.  `mode_status()` takes the model, because "ml_go is available" is not a
+    question that can be answered without it.
+  * `SPEC_VERSION` 4 (`ml_model`, defaulting to None = "what this machine declares"; a v3
+    spec is not back-filled, because it never expressed a choice).
+    `ALGO_VERSIONS["energy_backends"]` 1 → 2: a method row now records `training_set`, and
+    `spin_blind` beside `charge_blind`.  Old rows keep `algo=1` and are not re-labelled —
+    they are not the same method as anything computed from here on, which is correct.
+
+  304 passed, 4 skipped.
+
 - *(rev 21)* **A re-run recomputed everything, and a run could not be stopped.**
 
   **The duplicate.**  Re-running an unchanged spec rebuilds the same constructs,

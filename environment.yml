@@ -20,4 +20,6 @@ dependencies:
   # - pip:
   #   - pynauty       # true canonical labeling (nauty) — Linux-side verifier; hard to build on Windows
   #   - torch
-  #   - mace-torch    # MACE-MP-0 ML energies
+  #   - mace-torch>=0.3.14   # MACE-MP-0 and MACE-OMOL-0 ML energies
+  #                          # (>=0.3.14 is what carries the mace_omol loader;
+  #                           MOFSBU_ML_MODEL picks between the two)

@@ -30,11 +30,23 @@ CREATE TABLE IF NOT EXISTS algo_versions (
 );
 
 -- Every energy, ease value and barrier points at one of these.  No bare floats.
+--
+-- `code` is the PACKAGE and `method` is the THEORY, and the difference carries weight:
+-- MACE-MP-0 and MACE-OMOL-0 are both code='mace' and are not the same theory.  MP-0 is
+-- trained on Materials Project relaxations and is blind to charge and spin; OMOL-0 is
+-- trained on OMol25 (wB97M-V/def2-TZVPD) and takes total charge and spin multiplicity
+-- as inputs.  Their absolute energies are on different scales and must never be
+-- subtracted from one another.  Nothing here needed migrating for the second model to
+-- arrive: `method`, `code_version` (which pins the checkpoint) and `extras_json` (which
+-- carries `training_set`, and `charge_blind`/`spin_blind` when they apply) are all in
+-- the UNIQUE key already, so the two models land in two rows on their own.  What DID
+-- need changing is every query that ordered geometries by energy across method rows —
+-- see `_refresh_best_geometry` and `energy.reference._energy_row`.
 CREATE TABLE IF NOT EXISTS methods (
     id           INTEGER PRIMARY KEY,
     code         TEXT NOT NULL,                 -- 'tblite' | 'mace' | 'heuristic' | 'legacy'
-    code_version TEXT NOT NULL,
-    method       TEXT NOT NULL,                 -- 'GFN2-xTB' | 'MACE-MP-0' | 'pka-table'
+    code_version TEXT NOT NULL,                 -- pins the checkpoint too: '0.3.14/extra_large'
+    method       TEXT NOT NULL,                 -- 'GFN2-xTB' | 'MACE-MP-0' | 'MACE-OMOL-0'
     solvent      TEXT,
     charge       INTEGER,
     multiplicity INTEGER,
@@ -122,6 +134,9 @@ CREATE TABLE IF NOT EXISTS geometries (
     l3_conformer_id      TEXT    NOT NULL DEFAULT '',   -- RESERVED M5
     coords_hash          TEXT    NOT NULL,              -- blob digest of the .xyz
     n_atoms              INTEGER NOT NULL,
+    -- A RUNG, not a theory: one rung can be served by more than one method (ML is
+    -- served by both MACE models).  `method_id` says which, and is part of the UNIQUE
+    -- key below, so the same construct relaxed by both models is two rows, not a clash.
     fidelity             INTEGER NOT NULL,              -- 0 raw 1 FF 2 ML 3 xTB 4 DFT
     method_id            INTEGER REFERENCES methods(id),
     energy               REAL,

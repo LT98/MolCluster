@@ -21,7 +21,7 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from mofsbu import library
-from mofsbu.energy.relax import mode_status
+from mofsbu.energy.relax import ml_model_status, mode_status
 from mofsbu.geometry.placer import GEOMETRIES
 from mofsbu.spec import RUN_MODES, BuildSpec
 from mofsbu._types import MofsbuError
@@ -87,8 +87,9 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
         unimplemented option is labelled by the backend rather than by a hard-coded
         string in the markup that can drift out of date."""
         status = mode_status()
+        models = ml_model_status()
         labels = {"construct": "Construct only",
-                  "ml_go": "ML geometry optimisation (MACE)",
+                  "ml_go": "ML geometry optimisation (MACE-MP-0 / MACE-OMOL-0)",
                   "xtb_go": "GFN2-xTB geometry optimisation",
                   "dft_go": "DFT geometry optimisation"}
         return {
@@ -96,8 +97,14 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
                 {"id": m, "available": status.get(m, {}).get("available", False),
                  "label": labels[m],
                  "backend": status.get(m, {}).get("backend"),
+                 # The THEORY, not just the rung: `ml_go` is served by two models.
+                 "method": status.get(m, {}).get("method"),
                  "note": status.get(m, {}).get("note", "")}
                 for m in RUN_MODES],
+            # Which theory the ML rung would be, not just whether it can run.  The page
+            # renders the picker from this, so a model that is not installed here cannot
+            # be selected and a model that is gets named rather than called "MACE".
+            "ml_models": [{"id": key, **entry} for key, entry in models.items()],
             "max_degree_implemented": 1,
             "degree_note": ("degree 1 = complete one centre's coordination sphere. "
                             "degree 2+ = polynuclear / extended growth — not implemented, "
@@ -206,6 +213,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path) -> APIRouter:
                     "molecules": [m.name for m in spec.molecules],
                     "metals": [m.symbol for m in spec.metals],
                     "degree": spec.degree, "run_mode": spec.run_mode,
+                    "ml_model": spec.ml_model,
                 })
         return {"specs": out}
 

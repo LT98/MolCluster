@@ -17,6 +17,12 @@ from mofsbu._types import Fidelity
 RAW = MethodSpec(code="construct", code_version="0", method="raw-construct")
 XTB = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB", solvent=None)
 DFT = MethodSpec(code="orca", code_version="6.0", method="wB97X-D/def2-TZVP")
+# Two MLIPs on ONE rung of the ladder.  Their absolute energies are on different scales,
+# which is the whole reason the best-geometry rule may not compare them by magnitude.
+MACE_MP = MethodSpec(code="mace", code_version="0.3.6/medium", method="MACE-MP-0",
+                     extras={"charge_blind": True, "spin_blind": True})
+MACE_OMOL = MethodSpec(code="mace", code_version="0.3.14/extra_large",
+                       method="MACE-OMOL-0")
 
 
 @pytest.fixture()
@@ -124,6 +130,42 @@ def test_best_geometry_climbs_the_ladder_and_never_descends(reg):
     assert get_structure(reg, sid)["best_geometry_id"] == dft.id     # does not descend
     assert best_geometry(reg, sid)["id"] == dft.id
     assert best_geometry(reg, sid, Fidelity.XTB)["fidelity"] == Fidelity.DFT
+
+
+def test_best_geometry_never_compares_energies_across_methods(reg):
+    """One rung, two theories: the deeper reference must not win by being deeper.
+
+    MACE-MP-0 total energies and MACE-OMOL-0 total energies are both "eV" and are not
+    the same quantity — different training set, different reference, different scale.
+    The old rule was "highest fidelity, then lowest energy", which on this pair picks a
+    model rather than a geometry, every time, with nothing in the database saying so.
+    The rule between two methods is now stated: charge-aware outranks charge-blind.
+    """
+    g = fx.water()
+    sid = put_structure(reg, g).id
+    mp = put_geometry(reg, sid, xyz_for(g, 0.1), fidelity=Fidelity.ML, method=MACE_MP,
+                      energy=-3000.0, converged=True)
+    omol = put_geometry(reg, sid, xyz_for(g, 0.2), fidelity=Fidelity.ML, method=MACE_OMOL,
+                        energy=-14.0, converged=True)
+    assert mp.id != omol.id, "two methods on one rung must be two rows, not a clash"
+    assert get_structure(reg, sid)["best_geometry_id"] == omol.id
+
+    # ... and the rung still beats everything below it, in either order.
+    assert get_structure(reg, sid)["best_fidelity"] == Fidelity.ML
+
+
+def test_two_mlips_relaxing_one_structure_do_not_collide(reg):
+    """`method_id` is in the geometries UNIQUE key, so this needed no migration."""
+    g = fx.water()
+    sid = put_structure(reg, g).id
+    xyz = xyz_for(g, 0.1)                       # the SAME coordinates from both models
+    a = put_geometry(reg, sid, xyz, fidelity=Fidelity.ML, method=MACE_MP, energy=-3000.0)
+    b = put_geometry(reg, sid, xyz, fidelity=Fidelity.ML, method=MACE_OMOL, energy=-14.0)
+    assert a.created and b.created and a.id != b.id
+    rows = reg.conn.execute(
+        "SELECT COUNT(*) AS n FROM geometries WHERE structure_id=? AND fidelity=?",
+        (sid, int(Fidelity.ML))).fetchone()
+    assert rows["n"] == 2
 
 
 def test_best_fidelity_never_drifts_from_the_geometries_it_caches(reg):

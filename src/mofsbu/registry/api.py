@@ -358,13 +358,27 @@ def put_geometry(
 def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
     """Maintain the best-available pointer.  The ONLY writer of these two columns.
 
-    Highest fidelity wins; among equals, the lowest energy; a converged geometry beats
-    an unconverged one at the same fidelity.
+    Highest fidelity wins; a converged geometry beats an unconverged one at the same
+    fidelity; and only then does energy break the tie.
+
+    ENERGY IS NEVER COMPARED ACROSS METHOD ROWS.  One rung of the ladder can be served
+    by two theories — ML is served by MACE-MP-0 and MACE-OMOL-0, whose absolute energies
+    sit on entirely different scales — and "lowest energy wins" between them is not a
+    choice between two geometries, it is a comparison of two reference energies, which
+    means nothing.  The rule between methods is stated instead of computed: a
+    charge-aware method outranks a charge-blind one at the same rung (it saw something
+    the other could not), and after that the older method row wins, so the pointer is
+    deterministic and does not move when an unrelated model is installed.
     """
     row = reg.conn.execute(
-        "SELECT id, fidelity FROM geometries WHERE structure_id=? "
-        "ORDER BY fidelity DESC, (converged IS 1) DESC, "
-        "         CASE WHEN energy IS NULL THEN 1 ELSE 0 END, energy ASC, id ASC LIMIT 1",
+        "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
+        "LEFT JOIN methods m ON m.id = g.method_id "
+        "WHERE g.structure_id=? "
+        "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
+        "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
+        "         COALESCE(m.id, 0) ASC, "
+        "         CASE WHEN g.energy IS NULL THEN 1 ELSE 0 END, g.energy ASC, g.id ASC "
+        "LIMIT 1",
         (structure_id,),
     ).fetchone()
     if row is None:

@@ -16,7 +16,10 @@ mofsbu-ui = "mofsbu.ui.__main__:main"
 [project.optional-dependencies]
 xtb   = ["tblite"]
 canon = ["pynauty"]
-ml    = ["torch", "mace-torch"]
+# MACE-MP-0 works on any recent mace-torch; the `mace_omol` loader for
+# MACE-OMOL-0 landed in 0.3.14, so the extra pins that floor rather than
+# letting an older install fail at the first structure of a long run.
+ml    = ["torch", "mace-torch>=0.3.14"]
 match = ["pymatgen"]
 ui    = ["fastapi", "uvicorn[standard]"]
 dev   = ["pytest", "jupyterlab"]

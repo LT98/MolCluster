@@ -24,7 +24,10 @@ XTB = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB")
 XTB_WATER = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB",
                        solvent="water")
 MACE = MethodSpec(code="mace", code_version="0.3.6/medium", method="MACE-MP-0",
-                  extras={"charge_blind": True})
+                  extras={"charge_blind": True, "spin_blind": True})
+# Same package, same rung of the ladder, different theory — and, unlike MP-0, given the
+# total charge and spin multiplicity, so the reference scheme has no reason to refuse it.
+OMOL = MethodSpec(code="mace", code_version="0.3.14/extra_large", method="MACE-OMOL-0")
 
 
 @pytest.fixture()
@@ -302,6 +305,53 @@ def test_a_charge_blind_backend_is_fine_on_a_neutral_equation(reg):
     wat = _store(reg, water(), energy=-15.0, method=MACE, fidelity=Fidelity.ML)
     rid = put_balanced_reaction(reg, wat, reagents=[(wat, 2)], leaving=[(wat, 1)])
     assert reaction_balanced_energy(reg, rid).dE == pytest.approx(0.0)
+
+
+def test_a_charge_aware_mlip_is_accepted_on_a_charged_equation(reg):
+    """MACE-OMOL-0 is handed the charge, so the charge-blind refusal must not fire.
+
+    This is the point of the whole exercise: the refusal keys on what the STORED method
+    says it could see, not on the string "mace".  Getting that wrong in either direction
+    is expensive — refusing OMOL-0 leaves the charged species at xTB cost forever, and
+    accepting MP-0 produces a number that looks the same and is not.
+    """
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    h3o = _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)
+    oh = _store(reg, hydroxide(), energy=-13.0, method=OMOL, fidelity=Fidelity.ML)
+    rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
+    energy = reaction_balanced_energy(reg, rid)
+    assert energy.dE == pytest.approx(-14.0 - 13.0 - 2 * -15.0)
+    assert energy.method.method == "MACE-OMOL-0"
+
+
+def test_two_mlips_on_one_rung_are_never_mixed_into_one_equation(reg):
+    """The failure this guards is silent: both are fidelity=ML, so nothing sorts them.
+
+    Water has BOTH an MP-0 and an OMOL-0 energy — which is the normal state of a
+    registry once a second model is in use.  The old rule ("highest rung, then lowest
+    energy") would have picked whichever model had the deeper reference, for every
+    species, and produced an equation assembled out of two theories with no complaint.
+    The equation is now pinned to the theory of its first term.
+    """
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    _store(reg, water(), energy=-3000.0, method=MACE, fidelity=Fidelity.ML)
+    h3o = _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)
+    oh = _store(reg, hydroxide(), energy=-13.0, method=OMOL, fidelity=Fidelity.ML)
+    rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
+    energy = reaction_balanced_energy(reg, rid)
+    # -3000 is the numerically lowest energy in the table and must not appear.
+    assert energy.dE == pytest.approx(-14.0 - 13.0 - 2 * -15.0)
+    assert energy.method.method == "MACE-OMOL-0"
+
+
+def test_a_species_missing_from_the_pinned_theory_is_named_not_substituted(reg):
+    """Having SOME ML energy is not having one in the equation's theory."""
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    h3o = _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)
+    oh = _store(reg, hydroxide(), energy=-13.0, method=MACE, fidelity=Fidelity.ML)
+    rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
+    with pytest.raises(ReferenceSchemeError, match="MACE-OMOL-0"):
+        reaction_balanced_energy(reg, rid)
 
 
 def test_the_weakest_rung_sets_the_fidelity(reg):

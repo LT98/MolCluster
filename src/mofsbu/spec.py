@@ -16,13 +16,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 3
+SPEC_VERSION = 4
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
 # backends, and the planner refuses with that reason.  `dft_go` is still a settled name
 # with no body (ground rule 7) — there is no external code wired up.
 RUN_MODES = ("construct", "ml_go", "xtb_go", "dft_go")
+
+# `ml_go` names a RUNG, not a theory.  Two MACE foundation models serve it and they are
+# not interchangeable: MACE-MP-0 (Materials Project) cannot see formal charge or spin,
+# MACE-OMOL-0 (OMol25, wB97M-V/def2-TZVPD) takes both as inputs.  A spec may name one;
+# `None` means "whatever this machine declares in MOFSBU_ML_MODEL", and either way the
+# resolved model is written into the `methods` row of every number, so a stored energy
+# never loses the name of the model that produced it.
+ML_MODELS = ("mace-mp-0", "mace-omol-0")
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,8 @@ class BuildSpec:
     # exactly the failure this project keeps running into.
     allow_unsaturated: bool = False
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
+    # Which ML potential `ml_go` means.  None = the machine's declared default.
+    ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | None
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -81,6 +91,10 @@ class BuildSpec:
             raise ValueError(f"run_mode must be one of {RUN_MODES}, got {self.run_mode!r}")
         if not self.molecules:
             raise ValueError("a spec needs at least one molecule")
+        if self.ml_model is not None:
+            from mofsbu.config import resolve_ml_backend
+
+            resolve_ml_backend(self.ml_model)   # raises on a typo rather than defaulting
         # metals are DELIBERATELY optional: a purely molecular construction (a COF, an
         # organic cage) is a first-class case, not a degenerate one.
 
@@ -120,6 +134,13 @@ class BuildSpec:
             d.pop("relax_to", None)             # v1 field, replaced by run_mode
             d.setdefault("run_mode", "construct")
             d.setdefault("allow_unsaturated", False)
+        if version <= 3:
+            # v3 -> v4 adds `ml_model`.  It defaults to None, which resolves to the
+            # machine's declared model — for a v3 spec that is MACE-MP-0 unless the
+            # environment says otherwise, which is exactly what a v3 run did.  The
+            # field is added rather than back-filled with "mace-mp-0" because a v3 spec
+            # never expressed a choice and writing one in would invent provenance.
+            d.setdefault("ml_model", None)
         # v2 -> v3 adds no field: `xtb_go` joins RUN_MODES, so every v2 spec is already a
         # valid v3 one and there is nothing to rewrite.  The version still moves, because
         # a v3 spec saying `run_mode: xtb_go` must be REFUSED by a v2 build with "this is

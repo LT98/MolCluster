@@ -225,7 +225,10 @@ identity, so they cannot be retrofitted):
 **Fidelity is a property of a geometry, not of a structure.** One structure identity, many
 geometry realizations:
 
-- `fidelity` ordered enum: `raw_construct → FF → ML(xTB/MACE) → DFT`.
+- `fidelity` ordered enum: `raw_construct → FF → ML → xTB → DFT`.  A rung is **not** a
+  theory: ML is served by two MACE foundation models (MP-0, charge- and spin-blind;
+  OMOL-0, charge- and spin-aware), whose energies share a rung and nothing else.
+  `method_id` says which, and no query may order by energy across method rows.
 - `method` records functional/basis/dispersion/solvent/spin + code+version (reproducibility).
 - `relaxed_from` chain *is* the optimization-status history: `raw → ML-relaxed → DFT-relaxed`.
 - Maintain a materialized **best-available geometry** pointer per structure for fast recall.
