@@ -12,6 +12,10 @@ guards a claim the rest of the project reads as settled:
 * **frame reproducibility** — the whole point of promoting `_donor_placement_frame` out of
   the placer (D13) is that the frame is stored rather than re-found by stochastic search.
   A frame that does not survive the database round-trip has not been promoted anywhere.
+
+A fourth property joined them once perception was made resonance-invariant: **the catalog
+is a function of the identity it hangs off**, and `catalog_drift` returning empty for the
+build routes in `build_routes.py` is the gate on it.
 """
 from __future__ import annotations
 
@@ -20,13 +24,14 @@ import json
 import numpy as np
 import pytest
 
+from build_routes import ROUTE_CASES, build, routes
 from mofsbu._types import Fidelity
 from mofsbu.descriptors.ease import PKA_CENTRE, activation_ease
 from mofsbu.geometry.embed import embed_molecule, to_xyz
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.registry import (
-    BlobStore, MethodSpec, Registry, RegistryError, canonical_map, get_site_state,
-    get_sites, put_geometry, put_site_state, put_sites, put_structure,
+    BlobStore, MethodSpec, Registry, RegistryError, canonical_map, catalog_drift,
+    get_site_state, get_sites, put_geometry, put_site_state, put_sites, put_structure,
 )
 from mofsbu.sites import perception
 from mofsbu.sites.frames import site_frame
@@ -152,6 +157,49 @@ def test_the_catalog_is_written_once_per_structure(reg):
     assert len(get_site_state(reg, sid, gid_b)) == len(sites)
 
 
+def _store_route(reg, name: str, mol, route: tuple[int, ...], donor_type: str):
+    """One build route, all the way through the registry: identity, geometry, sites."""
+    complex_mol = build(mol, route, donor_type)
+    graph = from_rdkit(complex_mol, charge=None, multiplicity=1, name=name)
+    put = put_structure(reg, graph, tags=[name])
+    put_geometry(reg, put.id, to_xyz(complex_mol, name), fidelity=Fidelity.FF, method=FF)
+    return put.id, perceive(complex_mol)
+
+
+@pytest.mark.parametrize("name,smiles,donor_type,denticity", ROUTE_CASES,
+                         ids=[c[0] for c in ROUTE_CASES])
+def test_no_build_route_drifts_from_the_stored_catalog(
+        reg, name, smiles, donor_type, denticity):
+    """The gate on `site_catalog` being a function of the identity it hangs off.
+
+    `catalog_drift` exists because it was not.  D15 excludes bond order from the L1 hash
+    so that C=O and C-O(-) hash identically, perception read bond order, and a monodentate
+    acetate therefore recorded one carboxylate donor or two depending on which oxygen the
+    first build route bound through.  `put_sites` keeps the first catalog, so a drift here
+    is not cosmetic: it is the second route being told it was wrong about its own donors.
+
+    Empty is the whole assertion.  If perception ever becomes bond-order-sensitive again
+    this is where it shows up, and it shows up as a list naming the atoms that moved.
+    """
+    mol, all_routes = routes(smiles, donor_type, denticity)
+    assert len(all_routes) > 1, f"{name}: needs at least two routes to compare"
+
+    structure_ids, drifts = [], []
+    for route in all_routes:
+        sid, sites = _store_route(reg, name, mol, route, donor_type)
+        drifts.append((route, catalog_drift(reg, sid, sites)))
+        put_sites(reg, sid, sites)
+        structure_ids.append(sid)
+
+    assert len(set(structure_ids)) == 1, (
+        f"{name}: the routes {all_routes} landed on structures {structure_ids} — they are "
+        f"supposed to be ONE identity, so this test is not testing what it claims to. "
+        f"Fix the fixture before reading anything into the drift below.")
+    assert all(not drift for _, drift in drifts), (
+        f"{name}: routes disagree with the stored catalog: "
+        + "; ".join(f"{route} -> {drift}" for route, drift in drifts if drift))
+
+
 # ── gate 3: a frame survives the database ────────────────────────────────────
 
 def test_a_stored_frame_reproduces_the_re_derived_frame(reg):
@@ -233,11 +281,12 @@ def test_torsion_live_and_free_split_the_way_the_gate_says():
 def test_a_donor_dative_bonded_to_a_metal_reads_as_occupied():
     """The status rule itself, on a graph built to exercise it.
 
-    Deliberately NOT routed through `perceive` on an assembled complex: perception does
-    not reliably re-report a donor that is already coordinated (the same bond-order
-    sensitivity `registry.api.catalog_drift` documents), so a test that went that way
-    would be testing perception's treatment of bound atoms rather than the status rule,
-    and would pass or fail for the wrong reason.
+    Deliberately NOT routed through `perceive` on an assembled complex.  The reason used
+    to be the resonance seam, which is now closed for delocalised groups; what is left is
+    narrower and still real — the per-atom valence rules count a metal as an ordinary
+    heavy neighbour, so a coordinated aqua oxygen is not perceived as a donor at all.
+    Either way a test that went that way would be testing perception's treatment of bound
+    atoms rather than the status rule, and would pass or fail for the wrong reason.
     """
     from mofsbu.graph._types import EdgeType, TypedGraph
     from mofsbu.sites.model import Site

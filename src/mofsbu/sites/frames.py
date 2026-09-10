@@ -49,6 +49,7 @@ IDEAL_MDA_ANGLE: dict[str, float] = {
     "azolate_N": 120.0, "sulfonamide_N": 120.0,
     "thiolate_S": 100.0, "thioether_S": 100.0, "phosphine_P": 109.5,
     "sulfonate_O": 120.0, "sulfinate_O": 120.0, "phosphonate_O": 120.0, "boronate_O": 120.0,
+    "nitro_O": 120.0,
 }
 DEFAULT_MDA_ANGLE = 120.0
 
@@ -69,6 +70,17 @@ _BINDING_MODES: dict[str, tuple[BindingMode, ...]] = {
     "imine_N":       (BindingMode.MONODENTATE,),
     "amine_N":       (BindingMode.MONODENTATE,),
     "azolate_N":     (BindingMode.MONODENTATE, BindingMode.BRIDGE_MU2),
+    # The other delocalised oxo-acids, listed for the same reason carboxylate is: their
+    # oxygens are equivalent, so O,O-chelation and mu2 bridging are available to them in
+    # exactly the way they are to a carboxylate.  Before perception typed these groups as
+    # groups, a sulfonate's S=O oxygens were reaching this table as `carbonyl_O` and
+    # picking up "chelate" from that row by accident; a phosphonate mu3-bridges layered
+    # frameworks and is the one entry here that goes further than carboxylate.
+    "sulfonate_O":   (BindingMode.MONODENTATE, BindingMode.CHELATE, BindingMode.BRIDGE_MU2),
+    "sulfinate_O":   (BindingMode.MONODENTATE, BindingMode.CHELATE, BindingMode.BRIDGE_MU2),
+    "phosphonate_O": (BindingMode.MONODENTATE, BindingMode.CHELATE, BindingMode.BRIDGE_MU2,
+                      BindingMode.BRIDGE_MU3),
+    "nitro_O":       (BindingMode.MONODENTATE, BindingMode.CHELATE),
 }
 
 

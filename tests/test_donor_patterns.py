@@ -1,4 +1,4 @@
-"""Every labile pattern must actually fire, on the atom it is named for.
+"""Every donor pattern must actually fire, on the atoms it is named for.
 
 This file exists because four patterns were added that could never match anything.  The
 donor is the LAST atom of a SMARTS match (`_find_labile`), so the natural spelling of a
@@ -9,15 +9,21 @@ nothing.  Nothing failed; the donor simply was not there.
 
 A pattern with no probe molecule is a test failure too.  Adding a SMARTS without adding
 the molecule it is supposed to recognise is how the four dead ones got in.
+
+`DELOCALISED_GROUPS` is held to the same discipline, plus one it does not share: a group
+has to perceive the SAME donor set in every resonance form of itself, because that is the
+entire reason it is matched as a group instead of an atom at a time.
 """
 from __future__ import annotations
+
+from collections import Counter
 
 import pytest
 from rdkit import Chem
 
 from mofsbu.graph.from_mol import mol_from_smiles
 from mofsbu.sites.perception import (
-    LABILE_DONOR_PATTERNS, deprotonate, find_donor_sites,
+    DELOCALISED_GROUPS, LABILE_DONOR_PATTERNS, deprotonate, find_donor_sites,
 )
 from mofsbu.sites.protomers import labile_sites
 
@@ -131,3 +137,96 @@ def test_a_free_halide_co_ligand_is_a_donor():
     """`[Cl-]` handed straight in as a co-ligand is the normal way a halide arrives."""
     sites = find_donor_sites(mol_from_smiles("[Cl-]"))
     assert [s.donor_type for s in sites] == ["halide_Cl"]
+
+
+# ── the delocalised groups ───────────────────────────────────────────────────
+#
+# One anionic probe per group, and how many oxygens the whole group must present.  The
+# count is the assertion that matters: a group that reports two of its three oxygens has
+# not been matched as a group at all, it has been classified an atom at a time and the
+# third one fell through whichever valence rule its bond order happened to miss.
+GROUP_PROBES: dict[str, tuple[str, int]] = {
+    "carboxylate_O": ("CC(=O)[O-]",      2),   # acetate
+    "sulfonate_O":   ("CS(=O)(=O)[O-]",  3),   # methanesulfonate
+    "sulfinate_O":   ("CS(=O)[O-]",      2),   # methanesulfinate
+    "phosphonate_O": ("CP(=O)([O-])[O-]", 3),  # methylphosphonate
+    "nitro_O":       ("C[N+](=O)[O-]",   2),   # nitromethane
+    "boronate_O":    ("CB([O-])[O-]",    2),   # methylboronate
+}
+
+#: Spellings of one anion that differ ONLY in where the bond orders and the minus sign
+#: went.  D15 hashes these identically, so perception has to type them identically.
+RESONANCE_PAIRS: list[tuple[str, str, str]] = [
+    ("acetate",      "CC(=O)[O-]",         "CC([O-])=O"),
+    ("benzoate",     "[O-]C(=O)c1ccccc1",  "O=C([O-])c1ccccc1"),
+    ("sulfonate",    "CS(=O)(=O)[O-]",     "CS([O-])(=O)=O"),
+    ("phosphonate",  "CP(=O)([O-])[O-]",   "CP([O-])([O-])=O"),
+    ("nitro",        "C[N+](=O)[O-]",      "C[N+]([O-])=O"),
+    ("oxalate",      "[O-]C(=O)C(=O)[O-]", "O=C([O-])C([O-])=O"),
+]
+
+
+def test_every_group_has_a_probe_molecule():
+    named = [name for name, _, _ in DELOCALISED_GROUPS]
+    assert set(named) == set(GROUP_PROBES), (
+        "groups without a probe: " + str(sorted(set(named) - set(GROUP_PROBES)))
+        + "; probes without a group: " + str(sorted(set(GROUP_PROBES) - set(named))))
+
+
+def test_no_group_smarts_parses_to_none():
+    for name, smarts, _ in DELOCALISED_GROUPS:
+        assert Chem.MolFromSmarts(smarts) is not None, f"{name}: unparseable SMARTS"
+
+
+@pytest.mark.parametrize("name", list(GROUP_PROBES))
+def test_a_group_types_every_one_of_its_oxygens_the_same(name):
+    smiles, n_oxygens = GROUP_PROBES[name]
+    found = Counter(s.donor_type for s in find_donor_sites(mol_from_smiles(smiles)))
+    assert found == {name: n_oxygens}, (
+        f"{smiles} perceived {dict(found)}, want {n_oxygens} x {name}. The oxygens of a "
+        f"delocalised group are equivalent; a stray `carbonyl_O` or `alkoxide_O` here "
+        f"means the group was classified one atom at a time, off its bond orders.")
+
+
+@pytest.mark.parametrize("name", list(GROUP_PROBES))
+def test_a_group_carries_one_charge_across_all_its_oxygens(name):
+    """Charge belongs to the group, not to whichever oxygen the minus sign landed on."""
+    smiles, _ = GROUP_PROBES[name]
+    sites = find_donor_sites(mol_from_smiles(smiles))
+    assert len({s.charge_after for s in sites}) == 1, (
+        f"{smiles}: {[(s.idx, s.charge_after) for s in sites]} — the oxygens of one group "
+        f"disagree about their charge, so the stored catalog depends on the spelling.")
+
+
+@pytest.mark.parametrize("name,left,right", RESONANCE_PAIRS,
+                         ids=[c[0] for c in RESONANCE_PAIRS])
+def test_two_resonance_forms_perceive_the_same_donors(name, left, right):
+    """The invariance itself, at the free-ligand level.
+
+    Indices are not comparable between the two spellings (the atoms are written in a
+    different order), so the claim is on the multiset of types and charges: same donors,
+    same many, same charge, whichever form RDKit is holding.
+    """
+    def described(smiles: str) -> Counter:
+        return Counter((s.donor_type, s.charge_after, s.labile)
+                       for s in find_donor_sites(mol_from_smiles(smiles)))
+
+    assert described(left) == described(right), (
+        f"{name}: {left} and {right} are one identity under D15 and perceive differently")
+
+
+@pytest.mark.parametrize("smiles,forbidden", [
+    ("CC(=O)OC",     "carboxylate_O"),   # methyl acetate: -OR is not a group oxygen
+    ("COP(=O)(OC)S", "phosphonate_O"),   # phosphate diester: only one terminal O left
+    ("CC(C)=O",      "carboxylate_O"),   # acetone: one oxygen is not a carboxylate
+    ("CS(=O)C",      "sulfinate_O"),     # DMSO is a sulfoxide, not a sulfinate
+])
+def test_an_esterified_oxygen_does_not_pull_its_neighbour_into_a_group(smiles, forbidden):
+    """The terminal-oxygen rule, which is what keeps the group table from over-reaching.
+
+    An -OR oxygen has a second heavy neighbour, so it is not part of the delocalised set
+    and does not count towards the group's oxygen tally.  Without that, every ester would
+    perceive as a carboxylate and its alkyl oxygen would be handed a charge it has not got.
+    """
+    found = {s.donor_type for s in find_donor_sites(mol_from_smiles(smiles))}
+    assert forbidden not in found, f"{smiles} was swept into a group: {sorted(found)}"

@@ -9,9 +9,9 @@ Three reasons that is not merely an optimisation:
 * **Provenance.**  The atom map is carried on every `reactions` edge (D8), so an inherited
   site knows which parent it descends from — "this axial site descends from the Cu that
   entered at step 1" is a query, not a reconstruction.
-* **Stability.**  Re-perceiving a product can disagree with the parent it came from; the
-  registry already has one such seam (`registry.api.catalog_drift`).  Inheritance cannot
-  drift, because it never asks the question twice.
+* **Stability.**  Re-perceiving a product can disagree with the parent it came from, which
+  is why the registry watches for it at all (`registry.api.catalog_drift`).  Inheritance
+  cannot drift, because it never asks the question twice.
 * **Frames survive.**  A site's frame is the expensive, geometry-derived part (D13).  The
   parent's frame is still correct for every atom the join did not move, and re-deriving it
   from the product's coordinates would put a stochastic search back in the path the frame

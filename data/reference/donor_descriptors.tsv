@@ -36,6 +36,7 @@ sulfonate_O	-1.9	1.0	hard	1	CRC
 sulfinate_O	2.0	1.0	hard	1	estimate
 phosphonate_O	2.38	1.0	hard	2	CRC
 boronate_O	8.8	1.0	hard	2	CRC
+nitro_O			hard	2	neutral-donor
 hydroxamate_O	9.4	0.8	hard	2	CRC
 oxime_O	12.2	1.0	hard	1	CRC
 nhydroxy_O	12.0	2.0	hard	1	estimate

@@ -572,6 +572,39 @@ carries M–M + µ-bridges + per-center labels from the start.
 
 ## 12. Changelog
 
+- *(M4 follow-up)* **Perception is resonance-invariant; the `site_catalog` seam below is
+  closed.** The filed job was to stop perception reading bond order, and the shape of the
+  fix is that **a delocalised oxo-acid is one donor, not several oxygens**:
+  `sites.perception.DELOCALISED_GROUPS` matches the group's central atom, takes every
+  terminal oxygen on it — ignoring metal neighbours, since coordination is not
+  constitution — and gives all of them one donor type and one charge. No bond order is
+  read anywhere in that path, which is what makes it invariant rather than merely
+  patched. Three things worth recording:
+
+  * The bug was **wider than the acetate case that surfaced it.** A sulfonate's two S=O
+    oxygens were being typed `carbonyl_O` and only its anionic one `sulfonate_O`; nitro
+    came out as one `carbonyl_O` and one `alkoxide_O`. Those are not near-misses, and they
+    were route-dependent for the same reason acetate was.
+  * **Charge is a group property here too**, exactly as in D15. All of a group's oxygens
+    now report the same `charge_after` — anionic (−1) or not — instead of whichever one
+    the resonance form parked the minus sign on. Per-site −1 is already what
+    `LABILE_DONOR_PATTERNS` says for a diprotic acid, so this is the existing convention,
+    not a new one.
+  * The taxonomy is **deliberately coarse**: carbonate is `carboxylate_O`, sulfate is
+    `sulfonate_O`, a phosphate diester is `phosphonate_O`. A name per oxo-acid is a
+    promise to have anticipated every one of them — the same promise `Pocket` refuses to
+    make. `nitro_O` is the one genuinely new type.
+
+  `catalog_drift` stays as a guard rather than a known finding, and
+  `tests/test_sites_state.py::test_no_build_route_drifts_from_the_stored_catalog` is the
+  gate: the build routes in `tests/build_routes.py` reach one identity through every
+  resonance form of it, and the assertion is that the registry cannot tell them apart.
+
+  Still open, and NOT this job: the per-atom valence rules count a metal as an ordinary
+  heavy neighbour, so a coordinated aqua oxygen is perceived as no donor at all. That is
+  a `SiteStatus.OCCUPIED` row that never gets written, and it is a different fix with a
+  different blast radius (`n_perceived_donors` moves for every assembled structure).
+
 - *(M4 second half)* **C5 called, as D18.** The floor was ratified essentially as §6.6
   leaned, with two things the leaning did not say. First, the rule that turned out to
   matter most is not *what* the components are but that **an absent one stays absent**:
@@ -591,7 +624,8 @@ carries M–M + µ-bridges + per-center labels from the start.
     A monodentate acetate bound through either oxygen is one identity whose two build
     routes perceive different donor sets. The first catalog stands, `catalog_drift`
     reports the disagreement, and making perception resonance-invariant is filed as its
-    own job — it needs a fixture set, not a patch inside a registry write.
+    own job — it needs a fixture set, not a patch inside a registry write. *(Done — see
+    the M4 follow-up entry at the top of this changelog.)*
   * **`put_sites` deleting before inserting cascaded into `site_state`.** Under D2,
     re-deriving an identity the registry already has is the *expected* outcome for most of
     an enumeration, so a structure built twice kept state only on its second geometry and
