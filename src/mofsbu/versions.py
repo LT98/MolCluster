@@ -23,6 +23,12 @@ ALGO_VERSIONS: dict[str, str] = {
     "reference_scheme": "balanced1",   # reaction-balanced energies (M7)
     "spin_convention":  "hs1",    # high_spin_multiplicity: d-count table + charge
     "descriptor_tables": "1",     # curated donor table + generated metal table (M1, C8)
+    # The C5 floor as ratified in D18: which components exist, how they are weighted,
+    # what confidence and provisional mean.  Bumping this is what marks stored ease rows
+    # as products of a different policy — the numbers are only comparable within a
+    # version, because the weights ARE the model.
+    "ease_model":       "floor1",  # pKa-table floor + cone occlusion (M4, C5/D18)
+    "site_state":       "1",       # status rule + buried-volume convention (M4)
 }
 
 

@@ -16,8 +16,21 @@ AtomMap: TypeAlias = dict[int, int]   # parent atom index -> child atom index
 
 
 class Fidelity(IntEnum):
-    """Ordered ladder.  A property of a GEOMETRY, never of a structure (D4)."""
+    """Ordered ladder: how much evidence stands behind a number.
 
+    `RAW`..`DFT` are GEOMETRY rungs and a geometry's fidelity is never a structure's (D4).
+    `HEURISTIC` is below all of them and is NOT a geometry rung — nothing may store a
+    geometry at it, and `put_geometry` refuses one.  It exists because the activation-ease
+    floor (D18) produces numbers from a lookup table with no structure-specific
+    computation at all, and those numbers still have to be ranked against the computed
+    ones that will later replace them.  Calling that `RAW` would say a pKa read out of a
+    file is the same class of evidence as a constructed geometry.
+
+    Negative on purpose: every existing comparison is `>=` on this ladder, so a rung added
+    below the floor cannot change the meaning of a row already stored.
+    """
+
+    HEURISTIC = -1  # from a table; no structure-specific compute (ease only, never geometry)
     RAW = 0        # as constructed
     FF = 1         # force-field relaxed
     ML = 2         # MACE / other MLIP

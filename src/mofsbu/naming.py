@@ -25,7 +25,9 @@ from mofsbu.identity import hill_formula, l1_graph_hash
 UNNAMED = ""                       # no alias known: the fragment's formula is used
 L2_PLACEHOLDER = "?L2"             # isomer tag not computed yet (M5)
 L3_PLACEHOLDER = "?L3"             # conformer id not computed yet (M5)
-SITES_PLACEHOLDER = "?sites"       # site_state not populated yet (M4, second half)
+# `SITES_PLACEHOLDER = "?sites"` lived here while `site_state` was unpopulated. M4's
+# second half populates it (D18), so the placeholder is gone rather than left behind
+# unreferenced — a fence around a hole that has been filled is just a wrong comment.
 
 _MU = {BridgeClass.MU2: "mu2", BridgeClass.MU3: "mu3", BridgeClass.MU_N: "muN"}
 

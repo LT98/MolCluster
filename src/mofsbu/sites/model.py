@@ -257,3 +257,31 @@ def find_pockets(
 def find_pocket(mol: Chem.Mol, sites: list[Site], **predicate) -> Pocket | None:
     matches = find_pockets(mol, sites, **predicate)
     return matches[0] if matches else None
+
+
+#: A pocket closing a ring this size or larger spans two DIFFERENT functional groups.
+#: Below it, the "pocket" is a single group biting through its own two donors — a
+#: carboxylate's O,O 4-ring — which is not a neighbour effect at all.
+INTERGROUP_RING = 5
+
+
+def shifting_pocket_donors(mol: Chem.Mol, sites: list[Site]) -> frozenset[int]:
+    """Donors whose pKa a NEIGHBOURING group plausibly shifts.  D18's provisional rule.
+
+    Not simply "is in a pocket".  A carboxylate closes a 4-membered ring through its own
+    two oxygens, so every carboxylate donor is in a pocket, and flagging all of them says
+    the table is wrong about the one value it is most confident in — benzoate's pKa IS
+    4.2, and the 4.76 in the table is that number.  Flagging everything is the same as
+    flagging nothing.
+
+    What D18 actually means by provisional is the salicylate/anthrarufin case: a donor
+    whose acidity is moved by a DIFFERENT group next to it — the peri-OH the quinone
+    H-bonds, the phenol ortho to a carboxylate.  Those close 5-, 6- and 7-membered rings,
+    so the ring size is the discriminator, and it is a structural fact rather than a
+    chemical name (the same reason `Pocket` has a descriptor and not a taxonomy).
+    """
+    return frozenset(
+        idx
+        for pocket in chelate_pockets(mol, sites)
+        if pocket.ring_size >= INTERGROUP_RING
+        for idx in pocket.donors)

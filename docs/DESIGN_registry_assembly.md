@@ -425,6 +425,37 @@ coordinates.
 - **D12 (C4 resolved)** **Polynuclear-native from v1**; mononuclear = N=1. Per-center oxidation
   state/spin in node labels; µ-carboxylate = one node + two typed dative edges; multi-center geometry
   placer is the headline build cost.
+- **D18 (C5 resolved)** **The activation-ease floor is the zero-QM heuristic tier, and an
+  absent component is absent — never defaulted.** Every perceived site gets a record from
+  the M1 tables alone, so no structure carries an empty ease field; a site the model cannot
+  score is reported *unscored*, never *hard*, because a missing number that renders as a low
+  one is the failure this layer exists to prevent. The scalar is a weighted mean over the
+  components actually present (`deprotonation` 0.55, `steric` 0.25, `electronic` 0.10,
+  `marginal_de` 0.10), renormalised by those weights: nothing is filled in with 0, or 0.5, or
+  "neutral", since a defaulted component is indistinguishable from a computed one.
+  `confidence = coverage x sharpness` answers *how much of the model ran*, not *how right is
+  it* — coverage from the weights present, sharpness from the table's own `pka_sigma`.
+  `provisional` marks sites where **the table value is the wrong question** — not sites that
+  merely scored badly — making the floor's most useful output a QM work list rather than a
+  verdict. Two things sharpen it from the §6.6 leaning, both learned by measuring what it
+  flagged: the pocket must be **inter-group** (a chelate ring ≥ 5), because a carboxylate
+  closes a 4-ring through its own two oxygens and "is in a pocket" therefore flags every
+  carboxylate in existence — and a work list containing everything is no work list; and a
+  donor with **no pKa never self-flags**, since promoting a pyridyl N to xTB to refine a
+  deprotonation it does not undergo spends QM to learn nothing. The rule now separates
+  salicylate and catechol (pKa₁ 2.97 vs benzoic 4.20; 9.25 vs phenol 9.99 — real neighbour
+  effects) from benzoate, BTC and *para*-hydroxybenzoate (where the table value is simply
+  correct). A neutral donor's empty `pka` scores 1.0 with a note: "no activation step" is an
+  answer, not a gap.
+  **The rung above the floor is MACE-OMOL-0, and that is what made this callable now.**
+  Deprotonation is charge-changing (`A-H -> A(-) + H(+)`), so a charge-blind potential is
+  blind to it in principle, and the ladder for the primary component used to run
+  `table -> (nothing) -> xTB` — the ML rung, the one that makes screening affordable, could
+  not serve the component the model is mostly made of. Cost of this decision: the scalar's
+  pKa anchor (centre 10.0, width 3.0) is a stated convention, not a calibration, which is
+  precisely why the components are the record and the scalar is only a sort key (D6).
+  **C7 is untouched**: `hsab_match` still raises and `activation_ease(partner=...)` refuses
+  rather than returning the partner-free number under a partner-shaped call.
 
 ### 7.1 Proposed — pending your ratification (raised while implementing M2)
 
@@ -469,13 +500,11 @@ with a test that fails if it is reversed. None is in the locked ledger yet.
 
 ## 8. Open Checkpoints (need a call)
 
-*Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native).*
+*Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native). C5 → D18 (heuristic floor).*
 
 - **C2 — L3 thresholds (still open):** the rule is set (D11); still need the **numbers** — θ_geom
   RMSD cutoff on the rigid core + coordination sphere, and the energy window that gates a real
   minimum vs. a bad geometry. Also governs whether a basin-crossing DFT relax spawns a new L3.
-- **C5 — Activation-ease floor (leaning, §6.6):** confirm the zero-QM heuristic-tier floor (pKa
-  table + HSAB tag + provisional-flag for in-pocket donors) is the accepted v1 floor.
 - **C6 — Barrier proxy (leaning, §6.6):** confirm v1 = ΔG + sink-detection + concurrent-bond-change
   + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only.
 - **C7 — Partner-dependence (leaning, §6.6):** confirm the factorized HSAB-match model (descriptor
@@ -542,6 +571,32 @@ carries M–M + µ-bridges + per-center labels from the start.
   partner/condition dependence (C7) is real.
 
 ## 12. Changelog
+
+- *(M4 second half)* **C5 called, as D18.** The floor was ratified essentially as §6.6
+  leaned, with two things the leaning did not say. First, the rule that turned out to
+  matter most is not *what* the components are but that **an absent one stays absent**:
+  the scalar renormalises over the components present, so a geometry-free record and a
+  fully-populated one are distinguishable instead of both landing somewhere plausible.
+  Second, **MACE-OMOL-0 is what made the call safe to make now.** Deprotonation is a
+  charge change, so the ML rung was structurally unable to serve the model's primary
+  component until a charge-aware potential existed — the floor was carrying the whole
+  model with no affordable rung above it, which is a bad position from which to ratify a
+  floor. §6.4's "cheap → rigorous" column for deprotonation should now read
+  `pKa table → MACE-OMOL-0 ΔE → xTB → DFT`.
+
+  Two findings from building it, both about seams rather than bugs:
+
+  * **`site_catalog` is not a pure function of identity.** D15 excludes bond order from
+    the L1 hash so C=O/C–O⁻ resonance forms hash identically; perception reads bond order.
+    A monodentate acetate bound through either oxygen is one identity whose two build
+    routes perceive different donor sets. The first catalog stands, `catalog_drift`
+    reports the disagreement, and making perception resonance-invariant is filed as its
+    own job — it needs a fixture set, not a patch inside a registry write.
+  * **`put_sites` deleting before inserting cascaded into `site_state`.** Under D2,
+    re-deriving an identity the registry already has is the *expected* outcome for most of
+    an enumeration, so a structure built twice kept state only on its second geometry and
+    `n_open_sites` counted against a best geometry that no longer had any. The catalog is
+    geometry-independent (§6.3); it is now written once per structure and kept.
 
 - *(M7 implementation session)* Built the energy backends and the reference scheme. The
   session's finding is a correction to §11's first bullet: **the archived formation-energy

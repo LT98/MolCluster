@@ -19,9 +19,11 @@ from mofsbu.descriptors import (
     UnknownDescriptor, activation_ease, donor, donor_table, hsab_match,
     known_donor_types, metal, metal_table, sync_to_registry,
 )
+from mofsbu._types import Fidelity
 from mofsbu.registry import Registry
 from mofsbu.sites import perception
 from mofsbu.sites.frames import live_dof
+from mofsbu.sites.model import Site
 
 SRC = Path(perception.__file__)
 
@@ -171,10 +173,21 @@ def test_sync_writes_both_tables_and_is_idempotent(tmp_path):
         assert stored == live_dof("carboxylate_O").value
 
 
-# ── the policy layer is still a stub, and says which checkpoint blocks it ────
+# ── C5 is resolved (D18); C7 is not, and the difference is visible ──────────
 
-def test_ease_is_a_declared_stub_naming_its_open_checkpoint():
-    with pytest.raises(NotBuiltYet, match="C5"):
-        activation_ease(None)
+def test_the_partner_free_floor_runs_and_the_partner_term_still_refuses():
+    """D18 resolved C5 only.  A caller who asks for a partner must be told no.
+
+    Returning the intrinsic number under a partner-shaped call is the failure this
+    guards: the answer would be indistinguishable from a partner-aware one, and the
+    whole point of C7's factorization is that those are different quantities.
+    """
+    site = Site(atom_idx=0, donor_type="carboxylate_O", labile=True, charge_after=-1,
+                live_dof="live", binding_modes=("mono",))
+    record = activation_ease(site)
+    assert record.fidelity is Fidelity.HEURISTIC and record.scored
+
+    with pytest.raises(NotBuiltYet, match="C7"):
+        activation_ease(site, partner=metal("Cu", 2))
     with pytest.raises(NotBuiltYet, match="C7"):
         hsab_match(donor("carboxylate_O"), metal("Cu", 2))
