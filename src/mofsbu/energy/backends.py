@@ -163,6 +163,36 @@ def minimal_multiplicity(symbols: Sequence[str], charge: int) -> int:
     return 1 if electrons % 2 == 0 else 2
 
 
+def spin_class_multiplicity(symbol: str, charge: int, spin_class: str) -> int:
+    """Route a stated `spin_class` to the ion's own multiplicity.
+
+    A bare metal ion's multiplicity was, until now, a literal every caller had to get
+    right by hand — and nothing checked it against `oxidation_state`, so a `spin_class`
+    of "ls" on a Cu(II) centre (d9: one unpaired electron, no possible singlet) sailed
+    through as `multiplicity=1` right up until `check_spin` started looking.  This is the
+    one place "ls means minimal, hs means Hund's-rule maximal" is decided, so the two
+    conventions cannot drift apart between call sites again.
+    """
+    if spin_class == "hs":
+        return high_spin_multiplicity(symbol, charge)
+    if spin_class == "ls":
+        return minimal_multiplicity([symbol], charge)
+    raise ValueError(
+        f"spin_class {spin_class!r} has no wired multiplicity convention (only 'ls' and "
+        "'hs' are); state the ion's multiplicity through one of those, not a guess")
+
+
+def combined_multiplicity(*multiplicities: int) -> int:
+    """Total multiplicity of independent centres: unpaired electrons add, multiplicities don't.
+
+    A doublet metal centre (one unpaired electron) next to a closed-shell singlet
+    ligand is a doublet complex, not `1 * 2`.  This is the same sum-of-(2S) arithmetic
+    `examples.fe3_mu3_oxo` already does by hand for a trinuclear cluster, written once so
+    a mononuclear complex (one metal, one ligand set) uses it too.
+    """
+    return sum(m - 1 for m in multiplicities) + 1
+
+
 _Z = {
     "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
     "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18,

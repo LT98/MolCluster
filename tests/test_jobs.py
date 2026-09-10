@@ -227,7 +227,21 @@ def test_a_version_3_spec_comes_forward_without_inventing_a_model(tmp_path):
         "molecules": [{"name": "x", "smiles": "O", "multiplicity": 1,
                        "max_deprotonations": None}]})
     assert spec.ml_model is None
-    assert spec.to_dict()["spec_version"] == 4
+    assert spec.to_dict()["spec_version"] == 5
+
+
+def test_a_version_4_spec_drops_the_stale_metal_multiplicity():
+    """v5 removes `MetalSpec.multiplicity` — it was never kept in sync with
+    `oxidation_state`/`spin_class`, which is exactly how a Cu(II) centre ended up
+    stored as a singlet.  A v4 spec's stored value is dropped, not trusted."""
+    spec = BuildSpec.from_dict({
+        "spec_version": 4,
+        "molecules": [{"name": "x", "smiles": "O", "multiplicity": 1,
+                       "max_deprotonations": None}],
+        "metals": [{"symbol": "Cu", "oxidation_state": 2, "spin_class": "ls",
+                    "multiplicity": 1}]})
+    assert not hasattr(spec.metals[0], "multiplicity")
+    assert spec.metals[0].spin_class == "ls"
 
 
 def test_a_spec_may_name_the_ml_potential_and_a_typo_is_refused():

@@ -34,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from mofsbu.config import data_root                                        # noqa: E402
+from mofsbu.energy.backends import (                                       # noqa: E402
+    combined_multiplicity, spin_class_multiplicity,
+)
 from mofsbu.geometry.embed import embed_molecule, to_xyz                   # noqa: E402
 from mofsbu.geometry.placer import (                                       # noqa: E402
     GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit,
@@ -182,7 +185,12 @@ def main(argv: list[str] | None = None) -> int:
                                .replace(" ", ""), source="build.py")
 
         if a.metal:
-            metal_g = TypedGraph(charge=a.oxidation_state, multiplicity=1,
+            # The bare ion's own multiplicity comes from its spin_class, not a literal
+            # 1 — a Cu(II) "ls" ion is a doublet (d9, one unpaired electron); no
+            # singlet is reachable, and MACE-OMOL-0's check_spin will say so.
+            metal_multiplicity = spin_class_multiplicity(
+                a.metal, a.oxidation_state, a.spin)
+            metal_g = TypedGraph(charge=a.oxidation_state, multiplicity=metal_multiplicity,
                                  name=f"{a.metal}{a.oxidation_state:+d}")
             metal_g.add_atom(a.metal, oxidation_state=a.oxidation_state, spin_class=a.spin)
             metal_id = put_structure(reg, metal_g, tags=["metal"]).id
@@ -230,7 +238,14 @@ def main(argv: list[str] | None = None) -> int:
                                 continue
                             charge = a.oxidation_state + proto.charge * n_lig
                             complex_mol = to_rdkit(a.metal, ligands, result)
-                            cg = from_rdkit(complex_mol, charge=charge, multiplicity=multiplicity,
+                            # Unpaired electrons add, multiplicities don't: the metal
+                            # centre's own multiplicity combines with the ligand's
+                            # rather than the ligand's overwriting it (that was the bug
+                            # — a Cu(II) complex requested as a singlet).
+                            complex_multiplicity = combined_multiplicity(
+                                metal_multiplicity, multiplicity)
+                            cg = from_rdkit(complex_mol, charge=charge,
+                                            multiplicity=complex_multiplicity,
                                             oxidation_states={0: a.oxidation_state},
                                             spin_classes={0: a.spin})
                             cput = put_structure(
