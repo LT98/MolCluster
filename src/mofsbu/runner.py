@@ -24,7 +24,8 @@ from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
 from mofsbu.registry import (
-    MethodSpec, Provenance, Registry, alias_fragment, put_geometry, put_sites, put_structure,
+    MethodSpec, Provenance, Registry, alias_fragment, catalog_drift, put_geometry,
+    put_site_state, put_sites, put_structure,
 )
 from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
@@ -32,8 +33,9 @@ from mofsbu.registry.jobs import (
     outcome_summary, set_diagnostics, task_counts,
 )
 from mofsbu.sites.frames import BindingMode
-from mofsbu.sites.model import chelate_pockets, find_pockets, perceive
+from mofsbu.sites.model import find_pockets, perceive, shifting_pocket_donors
 from mofsbu.sites.protomers import enumerate_protomers
+from mofsbu.sites.state import refresh_state
 from mofsbu.spec import BuildSpec
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MofsbuError
 
@@ -338,6 +340,42 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     return Outcome(structure_id, geom.id, None, geom.created, detail)
 
 
+def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
+                  graph: TypedGraph, fidelity: Fidelity) -> dict[str, Any]:
+    """Perceive once, then derive state from that one perception.
+
+    Both halves of D5 are written here, in this order, deliberately: `refresh_state` is
+    handed the very list that went into `site_catalog`, so the two tiers cannot disagree
+    about which atoms are donors.  Perception happening anywhere else in a build is the
+    failure mode `tests/test_sites_state.py::test_perception_runs_once_per_structure`
+    exists to catch.
+    """
+    sites = perceive(mol)
+    drift = catalog_drift(reg, structure_id, sites)
+    put_sites(reg, structure_id, sites)
+    conf = mol.GetConformer()
+    coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
+               conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
+    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    pocket_donors = shifting_pocket_donors(mol, sites)
+    states = refresh_state(sites, coords, graph=graph, symbols=symbols,
+                           pocket_donors=pocket_donors, fidelity=fidelity)
+    n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity)
+    report: dict[str, Any] = {
+        "n_sites": len(sites),
+        "n_open": sum(1 for s in states if s.is_open),
+        "n_provisional": sum(1 for s in states
+                             if s.ease is not None and s.ease.provisional)}
+    if drift:
+        # Reported, never swallowed.  See `registry.api.catalog_drift`: this fires when
+        # two routes to one identity render the same chemistry as different resonance
+        # forms, and it is a finding about the perception/identity seam, not a task
+        # failure — the build is fine and the first catalog stands.
+        report["catalog_drift"] = drift
+        report["n_state_dropped"] = len(states) - n_stored
+    return report
+
+
 def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Run one task.  Returns what it produced AND what it took to produce it."""
     payload = task.payload
@@ -355,7 +393,7 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
                        name=name)
         put = put_structure(reg, g, tags=[molecule.name, "ligand"])
         geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
-        put_sites(reg, put.id, perceive(mol))
+        detail["sites"] = _record_sites(reg, put.id, geom.id, mol, g, Fidelity.FF)
         for frag in decompose(g):
             alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
@@ -437,7 +475,7 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         geom = put_geometry(reg, put.id, result.to_xyz(name), fidelity=Fidelity.RAW,
                             method=BUILD, choice_vector=result.choice_vector,
                             seed=spec.seed, qc=result.report.to_dict())
-        put_sites(reg, put.id, perceive(complex_mol))
+        detail["sites"] = _record_sites(reg, put.id, geom.id, complex_mol, g, Fidelity.RAW)
         detail["qc"] = result.report.to_dict()
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 

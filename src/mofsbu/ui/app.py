@@ -215,7 +215,7 @@ def create_app(db_path: Path, store_root: Path) -> FastAPI:
         has_metal_metal: bool | None = None,
         donor_type: list[str] | None = Query(None, description="populated by put_sites"),
         n_open_sites_min: int | None = Query(None,
-            description="RESERVED: always NULL until site_state exists"),
+            description="open sites on the best geometry; NULL until state is computed"),
         fidelity_min: int | None = None,
         converged: bool | None = None,
         energy_min: float | None = None,

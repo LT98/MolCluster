@@ -481,18 +481,24 @@ from `canonical_order`), `sites/frames.py` (**promote `_donor_placement_frame` o
 — D13's central move), `live_dof` / `binding_modes` / `torsion_wells` tables, `site_catalog` +
 `site_state` writes, heuristic ease from M1, `sites/inherit.py`.
 
-**Decision gate: C5** — confirm the zero-QM heuristic floor (pKa table + HSAB tag +
-provisional-flag) is the accepted v1 floor before `site_state` rows start accumulating.
+**Decision gate: C5** — ✅ **called as D18** (design doc §7). Zero-QM heuristic floor; absent
+components stay absent; `confidence = coverage × sharpness`; `provisional` = "the table value is
+the wrong question here". C7 deliberately left open — the floor is partner-free by design.
 
-**Exit gate**
-- **Canonical-index stability:** shuffle input atom order → identical `site_catalog` rows.
-- **Perceive-once:** an assertion/counter proving `find_donor_sites` runs once per structure and
-  `refresh_state` never re-perceives.
-- **Frame reproducibility:** a frame read back from the DB reproduces the re-derived frame to 1e-6
-  (this is the whole point of promoting it out of the stochastic search).
-- Known-molecule coverage: BTC → 3 carboxylate sites each with mono/chelate/bridge modes;
-  EDTA → 4 carboxylate O + 2 backbone N; bipy → 2 pyridyl N with `TORSION_LIVE`;
-  aqua/primary-amine → `TORSION_FREE`.
+**Exit gate** — all four met; tests in `tests/test_sites_state.py`.
+- ✅ **Canonical-index stability:** shuffle input atom order → identical `site_catalog` rows.
+- ✅ **Perceive-once:** a counter proving `find_donor_sites` runs once per structure and
+  `refresh_state` never re-perceives. (Patched in *both* namespaces — `sites.model` binds the
+  name at import, so patching only the defining module makes the test pass by observing
+  nothing.)
+- ✅ **Frame reproducibility:** a frame read back from the DB reproduces the re-derived frame to
+  1e-6 (this is the whole point of promoting it out of the stochastic search).
+- ✅ Known-molecule coverage: BTC → 3 carboxylate **pockets** each offering mono/chelate/mu2;
+  EDTA → 4 carboxylate groups (8 O) + 2 backbone N; bipy → 2 pyridyl N with `TORSION_LIVE`;
+  aqua/primary-amine → `TORSION_FREE`. *Wording reconciled:* this gate counted at GROUP level
+  and perception is per ATOM. Both are right and they are different layers — whether two donors
+  can chelate is a property of the **pair**, which is the pocket layer's question, not the
+  donor's.
 
 ---
 
@@ -622,7 +628,7 @@ behind the same API once the pipeline stops changing shape.
 | M2 | answer "are these two structures the same?" for arbitrary polynuclear species |
 | M3 | store, recall, and deduplicate every structure you've ever built; the legacy corpus is queryable |
 | M3.5 | **see it** — filter and search the registry in a browser, render any geometry in 3D |
-| M4 | ask a stored structure "what sites do you have, which are open, how accessible, how easy" |
+| M4 | ask a stored structure "what sites do you have, which are open, how accessible, how easy" — and get back a work list of the sites worth spending QM on |
 | M5 | build a structure from stored blocks, and rebuild it exactly from its provenance |
 | M6 | build real SBUs — paddlewheels, µ₃-oxo trimers — not just mononuclear nodes |
 | M7 | attach trustworthy relative energies to any of it |
@@ -679,12 +685,12 @@ that would fail if the claim stopped being true.**
 | Gate | Milestone | Forced by | What you need in hand to decide |
 |---|---|---|---|
 | **C8** — descriptor sourcing/provenance | **M1**, before the first table row | you can't type a pKa without deciding where it came from | a shortlist of sources (curated vs. dataset-pulled) and how the version gets pinned |
-| **C5** — activation-ease floor | **M4**, before `site_state` accumulates | `site_state` needs an ease field for `raw_construct` structures | the M1 table's coverage; the list of in-pocket donors that self-flag provisional |
+| ~~**C5** — activation-ease floor~~ | ~~**M4**~~ | **RESOLVED → D18** (rev 23) | — |
 | **C2** — L3 thresholds (θ_geom, energy window) | **M5**, at the first conformer generation | clustering can't run without numbers | the pairwise core-RMSD distribution over the M5 fixture set — calibrate, don't guess |
 | **C6** — barrier proxy | **M8**, before the first path score | `PathScore.max_barrier` needs a definition | whether the paddlewheel A-vs-B ordering is stable under the cheap proxies alone |
 | **C7** — partner dependence | **M8**, alongside C6 | `ease(site, partner)` is called at query time | how many (site, partner) pairs you actually intend to screen — the factorization only pays off if that number is large |
 
-Rule for all five: when a gate is called, **write the resolution into the design doc's Decision
+Rule for all of them: when a gate is called, **write the resolution into the design doc's Decision
 Ledger with a new D-number and a changelog line**, then code against it. A gate resolved only in
 your head is how the two documents drift apart.
 
@@ -715,6 +721,54 @@ your head is how the two documents drift apart.
 ---
 
 ## 9. Changelog
+
+- *(rev 23)* **M4's second half: `site_state` is populated, and C5 is called (D18).**
+  The perception half shipped in M3 and has been load-bearing since; the state half sat
+  behind an open decision gate, which is why `n_open_sites` was NULL, `BuildingBlock.
+  open_sites` raised, and three of four exit-gate items had no test.
+
+  * **C5 → D18.** The floor is the zero-QM heuristic tier, as §6.6 leaned. What the
+    leaning did not say, and what turned out to carry the weight: **an absent component
+    stays absent.** The scalar renormalises over the components actually present, so a
+    geometry-free record (`coverage` 0.55) and one with a steric term (0.80) are
+    distinguishable rather than both landing somewhere plausible. `confidence` answers
+    "how much of the model ran", not "how right is it". `provisional` marks sites where
+    **the table value is the wrong question** — in-pocket donors, wide-sigma class rows —
+    which makes the floor's most useful output a QM work list rather than a verdict.
+  * **MACE-OMOL-0 is why this was callable now**, and the reasoning is worth keeping:
+    deprotonation is a charge change, so a charge-blind potential is blind to it *in
+    principle*. Before rev 22 the ladder for the model's primary component ran
+    `table → (nothing) → xTB` — the ML rung could not serve it at all. Ratifying a floor
+    while the only rung above it is the expensive one is a bad position; now it isn't.
+    `descriptors.ease.deprotonation_energy` is that rung and takes any charge-aware
+    backend rather than naming one.
+  * **`Fidelity.HEURISTIC = -1`**, below `RAW`. The ladder ranks *evidence*, and a pKa read
+    out of a file is not the same class of thing as a constructed geometry. Negative so
+    every existing `>=` comparison keeps its meaning; `put_geometry` refuses to store a
+    geometry at it, because there is no such thing.
+  * **Two seams found while building, neither of them a bug in either party:**
+    - `site_catalog` **is not a pure function of identity.** D15 excludes bond order from
+      the hash so C=O/C–O⁻ resonance forms hash identically; perception reads bond order.
+      A monodentate acetate bound through either oxygen is one identity whose two routes
+      perceive different donor sets. First catalog stands, `registry.catalog_drift`
+      reports the disagreement into the run detail, and resonance-invariant perception is
+      filed separately — it needs its own fixture set.
+    - **`put_sites` deleted before inserting, and the FK cascade took `site_state` with
+      it.** Under D2, re-deriving an identity the registry already has is the *expected*
+      outcome for most of an enumeration, so this fired constantly: a structure built
+      twice kept state only on its second geometry, and `n_open_sites` counted against a
+      best geometry that no longer had any. The catalog is geometry-independent; it is now
+      written once per structure and kept.
+  * Unfenced: `n_open_sites` is populated from the best geometry's states, the `?sites`
+    naming placeholder is gone, the UI filter is no longer RESERVED, and
+    `BuildingBlock.open_sites` works — though it **raises on a block with no state** rather
+    than treating unknown as open, which is how an assembly step would confidently join
+    onto a buried donor.
+  * `sites/inherit.py` lands for M5: sites are remapped through the atom map, frames come
+    across untouched (re-deriving them would put the stochastic search back in the path
+    D13 exists to take it out of), and a non-injective atom map is an error.
+
+  336 passed, 1 skipped.
 
 - *(rev 22)* **`ml_go` named a rung and was quietly one theory: MACE-OMOL-0 alongside
   MACE-MP-0.**

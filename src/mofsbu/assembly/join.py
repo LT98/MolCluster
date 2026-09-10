@@ -38,11 +38,32 @@ class BuildingBlock:
     sites: tuple[Site, ...]
     geometry: Any | None = None
     structure_id: int | None = None
+    #: per-geometry state from `sites.state.refresh_state`, keyed by atom index.  Absent
+    #: means "not computed for this block", which is not the same as "nothing is open".
+    state: dict[int, Any] | None = None
 
     def open_sites(self) -> tuple[Site, ...]:
-        raise NotBuiltYet(
-            "BuildingBlock.open_sites needs site_state (open vs occupied) — M4, second half"
-        )
+        """The sites a join may actually use.
+
+        Open means: not already dative-bonded to a metal, and not sterically walled off
+        (`sites.state.SiteStatus`).  Both halves matter — "both ends are unoccupied" is
+        the test §6.3 explicitly says is not sufficient, and a site the metal cannot
+        reach is not a site a join can use however free its valence looks.
+
+        A block with no state raises rather than returning every site.  Treating unknown
+        as open is how an assembly step would confidently join onto a buried donor.
+        """
+        if self.state is None:
+            raise NotBuiltYet(
+                "this BuildingBlock carries no site state, so 'open' is unknown. Run "
+                "sites.state.refresh_state on its geometry (or load it with "
+                "registry.get_site_state) — returning every site would silently treat "
+                "occupied and buried donors as available.")
+        from mofsbu.sites.state import SiteStatus
+
+        return tuple(s for s in self.sites
+                     if getattr(self.state.get(s.atom_idx), "status", None)
+                     is SiteStatus.OPEN)
 
 
 @dataclass(frozen=True)

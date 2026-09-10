@@ -311,6 +311,14 @@ def put_geometry(
     Fidelity is a property of the geometry, never of the structure (D4), so one
     identity can carry a raw construct, an xTB relaxation and a DFT relaxation at once.
     """
+    if fidelity is Fidelity.HEURISTIC:
+        # HEURISTIC means "a table said so, nothing was computed about THIS structure".
+        # There is no such thing as a geometry produced that way, and letting one in
+        # would put coordinates below `RAW` on a ladder every best-geometry query reads
+        # as "more evidence is better".
+        raise RegistryError(
+            "Fidelity.HEURISTIC is an activation-ease rung (D18), not a geometry rung; "
+            "a geometry starts at RAW")
     struct = reg.conn.execute(
         "SELECT n_atoms FROM structures WHERE id=?", (structure_id,)
     ).fetchone()
@@ -393,15 +401,32 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
 
 # ── sites (M4) ───────────────────────────────────────────────────────────────
 
-def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str = "perception/1") -> int:
-    """Write the site catalog for a structure.  Perceive once (D5).
+def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str = "perception/1",
+              reperceive: bool = False) -> int:
+    """Write the site catalog for a structure.  Perceive ONCE per structure (D5).
 
     Sites are keyed by CANONICAL atom index, taken from the order frozen at insert, so
-    they survive recall and re-ordering.  Re-running perception on the same structure
-    replaces the catalog rather than duplicating it.
+    they survive recall and re-ordering.
+
+    **A structure that already has a catalog keeps it.**  This used to `DELETE` first and
+    re-insert, which is wrong twice over.  `site_catalog` is geometry-INDEPENDENT (§6.3),
+    so a second build of the same identity has nothing new to say about it — and the
+    delete cascaded into `site_state`, silently destroying the per-geometry state of every
+    geometry already stored.  Under D2, re-deriving an identity the registry already has
+    is the EXPECTED outcome for most of an enumeration, so that cascade fired constantly:
+    a structure built twice ended up with state on its second geometry only, and
+    `n_open_sites` counted against a best geometry that no longer had any.
+
+    The first catalog written for an identity is the one that stands.  `catalog_drift`
+    reports whether a later perception disagreed; see its docstring for the case that is
+    known to produce one, which is real and is NOT this function's to fix.  Pass
+    `reperceive=True` to replace deliberately (and accept the loss of state rows).
     """
-    reg.conn.execute("DELETE FROM site_catalog WHERE structure_id=?", (structure_id,))
     cmap = canonical_map(reg, structure_id)
+    existing = get_sites(reg, structure_id)
+    if existing and not reperceive:
+        return len(existing)
+    reg.conn.execute("DELETE FROM site_catalog WHERE structure_id=?", (structure_id,))
     n = 0
     for site in sites:
         canonical_idx = cmap[site.atom_idx]
@@ -426,6 +451,125 @@ def get_sites(reg: Registry, structure_id: int) -> list:
     return list(reg.conn.execute(
         "SELECT * FROM site_catalog WHERE structure_id=? ORDER BY canonical_idx",
         (structure_id,)))
+
+
+def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
+    """Donor types where a fresh perception disagrees with the stored catalog.
+
+    Empty for almost everything.  The case that is NOT empty, and is worth knowing about
+    rather than asserting away: **identity ignores bond order (D15) and perception reads
+    it.**  A monodentate acetate bound through either of its two oxygens is ONE identity —
+    C=O/C-O(-) resonance forms are deliberately hashed the same — but `to_rdkit` renders
+    the two routes as `[O]=C([O-])C` and `[O-]C(=O)C`, and perception sees two
+    carboxylate donors in the second and one in the first.
+
+    So the catalog is not a pure function of the identity it hangs off.  That is a real
+    seam between two deliberate decisions, not a bug in either one, and closing it means
+    making perception resonance-invariant — a perception-layer change with its own
+    fixture set, not something to do inside a registry write.  Until then the first
+    catalog stands and the disagreement is REPORTED, because a site model that quietly
+    depends on which route reached the structure first is the kind of thing that is very
+    hard to notice later.
+    """
+    cmap = canonical_map(reg, structure_id)
+    stored = {(r["canonical_idx"], r["donor_type"]) for r in get_sites(reg, structure_id)}
+    if not stored:
+        return []
+    incoming = {(cmap[s.atom_idx], s.donor_type) for s in sites}
+    return [f"{'stored' if x in stored else 'perceived'} idx={x[0]} {x[1]}"
+            for x in sorted(stored ^ incoming)]
+
+
+def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: list,
+                   *, fidelity: Fidelity = Fidelity.RAW) -> int:
+    """Write per-geometry site state.  The second tier of D5.
+
+    Keyed `(site_id, geometry_id)`: one structure's sites have as many state rows as it
+    has geometries, because that is the point — a site buried in the raw construct and
+    exposed after an xTB relaxation is the same catalog row with two different states,
+    and D11 makes that flip a conformer trigger.
+
+    `structures.n_open_sites` is refreshed from the BEST geometry's states only.  Summing
+    across geometries would count one site once per relaxation, and a structure relaxed
+    twice would look twice as reactive as the same structure relaxed once.
+    """
+    cmap = canonical_map(reg, structure_id)
+    by_canonical = {row["canonical_idx"]: row["id"]
+                    for row in get_sites(reg, structure_id)}
+    n = 0
+    for state in states:
+        canonical_idx = cmap[state.atom_idx]
+        site_id = by_canonical.get(canonical_idx)
+        if site_id is None:
+            # This geometry perceived a donor the stored catalog does not have — the
+            # resonance seam `catalog_drift` documents.  The catalog is the authority on
+            # which sites EXIST (it is the geometry-independent tier), so a state with no
+            # catalog row is dropped rather than inventing a site that this structure's
+            # identity does not agree it has.
+            continue
+        from mofsbu.sites.state import STATE_METHOD
+
+        ease = state.ease
+        spec = ease.method if ease is not None else STATE_METHOD
+        reg.conn.execute(
+            "INSERT INTO site_state (site_id, geometry_id, status, pka, fukui, "
+            " buried_vol, marginal_de, ease_scalar, ease_components_json, confidence, "
+            " provisional, fidelity, method_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(site_id, geometry_id) DO UPDATE SET "
+            " status=excluded.status, pka=excluded.pka, fukui=excluded.fukui, "
+            " buried_vol=excluded.buried_vol, marginal_de=excluded.marginal_de, "
+            " ease_scalar=excluded.ease_scalar, "
+            " ease_components_json=excluded.ease_components_json, "
+            " confidence=excluded.confidence, provisional=excluded.provisional, "
+            " fidelity=excluded.fidelity, method_id=excluded.method_id",
+            (site_id, geometry_id, state.status.value, state.pka, state.fukui,
+             state.buried_vol, state.marginal_de,
+             ease.scalar if ease else None,
+             json.dumps(ease.components) if ease else None,
+             ease.confidence if ease else None,
+             int(ease.provisional) if ease else 0,
+             int(fidelity), method_id(reg, spec)))
+        n += 1
+    _refresh_open_sites(reg, structure_id)
+    return n
+
+
+def _refresh_open_sites(reg: Registry, structure_id: int) -> None:
+    """`structures.n_open_sites` from the best geometry's state rows.
+
+    NULL when the structure has no state rows at all — which is a different fact from
+    zero, and the reason this column stayed NULL for three milestones rather than being
+    filled with a plausible integer.
+    """
+    row = reg.conn.execute(
+        "SELECT COUNT(*) AS n FROM site_state ss "
+        " JOIN site_catalog sc ON sc.id = ss.site_id "
+        " JOIN structures s ON s.id = sc.structure_id "
+        "WHERE sc.structure_id=? AND ss.geometry_id = s.best_geometry_id "
+        "  AND ss.status='open'", (structure_id,)).fetchone()
+    any_state = reg.conn.execute(
+        "SELECT 1 FROM site_state ss JOIN site_catalog sc ON sc.id = ss.site_id "
+        "WHERE sc.structure_id=? LIMIT 1", (structure_id,)).fetchone()
+    reg.conn.execute("UPDATE structures SET n_open_sites=? WHERE id=?",
+                     (int(row["n"]) if any_state else None, structure_id))
+
+
+def get_site_state(reg: Registry, structure_id: int,
+                   geometry_id: int | None = None) -> list:
+    """State rows for a structure, for one geometry or for its best one."""
+    if geometry_id is None:
+        best = reg.conn.execute(
+            "SELECT best_geometry_id FROM structures WHERE id=?", (structure_id,)
+        ).fetchone()
+        if best is None or best["best_geometry_id"] is None:
+            return []
+        geometry_id = best["best_geometry_id"]
+    return list(reg.conn.execute(
+        "SELECT ss.*, sc.canonical_idx, sc.donor_type FROM site_state ss "
+        " JOIN site_catalog sc ON sc.id = ss.site_id "
+        "WHERE sc.structure_id=? AND ss.geometry_id=? ORDER BY sc.canonical_idx",
+        (structure_id, geometry_id)))
 
 
 # ── reads ────────────────────────────────────────────────────────────────────
