@@ -367,10 +367,12 @@ def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
         "n_provisional": sum(1 for s in states
                              if s.ease is not None and s.ease.provisional)}
     if drift:
-        # Reported, never swallowed.  See `registry.api.catalog_drift`: this fires when
-        # two routes to one identity render the same chemistry as different resonance
-        # forms, and it is a finding about the perception/identity seam, not a task
-        # failure — the build is fine and the first catalog stands.
+        # Reported, never swallowed.  See `registry.api.catalog_drift`.  The case this
+        # used to fire on — two routes to one identity rendering the same chemistry as
+        # different resonance forms — is closed in perception; anything that reaches here
+        # now is a fresh disagreement about which atoms are donors, and it is still a
+        # finding rather than a task failure, because the build is fine and the first
+        # catalog stands.
         report["catalog_drift"] = drift
         report["n_state_dropped"] = len(states) - n_stored
     return report

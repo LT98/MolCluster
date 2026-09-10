@@ -11,6 +11,11 @@ per-molecule functional-group whitelist.  Two categories:
            rather than one pattern per group, so it generalises to donors nobody
            registered in advance.
 
+  GROUP    a delocalised oxo-acid whose oxygens are one donor set rather than several
+           atoms that happen to be adjacent.  Matched as a whole group, because
+           classifying its oxygens one at a time reads bond order and bond order is
+           exactly what resonance moves around.
+
 Two donor types are ADDED here that the legacy list does not cover, both of which the
 Zn/THQ test system needs and neither of which is exotic:
 
@@ -30,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from rdkit import Chem
+
+from mofsbu.graph._types import METALS
 
 # (donor_type, SMARTS, formal charge on the donor after deprotonation)
 # Order matters: earlier patterns claim an atom first.
@@ -66,7 +73,39 @@ LABILE_DONOR_PATTERNS: list[tuple[str, str, int]] = [
 ]
 
 _LABILE = [(name, Chem.MolFromSmarts(smarts), q) for name, smarts, q in LABILE_DONOR_PATTERNS]
-_CARBOXYLATE_C = Chem.MolFromSmarts("[CX3](=[OX1])[OX1,OX2]")
+
+# A carboxylate's two oxygens are ONE donor set, not two atoms that happen to sit next to
+# each other.  Classified atom by atom they come out differently depending on which
+# resonance form RDKit is holding: `[O-]C(=O)C` yields two carboxylate oxygens and
+# `[O]=C([O-])C` yields one, and which of those a stored structure gets depends on which
+# build route reached it first.  D15 hashes the two forms the SAME on purpose — bond order
+# is excluded from the L1 hash precisely so resonance does not split an identity — so a
+# site catalog that tells them apart is not a function of the identity it hangs off.  That
+# is the seam `registry.api.catalog_drift` was reporting, and this table is what closes it.
+#
+# The GROUP is matched, never the individual oxygen: the central atom by SMARTS, then every
+# terminal oxygen on it, and all of them get one donor type and one charge.  Nothing here
+# reads a bond order, which is what makes it resonance-invariant, and metal neighbours are
+# ignored so an oxygen that is already coordinated is still part of its own group.
+#
+# The taxonomy is deliberately COARSE — carbonate's oxygens come out `carboxylate_O`,
+# sulfate's `sulfonate_O`, a phosphate diester's `phosphonate_O`.  Each of those shares a
+# donor element, a frame model and a set of binding modes with the group it is named for,
+# and the alternative is a name per oxo-acid, which is a promise to have anticipated every
+# one of them — the mistake `Pocket` refuses to make.  Split a name out when something
+# downstream needs to act on the difference, not before.
+#
+# (donor_type, SMARTS for the group's CENTRAL atom, terminal oxygens the group takes)
+DELOCALISED_GROUPS: list[tuple[str, str, int]] = [
+    ("carboxylate_O", "[CX3]", 2),      # carboxylic acid, carboxylate, carbonate
+    ("sulfonate_O",   "[SX4]", 3),      # sulfonate, sulfate
+    ("sulfinate_O",   "[SX3]", 2),      # sulfinate
+    ("phosphonate_O", "[PX4]", 2),      # phosphinate, phosphonate, phosphate
+    ("nitro_O",       "[NX3]", 2),      # nitro, nitrate
+    ("boronate_O",    "[BX3]", 2),      # boronate, borate
+]
+
+_GROUPS = [(name, Chem.MolFromSmarts(smarts), n) for name, smarts, n in DELOCALISED_GROUPS]
 
 
 @dataclass(frozen=True)
@@ -109,6 +148,52 @@ def _n_hydrogens(atom: Chem.Atom) -> int:
     """
     return atom.GetTotalNumHs() + sum(
         1 for nb in atom.GetNeighbors() if nb.GetAtomicNum() == 1)
+
+
+def _terminal_oxygens(mol: Chem.Mol, centre: int) -> list[Chem.Atom]:
+    """Oxygens on `centre` with no heavy neighbour of their own but a metal.
+
+    An ester's -OR oxygen has a second heavy neighbour and is not part of the delocalised
+    set; a coordinated oxygen's only extra neighbour is the metal it donates to, and that
+    is coordination rather than constitution, so it still is.  Protonated oxygens count
+    here — a carboxylic ACID is the same group as its carboxylate, which is what lets the
+    C=O of `CC(=O)O` be typed by the group while the O-H stays the labile list's business.
+    """
+    return [
+        nb for nb in mol.GetAtomWithIdx(centre).GetNeighbors()
+        if nb.GetSymbol() == "O"
+        and all(far.GetIdx() == centre or far.GetSymbol() in METALS
+                for far in nb.GetNeighbors() if far.GetAtomicNum() > 1)
+    ]
+
+
+def _find_delocalised(mol: Chem.Mol, claimed: set[int]) -> list[DonorSite]:
+    """Whole-group donors: every terminal oxygen of an oxo-acid, typed identically."""
+    sites: list[DonorSite] = []
+    centres: set[int] = set()
+    for name, patt, n_oxygens in _GROUPS:
+        if patt is None:
+            continue
+        for (centre,) in mol.GetSubstructMatches(patt, uniquify=True):
+            if centre in centres:
+                continue
+            oxygens = _terminal_oxygens(mol, centre)
+            if len(oxygens) < n_oxygens:
+                continue
+            centres.add(centre)
+            # ONE charge for the whole group, read off the group and not off whichever
+            # oxygen the resonance form parked the minus sign on.  Anionic or not is the
+            # only distinction a donor makes (`LABILE_DONOR_PATTERNS` says -1 per site for
+            # a diprotic acid too), so a doubly-deprotonated phosphonate is two -1 donors
+            # rather than one atom carrying -2.
+            group_charge = (mol.GetAtomWithIdx(centre).GetFormalCharge()
+                            + sum(o.GetFormalCharge() for o in oxygens))
+            charge_after = -1 if group_charge < 0 else 0
+            for oxygen in oxygens:
+                if oxygen.GetIdx() in claimed or _n_hydrogens(oxygen) > 0:
+                    continue        # still protonated: the labile list activates it
+                sites.append(DonorSite(oxygen.GetIdx(), name, False, None, charge_after))
+    return sites
 
 
 def _classify_anionic(atom: Chem.Atom) -> str | None:
@@ -187,8 +272,9 @@ def _classify_neutral(atom: Chem.Atom) -> str | None:
         bonds = atom.GetBonds()
         if len(heavy) == 1 and any(b.GetBondTypeAsDouble() == 2 for b in bonds):
             # ADDED: a ketone / quinone oxygen is a donor, and in a hydroxyquinone it is
-            # half of the chelate pocket.  Carboxylate oxygens are re-labelled by the
-            # caller, which knows the whole carboxylate group rather than one atom.
+            # half of the chelate pocket.  An oxo-acid's oxygens never reach this line —
+            # `_find_delocalised` has already claimed them as a group, which is what keeps
+            # a carboxylate from being read as "one carbonyl and one anion".
             return "carbonyl_O"
         if len(heavy) == 2 and all(b.GetBondTypeAsDouble() == 1 for b in bonds):
             return "ether_O"
@@ -208,31 +294,28 @@ def _classify_neutral(atom: Chem.Atom) -> str | None:
     return None
 
 
-def _carboxylate_oxygens(mol: Chem.Mol) -> set[int]:
-    out: set[int] = set()
-    if _CARBOXYLATE_C is None:
-        return out
-    for match in mol.GetSubstructMatches(_CARBOXYLATE_C, uniquify=True):
-        out.update(a for a in match if mol.GetAtomWithIdx(a).GetSymbol() == "O")
-    return out
-
-
 def find_donor_sites(mol: Chem.Mol) -> list[DonorSite]:
-    """Every plausible donor in one pass, sorted by atom index for determinism."""
+    """Every plausible donor in one pass, sorted by atom index for determinism.
+
+    Three passes, and the order is the point.  The labile acids claim their protonated
+    donors first; the delocalised groups then claim whole oxo-acid oxygen sets; the
+    per-atom valence rules take what is left.  Groups run BEFORE the per-atom rules
+    because the per-atom rules are the ones that read bond order, and an oxygen typed
+    from its own bond order is typed from whichever resonance form happened to arrive.
+    """
     labile = _find_labile(mol)
     claimed = {s.idx for s in labile}
-    carboxylate_o = _carboxylate_oxygens(mol)
+    grouped = _find_delocalised(mol, claimed)
+    claimed |= {s.idx for s in grouped}
     neutral: list[DonorSite] = []
     for atom in mol.GetAtoms():
         idx = atom.GetIdx()
         if idx in claimed:
             continue
         dtype = _classify_neutral(atom)
-        if dtype == "carbonyl_O" and idx in carboxylate_o:
-            dtype = "carboxylate_O"
         if dtype is not None:
             neutral.append(DonorSite(idx, dtype, False, None, atom.GetFormalCharge()))
-    return sorted(labile + neutral, key=lambda s: s.idx)
+    return sorted(labile + grouped + neutral, key=lambda s: s.idx)
 
 
 def deprotonate(mol: Chem.Mol, sites: list[DonorSite]) -> tuple[Chem.Mol, list[DonorSite]]:

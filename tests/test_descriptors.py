@@ -31,12 +31,13 @@ SRC = Path(perception.__file__)
 def perceivable_donor_types() -> set[str]:
     """Every donor type the perception code can produce, read out of the source.
 
-    Reading the source rather than importing a list is deliberate: the three producers
-    are a data table, a chain of `return "..."` in `_classify_anionic`, and an f-string
-    for halides.  A hand-maintained union would be a fourth place to forget.
+    Reading the source rather than importing a list is deliberate: the four producers
+    are two data tables, a chain of `return "..."` in `_classify_anionic`, and an
+    f-string for halides.  A hand-maintained union would be a fifth place to forget.
     """
     text = SRC.read_text(encoding="utf-8")
     types = {name for name, _, _ in perception.LABILE_DONOR_PATTERNS}
+    types |= {name for name, _, _ in perception.DELOCALISED_GROUPS}
     types |= set(re.findall(r'return "(\w+_\w+)"', text))
     if 'return f"halide_{sym}"' in text:
         types |= {f"halide_{x}" for x in ("F", "Cl", "Br", "I")}

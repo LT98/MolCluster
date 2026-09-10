@@ -456,20 +456,22 @@ def get_sites(reg: Registry, structure_id: int) -> list:
 def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
     """Donor types where a fresh perception disagrees with the stored catalog.
 
-    Empty for almost everything.  The case that is NOT empty, and is worth knowing about
-    rather than asserting away: **identity ignores bond order (D15) and perception reads
-    it.**  A monodentate acetate bound through either of its two oxygens is ONE identity —
-    C=O/C-O(-) resonance forms are deliberately hashed the same — but `to_rdkit` renders
-    the two routes as `[O]=C([O-])C` and `[O-]C(=O)C`, and perception sees two
-    carboxylate donors in the second and one in the first.
+    Expected to be empty, and now a guard rather than a known finding.  It was written
+    for a case that was NOT empty: **identity ignores bond order (D15) and perception
+    read it.**  A monodentate acetate bound through either of its two oxygens is ONE
+    identity — C=O/C-O(-) resonance forms are deliberately hashed the same — but
+    `to_rdkit` renders the two routes as `[O]=C([O-])C` and `[O-]C(=O)C`, and perception
+    saw two carboxylate donors in the second and one in the first, so the catalog was not
+    a pure function of the identity it hung off.
 
-    So the catalog is not a pure function of the identity it hangs off.  That is a real
-    seam between two deliberate decisions, not a bug in either one, and closing it means
-    making perception resonance-invariant — a perception-layer change with its own
-    fixture set, not something to do inside a registry write.  Until then the first
-    catalog stands and the disagreement is REPORTED, because a site model that quietly
-    depends on which route reached the structure first is the kind of thing that is very
-    hard to notice later.
+    `sites.perception.DELOCALISED_GROUPS` closed that: an oxo-acid is matched as a whole
+    group and its oxygens are typed and charged uniformly, with no bond order read
+    anywhere.  `tests/test_sites_state.py::test_no_build_route_drifts_from_the_stored_catalog`
+    is the gate, over the build routes in `tests/build_routes.py`.
+
+    This stays because `put_sites` keeps the FIRST catalog an identity is given, so a
+    perception that becomes route-dependent again would silently tell the second route it
+    was wrong about its own donors.  Reported, never swallowed.
     """
     cmap = canonical_map(reg, structure_id)
     stored = {(r["canonical_idx"], r["donor_type"]) for r in get_sites(reg, structure_id)}

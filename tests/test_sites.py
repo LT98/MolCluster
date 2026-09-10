@@ -6,6 +6,7 @@ from collections import Counter
 import numpy as np
 import pytest
 
+from build_routes import ROUTE_CASES, build, donor_set, routes
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph.from_mol import from_smiles, mol_from_smiles
 from mofsbu.sites.frames import LiveDOF, live_dof, torsion_wells
@@ -91,6 +92,49 @@ def test_only_live_torsions_branch():
     assert live_dof("aqua_O") is LiveDOF.TORSION_FREE
     assert len(torsion_wells("carboxylate_O")) == 2
     assert live_dof("carboxylate_O") is LiveDOF.TORSION_LIVE
+
+
+# ── perception does not depend on the route that reached the structure ───────
+
+@pytest.mark.parametrize("name,smiles,donor_type,denticity", ROUTE_CASES,
+                         ids=[c[0] for c in ROUTE_CASES])
+def test_every_build_route_to_one_identity_perceives_the_same_donors(
+        name, smiles, donor_type, denticity):
+    """The seam `registry.api.catalog_drift` was reporting, closed at its source.
+
+    Binding a metal through one oxygen of a delocalised group forces `to_rdkit` to render
+    the OTHER oxygen as the anion, so the two routes to one identity arrive as two
+    resonance forms.  D15 hashes them the same on purpose; perception used to read the
+    bond orders and disagree, so a structure's donor set depended on which build got
+    there first.  Atom indices are directly comparable here — see `build_routes`.
+    """
+    mol, all_routes = routes(smiles, donor_type, denticity)
+    assert len(all_routes) > 1, f"{name}: needs at least two routes to compare"
+    perceived = {r: donor_set(build(mol, r, donor_type)) for r in all_routes}
+    first = perceived[all_routes[0]]
+    for route, found in perceived.items():
+        assert found == first, (
+            f"{name}: binding through {route} perceives {sorted(found)}, binding through "
+            f"{all_routes[0]} perceives {sorted(first)}. Same identity, different catalog.")
+
+
+@pytest.mark.parametrize("name,smiles,donor_type,denticity", ROUTE_CASES,
+                         ids=[c[0] for c in ROUTE_CASES])
+def test_a_coordinated_group_keeps_every_oxygen_it_had_when_free(
+        name, smiles, donor_type, denticity):
+    """Binding one oxygen must not delete the others from the catalog.
+
+    The original symptom: an acetate bound through its C=O oxygen perceived ONE
+    carboxylate donor instead of two, because the bound oxygen no longer looked like
+    anything the per-atom valence rules recognised.
+    """
+    mol, all_routes = routes(smiles, donor_type, denticity)
+    free = sum(1 for s in perceive(mol) if s.donor_type == donor_type)
+    for route in all_routes:
+        bound = sum(1 for s in perceive(build(mol, route, donor_type))
+                    if s.donor_type == donor_type)
+        assert bound == free, (
+            f"{name}: {free} {donor_type} free, {bound} after binding through {route}")
 
 
 def test_ammonium_keeps_its_charge_on_the_nitrogen():
