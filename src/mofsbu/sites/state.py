@@ -63,10 +63,18 @@ class SiteState:
     pka: float | None = None
     fukui: float | None = None
     marginal_de: float | None = None
+    #: Carried from the `Site` so `put_site_state` can tell one metal's vacancies apart.
+    #: They all sit on the same atom, so `atom_idx` alone does not identify a row.
+    slot: int = 0
+    role: str = "donor"
 
     @property
     def is_open(self) -> bool:
         return self.status is SiteStatus.OPEN
+
+    @property
+    def is_vacancy(self) -> bool:
+        return self.role == "vacancy"
 
 
 def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
@@ -120,9 +128,20 @@ def refresh_state(
     out: list[SiteState] = []
     for site in sites:
         occluded = buried_volume(coords, site, symbols=symbols)
-        in_pocket = site.atom_idx in pocket_donors
+        role = getattr(site, "role", "donor")
+        vacancy = role == "vacancy"
+        in_pocket = (not vacancy) and site.atom_idx in pocket_donors
 
-        if _occupied(graph, site.atom_idx):
+        if vacancy:
+            # A vacancy is BY DEFINITION not occupied — the placer emitted it because
+            # nothing was put on that vertex.  Asking the graph would say `OCCUPIED` for
+            # every vacancy on a metal that has any ligand at all, since the test is
+            # "does this ATOM have a dative bond" and the metal certainly does.  Only
+            # steric reach can close a vacancy.
+            status = (SiteStatus.BLOCKED
+                      if occluded is not None and occluded >= BLOCKED_OCCLUSION
+                      else SiteStatus.OPEN)
+        elif _occupied(graph, site.atom_idx):
             status = SiteStatus.OCCUPIED
         elif occluded is not None and occluded >= BLOCKED_OCCLUSION:
             status = SiteStatus.BLOCKED
@@ -130,15 +149,22 @@ def refresh_state(
             status = SiteStatus.OPEN
 
         state = SiteState(atom_idx=site.atom_idx, status=status,
-                          buried_vol=occluded, in_pocket=in_pocket, ease=None)
+                          buried_vol=occluded, in_pocket=in_pocket, ease=None,
+                          slot=getattr(site, "slot", 0), role=role)
         # The ease record reads `buried_vol` and `in_pocket` off the state, so the state
         # is built first and the ease attached second.  An occupied site is still scored:
         # "how easily would this have activated" stays a meaningful question about a bond
         # that already formed, and it is what a reaction edge needs to explain itself.
-        ease = _ease_or_none(state, site)
+        #
+        # A vacancy is not scored at all, and that is not a gap: activation ease is the
+        # cost of DEPROTONATING a donor to expose it (D18), and a vacancy has no proton,
+        # no pKa and nothing to activate.  A zero here would rank empty space as the
+        # hardest site on the structure.
+        ease = None if vacancy else _ease_or_none(state, site)
         out.append(SiteState(atom_idx=site.atom_idx, status=status,
                              buried_vol=occluded, in_pocket=in_pocket, ease=ease,
-                             pka=_pka_of(site)))
+                             pka=None if vacancy else _pka_of(site),
+                             slot=getattr(site, "slot", 0), role=role))
     return out
 
 

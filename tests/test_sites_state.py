@@ -500,11 +500,12 @@ def test_open_sites_uses_the_state_when_it_has_one():
     coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
                conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
     states = refresh_state(sites, coords, graph=graph)
-    by_idx = {s.atom_idx: s for s in states}
-    block = BuildingBlock(graph=graph, sites=tuple(sites), state=by_idx)
+    by_key = {BuildingBlock.state_key(s): s for s in states}
+    block = BuildingBlock(graph=graph, sites=tuple(sites), state=by_key)
     opened = block.open_sites()
     assert {o.atom_idx for o in opened} <= {s.atom_idx for s in sites}
-    assert all(by_idx[o.atom_idx].status is SiteStatus.OPEN for o in opened)
+    assert all(by_key[BuildingBlock.state_key(o)].status is SiteStatus.OPEN
+               for o in opened)
     assert len(opened) == sum(1 for s in states if s.is_open)
 
 
@@ -535,3 +536,156 @@ def test_a_bad_metal_bond_is_never_marginal():
                       clashes=[Clash(0, 1, 2.00, 2.05, "H", "O")],
                       bad_bonds=[BadBond(1, 2.4, 2.0, 0.1, "O")])
     assert not report.marginal
+
+
+# ── vacancies: the metal's side of a join ────────────────────────────────────
+
+def _cu_salicylate(cn: int = 4):
+    """A chelated Cu at CN `cn`: two donors bound, the rest of the polyhedron empty."""
+    from mofsbu.geometry.placer import LigandPlacement, place_mononuclear, to_rdkit
+    from mofsbu.sites.frames import BindingMode
+
+    lig = embed_molecule(mol_from_smiles(SALICYLIC), seed=7)
+    ls = perceive(lig)
+    pocket = chelate_pockets(lig, ls)[0]
+    by_idx = {s.atom_idx: s for s in ls}
+    placements = [LigandPlacement(
+        mol=lig, donor_idxs=tuple(pocket.donors),
+        donor_types=tuple(by_idx[i].donor_type for i in pocket.donors),
+        mode=BindingMode.CHELATE, name="sal")]
+    result = place_mononuclear("Cu", placements, geometry=(
+        "tetrahedral" if cn == 4 else "octahedral"), cn=cn)
+    mol = to_rdkit("Cu", placements, result)
+    graph = from_rdkit(mol, charge=1, multiplicity=2)
+    conf = mol.GetConformer()
+    coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
+               conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
+    return result, mol, graph, coords
+
+
+def test_vacancies_become_sites_on_the_metal():
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, _graph, coords = _cu_salicylate(cn=4)
+    assert len(result.vacancies) == 2, "a chelate on a tetrahedron leaves two vertices"
+
+    vac = vacancy_sites(result.metal_idx, coords[result.metal_idx], result.vacancies)
+    assert [s.slot for s in vac] == [0, 1], "slots number the vertices on one atom"
+    assert all(s.atom_idx == result.metal_idx for s in vac), "vacancies live on the metal"
+    assert all(s.is_vacancy and s.donor_type == "" for s in vac)
+    # It is a FRAME, which is what makes it usable by the same code path as a donor.
+    for s in vac:
+        assert s.frame and {"origin", "axis", "ref"} <= set(s.frame)
+        assert np.isclose(np.linalg.norm(np.array(s.frame["axis"])), 1.0, atol=1e-9)
+        assert abs(float(np.array(s.frame["axis"]) @ np.array(s.frame["ref"]))) < 1e-9
+
+
+def test_a_vacancy_is_never_occupied_however_bonded_its_metal_is():
+    """The status rule has to special-case vacancies, and this is why.
+
+    `_occupied` asks "does this ATOM carry a dative bond", and a metal with any ligand at
+    all does.  Applied to a vacancy that would mark every empty vertex on every real
+    complex as occupied — the exact opposite of what it is.
+    """
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, graph, coords = _cu_salicylate(cn=4)
+    vac = vacancy_sites(result.metal_idx, coords[result.metal_idx], result.vacancies)
+    assert graph.neighbors(result.metal_idx), "the metal really is bonded to something"
+
+    states = refresh_state(vac, coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+    assert {s.status for s in states} == {SiteStatus.OPEN}
+    assert all(s.ease is None and s.pka is None for s in states), (
+        "a vacancy has no proton to remove, so activation ease is not a number it has")
+
+
+def test_a_vacancy_can_still_be_sterically_blocked():
+    """OPEN is not automatic: reach is the one thing that can close a vacancy."""
+    from mofsbu.sites.model import vacancy_sites
+    from mofsbu.sites.state import BLOCKED_OCCLUSION
+
+    result, mol, graph, coords = _cu_salicylate(cn=4)
+    vac = vacancy_sites(result.metal_idx, coords[result.metal_idx], result.vacancies)
+    states = refresh_state(vac, coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+    for s in states:
+        assert s.buried_vol is not None and 0.0 <= s.buried_vol < BLOCKED_OCCLUSION
+
+
+def test_open_sites_returns_donors_and_vacancies_together(reg):
+    """The M5 payoff: one accessor, both sides of a prospective bond."""
+    from mofsbu.assembly.join import BuildingBlock
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, graph, coords = _cu_salicylate(cn=4)
+    sites = perceive(mol) + vacancy_sites(result.metal_idx, coords[result.metal_idx],
+                                          result.vacancies)
+    states = refresh_state(sites, coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+    block = BuildingBlock(graph=graph, sites=tuple(sites),
+                          state={BuildingBlock.state_key(s): s for s in states})
+
+    assert len(block.open_vacancies()) == 2, "both empty vertices are joinable"
+    assert block.open_donors(), "the free carboxylate O is still offered"
+    assert len(block.open_sites()) == len(block.open_donors()) + len(block.open_vacancies())
+
+
+def test_state_is_keyed_by_slot_so_one_metal_keeps_all_its_vacancies(reg):
+    """An atom-keyed state dict silently keeps only the last vacancy of a centre."""
+    from mofsbu.assembly.join import BuildingBlock
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, graph, coords = _cu_salicylate(cn=6)
+    vac = vacancy_sites(result.metal_idx, coords[result.metal_idx], result.vacancies)
+    assert len(vac) == 4, "a chelate on an octahedron leaves four vertices"
+    states = refresh_state(vac, coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+
+    atom_keyed = {s.atom_idx: s for s in states}
+    slot_keyed = {BuildingBlock.state_key(s): s for s in states}
+    assert len(atom_keyed) == 1, "this is the bug the slot key prevents"
+    assert len(slot_keyed) == 4
+
+
+def test_vacancies_round_trip_through_the_registry(reg):
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, graph, coords = _cu_salicylate(cn=4)
+    put = put_structure(reg, graph, tags=["cu"])
+    geom = put_geometry(reg, put.id, to_xyz(mol, "cu"), fidelity=Fidelity.RAW, method=FF)
+    sites = perceive(mol) + vacancy_sites(result.metal_idx, coords[result.metal_idx],
+                                          result.vacancies)
+    put_sites(reg, put.id, sites)
+
+    rows = get_sites(reg, put.id)
+    vac_rows = [r for r in rows if r["role"] == "vacancy"]
+    assert len(vac_rows) == 2
+    assert sorted(r["slot"] for r in vac_rows) == [0, 1]
+    assert len({r["canonical_idx"] for r in vac_rows}) == 1, "both on the metal"
+    assert all(r["donor_type"] == "" for r in vac_rows)
+
+    states = refresh_state(sites, coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+    put_site_state(reg, put.id, geom.id, states, fidelity=Fidelity.RAW)
+    back = get_site_state(reg, put.id, geom.id)
+    assert len(back) == len(sites), "every site got its own state row"
+    assert sum(1 for r in back if r["role"] == "vacancy") == 2
+
+
+def test_perceived_donor_count_excludes_vacancies(reg):
+    """`n_perceived_donors` answers how many DONORS there are, and a vacancy is not one."""
+    from mofsbu.sites.model import vacancy_sites
+
+    result, mol, graph, coords = _cu_salicylate(cn=4)
+    put = put_structure(reg, graph, tags=["cu"])
+    donors = perceive(mol)
+    sites = donors + vacancy_sites(result.metal_idx, coords[result.metal_idx],
+                                   result.vacancies)
+    put_sites(reg, put.id, sites)
+
+    row = reg.conn.execute(
+        "SELECT n_perceived_donors, donor_types FROM structures WHERE id=?",
+        (put.id,)).fetchone()
+    assert row["n_perceived_donors"] == len(donors)
+    assert "," + "," not in (row["donor_types"] or ",,"), "no blank donor_type from a vacancy"

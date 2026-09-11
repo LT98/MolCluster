@@ -34,7 +34,9 @@ from mofsbu.registry.jobs import (
     outcome_summary, set_diagnostics, task_counts,
 )
 from mofsbu.sites.frames import BindingMode
-from mofsbu.sites.model import find_pockets, perceive, shifting_pocket_donors
+from mofsbu.sites.model import (
+    find_pockets, perceive, shifting_pocket_donors, vacancy_sites,
+)
 from mofsbu.sites.protomers import enumerate_protomers
 from mofsbu.sites.state import refresh_state
 from mofsbu.spec import BuildSpec
@@ -448,7 +450,8 @@ def _post_relax_qc(graph: TypedGraph, symbols, positions) -> qc_mod.QCReport:
 
 
 def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
-                  graph: TypedGraph, fidelity: Fidelity) -> dict[str, Any]:
+                  graph: TypedGraph, fidelity: Fidelity,
+                  vacancies: tuple = (), metal_idx: int = 0) -> dict[str, Any]:
     """Perceive once, then derive state from that one perception.
 
     Both halves of D5 are written here, in this order, deliberately: `refresh_state` is
@@ -456,20 +459,29 @@ def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
     about which atoms are donors.  Perception happening anywhere else in a build is the
     failure mode `tests/test_sites_state.py::test_perception_runs_once_per_structure`
     exists to catch.
+
+    `vacancies` are the coordination vertices the placer left empty
+    (`PlacementResult.vacancies`).  They are NOT perceived — perception looks at a
+    molecule and finds donors, and an empty vertex is not in the molecule.  They come from
+    the construction, which is the only thing that knows the polyhedron was bigger than
+    the ligand set, and they join the same site list so `open_sites()` returns both kinds.
     """
     sites = perceive(mol)
     drift = catalog_drift(reg, structure_id, sites)
-    put_sites(reg, structure_id, sites)
     conf = mol.GetConformer()
     coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
                conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
+    if vacancies:
+        sites = sites + vacancy_sites(metal_idx, coords[metal_idx], vacancies)
+    put_sites(reg, structure_id, sites)
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
-    pocket_donors = shifting_pocket_donors(mol, sites)
+    pocket_donors = shifting_pocket_donors(mol, [s for s in sites if not s.is_vacancy])
     states = refresh_state(sites, coords, graph=graph, symbols=symbols,
                            pocket_donors=pocket_donors, fidelity=fidelity)
     n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity)
     report: dict[str, Any] = {
         "n_sites": len(sites),
+        "n_vacancies": sum(1 for s in sites if s.is_vacancy),
         "n_open": sum(1 for s in states if s.is_open),
         "n_provisional": sum(1 for s in states
                              if s.ease is not None and s.ease.provisional)}
@@ -655,7 +667,11 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         geom = put_geometry(reg, put.id, result.to_xyz(name), fidelity=Fidelity.RAW,
                             method=BUILD, choice_vector=result.choice_vector,
                             seed=spec.seed, qc=result.report.to_dict())
-        detail["sites"] = _record_sites(reg, put.id, geom.id, complex_mol, g, Fidelity.RAW)
+        # The placer's empty vertices travel with the complex: metal at index 0,
+        # which is how `to_rdkit` lays the centre out.
+        detail["sites"] = _record_sites(reg, put.id, geom.id, complex_mol, g,
+                                        Fidelity.RAW, vacancies=result.vacancies,
+                                        metal_idx=result.metal_idx)
         detail["qc"] = result.report.to_dict()
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
