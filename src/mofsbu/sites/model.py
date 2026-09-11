@@ -12,8 +12,25 @@ from mofsbu.sites.frames import BindingMode, LiveDOF, binding_modes, live_dof, s
 from mofsbu.sites.perception import DonorSite, find_donor_sites
 
 
+DONOR = "donor"
+VACANCY = "vacancy"
+
+
 @dataclass(frozen=True)
 class Site:
+    """One place a bond can form.
+
+    Two kinds share this record, and that is the point: a **donor** atom on a ligand and a
+    **vacancy** — an unoccupied coordination vertex on a metal.  Both are frames (D13), so
+    `assembly.compatible(Site, Site)` can ask one question of a donor/vacancy pair in M5
+    rather than needing a second type and a second code path for the metal's side of every
+    join.
+
+    A vacancy carries no `donor_type` (it is not a donor), is never `labile`, and changes
+    no charge when it is filled — the incoming ligand brings its own.  What it does carry
+    is the frame: origin at the metal, axis along the empty vertex.
+    """
+
     atom_idx: int                       # index in the molecule / graph this came from
     donor_type: str
     labile: bool
@@ -21,6 +38,45 @@ class Site:
     live_dof: str
     binding_modes: tuple[str, ...]
     frame: dict | None = None
+    role: str = DONOR                   # donor | vacancy
+    #: Distinguishes several vacancies on ONE metal atom.  Always 0 for a donor, which is
+    #: why `UNIQUE (structure_id, canonical_idx, slot)` leaves donor uniqueness unchanged.
+    slot: int = 0
+
+    @property
+    def is_vacancy(self) -> bool:
+        return self.role == VACANCY
+
+
+def vacancy_sites(metal_idx: int, origin, directions) -> list[Site]:
+    """Turn a placer's leftover coordination vertices into sites on the metal.
+
+    `directions` are unit vectors from `geometry.placer.PlacementResult.vacancies`; the
+    origin is the metal's own position.  The reference direction is arbitrary but must be
+    perpendicular and deterministic, because a frame with an unstable `ref` would make the
+    torsion zero move between runs of the same construct.
+    """
+    import numpy as np
+
+    out: list[Site] = []
+    for slot, direction in enumerate(directions):
+        axis = np.asarray(direction, dtype=float)
+        axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+        trial = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        ref = np.cross(axis, trial)
+        ref = ref / max(float(np.linalg.norm(ref)), 1e-9)
+        out.append(Site(
+            atom_idx=metal_idx, donor_type="", labile=False, charge_after=0,
+            # A vacancy is a direction in space with no substituents of its own, so there
+            # is no plane to be syn or anti to: the torsion is a don't-care, which is
+            # exactly what TORSION_FREE means and what stops it branching conformers.
+            live_dof=LiveDOF.TORSION_FREE.value,
+            binding_modes=(BindingMode.MONODENTATE.value,),
+            frame={"origin": [float(x) for x in origin],
+                   "axis": [float(x) for x in axis],
+                   "ref": [float(x) for x in ref], "mode": "vacancy"},
+            role=VACANCY, slot=slot))
+    return out
 
 
 def perceive(mol: Chem.Mol, *, with_frames: bool = True) -> list[Site]:

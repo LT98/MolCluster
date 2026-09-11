@@ -431,19 +431,24 @@ def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str = "per
     for site in sites:
         canonical_idx = cmap[site.atom_idx]
         reg.conn.execute(
-            "INSERT INTO site_catalog (structure_id, canonical_idx, donor_type, labile, "
-            " charge_after, live_dof, binding_modes, frame_json, algo_perception) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (structure_id, canonical_idx, site.donor_type, int(site.labile),
+            "INSERT INTO site_catalog (structure_id, canonical_idx, role, slot, "
+            " donor_type, labile, charge_after, live_dof, binding_modes, frame_json, "
+            " algo_perception) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (structure_id, canonical_idx, getattr(site, "role", "donor"),
+             getattr(site, "slot", 0), site.donor_type, int(site.labile),
              site.charge_after, site.live_dof, _set_column(site.binding_modes),
              json.dumps(site.frame) if site.frame else None, algo))
         n += 1
-    # n_perceived_donors is what was actually counted.  n_open_sites needs site_state,
-    # which is not populated yet, so it stays NULL rather than being filled with a
-    # different quantity that happens to be an integer.
+    # DONORS only, in both columns.  A vacancy is a site and is not a donor, so counting
+    # it in `n_perceived_donors` would inflate a number whose whole job is to say how many
+    # donor atoms the ligand set has, and its empty `donor_type` would put a blank entry
+    # into the searchable `donor_types` set.  `n_open_sites` is where vacancies show up,
+    # and that is computed from site_state by `_refresh_open_sites`.
+    donors = [s for s in sites if getattr(s, "role", "donor") == "donor"]
     reg.conn.execute(
-        "UPDATE structures SET donor_types=?, n_perceived_donors=?, n_open_sites=NULL "
-        "WHERE id=?", (_set_column({s.donor_type for s in sites}), n, structure_id))
+        "UPDATE structures SET donor_types=?, n_perceived_donors=? WHERE id=?",
+        (_set_column({s.donor_type for s in donors}), len(donors), structure_id))
     return n
 
 
@@ -474,10 +479,16 @@ def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
     was wrong about its own donors.  Reported, never swallowed.
     """
     cmap = canonical_map(reg, structure_id)
-    stored = {(r["canonical_idx"], r["donor_type"]) for r in get_sites(reg, structure_id)}
+    # Donors only.  Vacancies are a property of the GEOMETRY that was built — how many
+    # vertices the placer left empty — not of the identity, so two routes to one structure
+    # legitimately differ in them and comparing them here would report drift for a
+    # difference that is not perception's.
+    stored = {(r["canonical_idx"], r["donor_type"]) for r in get_sites(reg, structure_id)
+              if r["role"] == "donor"}
     if not stored:
         return []
-    incoming = {(cmap[s.atom_idx], s.donor_type) for s in sites}
+    incoming = {(cmap[s.atom_idx], s.donor_type) for s in sites
+                if getattr(s, "role", "donor") == "donor"}
     return [f"{'stored' if x in stored else 'perceived'} idx={x[0]} {x[1]}"
             for x in sorted(stored ^ incoming)]
 
@@ -496,12 +507,16 @@ def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: l
     twice would look twice as reactive as the same structure relaxed once.
     """
     cmap = canonical_map(reg, structure_id)
-    by_canonical = {row["canonical_idx"]: row["id"]
-                    for row in get_sites(reg, structure_id)}
+    # Keyed by (canonical_idx, slot), not by atom alone: a metal carries one catalog row
+    # per vacant vertex, all on its own atom, so an atom-keyed lookup would collapse every
+    # vacancy of a centre onto whichever row came back last and write four states onto one
+    # site.
+    by_key = {(row["canonical_idx"], row["slot"]): row["id"]
+              for row in get_sites(reg, structure_id)}
     n = 0
     for state in states:
         canonical_idx = cmap[state.atom_idx]
-        site_id = by_canonical.get(canonical_idx)
+        site_id = by_key.get((canonical_idx, getattr(state, "slot", 0)))
         if site_id is None:
             # This geometry perceived a donor the stored catalog does not have — the
             # resonance seam `catalog_drift` documents.  The catalog is the authority on
@@ -568,7 +583,7 @@ def get_site_state(reg: Registry, structure_id: int,
             return []
         geometry_id = best["best_geometry_id"]
     return list(reg.conn.execute(
-        "SELECT ss.*, sc.canonical_idx, sc.donor_type FROM site_state ss "
+        "SELECT ss.*, sc.canonical_idx, sc.donor_type, sc.role, sc.slot FROM site_state ss "
         " JOIN site_catalog sc ON sc.id = ss.site_id "
         "WHERE sc.structure_id=? AND ss.geometry_id=? ORDER BY sc.canonical_idx",
         (structure_id, geometry_id)))

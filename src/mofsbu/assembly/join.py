@@ -38,17 +38,30 @@ class BuildingBlock:
     sites: tuple[Site, ...]
     geometry: Any | None = None
     structure_id: int | None = None
-    #: per-geometry state from `sites.state.refresh_state`, keyed by atom index.  Absent
+    #: Per-geometry state from `sites.state.refresh_state`, keyed by `(atom_idx, slot)`.
+    #: The slot is in the key because a metal carries several vacancies on ONE atom, so
+    #: an atom-keyed dict silently keeps whichever of them was inserted last.  Absent
     #: means "not computed for this block", which is not the same as "nothing is open".
-    state: dict[int, Any] | None = None
+    state: dict[tuple[int, int], Any] | None = None
+
+    @staticmethod
+    def state_key(site: Any) -> tuple[int, int]:
+        """The key a site's state is stored under.  One definition, used by both sides."""
+        return (site.atom_idx, getattr(site, "slot", 0))
 
     def open_sites(self) -> tuple[Site, ...]:
-        """The sites a join may actually use.
+        """The sites a join may actually use — donors AND vacant metal vertices.
 
         Open means: not already dative-bonded to a metal, and not sterically walled off
         (`sites.state.SiteStatus`).  Both halves matter — "both ends are unoccupied" is
         the test §6.3 explicitly says is not sufficient, and a site the metal cannot
         reach is not a site a join can use however free its valence looks.
+
+        The two kinds come back in one tuple on purpose.  A join needs a donor on one
+        block and somewhere on the other block to put it, and on a metal that somewhere is
+        a vacancy — so `compatible(a, b)` can take two `Site`s and ask one frame-alignment
+        question, rather than needing a separate accessor and a separate predicate for the
+        metal's side of every bond.
 
         A block with no state raises rather than returning every site.  Treating unknown
         as open is how an assembly step would confidently join onto a buried donor.
@@ -62,8 +75,16 @@ class BuildingBlock:
         from mofsbu.sites.state import SiteStatus
 
         return tuple(s for s in self.sites
-                     if getattr(self.state.get(s.atom_idx), "status", None)
+                     if getattr(self.state.get(self.state_key(s)), "status", None)
                      is SiteStatus.OPEN)
+
+    def open_vacancies(self) -> tuple[Site, ...]:
+        """Just the metal's usable empty vertices — where an incoming ligand can go."""
+        return tuple(s for s in self.open_sites() if s.is_vacancy)
+
+    def open_donors(self) -> tuple[Site, ...]:
+        """Just the usable donor atoms — what this block can offer another one."""
+        return tuple(s for s in self.open_sites() if not s.is_vacancy)
 
 
 @dataclass(frozen=True)

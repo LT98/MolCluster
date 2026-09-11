@@ -160,18 +160,29 @@ CREATE INDEX IF NOT EXISTS ix_geometries_choice    ON geometries (choice_vector_
 
 -- ── sites: perceive once, refresh accessibility (RESERVED, M4) ───────────────
 
+-- A site is a place a BOND CAN FORM, and that is two things, not one: a donor atom on a
+-- ligand, and a vacant coordination vertex on a metal.  `role` tells them apart.  Both are
+-- frames (D13) -- origin, outward axis, reference direction -- which is what lets
+-- `assembly.compatible(Site, Site)` ask one question of a donor/vacancy pair in M5,
+-- instead of needing a second type and a second code path for the metal side.
+--
+-- `slot` exists because a metal carries SEVERAL vacancies on ONE atom, which the old
+-- UNIQUE (structure_id, canonical_idx) could not hold.  A donor is always slot 0 and
+-- therefore keeps exactly its previous uniqueness: one donor row per atom.
 CREATE TABLE IF NOT EXISTS site_catalog (
     id              INTEGER PRIMARY KEY,
     structure_id    INTEGER NOT NULL REFERENCES structures(id) ON DELETE CASCADE,
     canonical_idx   INTEGER NOT NULL,          -- keyed to structures.canonical_order_json
-    donor_type      TEXT    NOT NULL,
+    role            TEXT    NOT NULL DEFAULT 'donor',   -- donor | vacancy
+    slot            INTEGER NOT NULL DEFAULT 0, -- 0 for a donor; 0..n-1 per metal vacancy
+    donor_type      TEXT    NOT NULL,          -- '' for a vacancy: it is not a donor
     labile          INTEGER NOT NULL DEFAULT 0,
     charge_after    INTEGER NOT NULL DEFAULT 0,
     live_dof        TEXT,                      -- 'live' | 'free'      (D13)
     binding_modes   TEXT,                      -- comma-separated set  (D13)
     frame_json      TEXT,                      -- origin + axis + ref  (D13)
     algo_perception TEXT,
-    UNIQUE (structure_id, canonical_idx)
+    UNIQUE (structure_id, canonical_idx, slot)
 );
 
 CREATE TABLE IF NOT EXISTS site_state (

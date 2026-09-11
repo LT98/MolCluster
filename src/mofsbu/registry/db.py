@@ -74,6 +74,11 @@ class Registry:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema)
         self._recreate_views(schema)
+        # Before the column reconciliation, not after: the rebuild recreates the table
+        # from the target schema, so it delivers `role` and `slot` itself and there is
+        # nothing left for `_reconcile_columns` to add.  Running it the other way round
+        # would add the columns to a table whose UNIQUE key still could not hold them.
+        rebuilt = self._rebuild_site_catalog(schema)
         added = self._reconcile_columns(schema)
         for i, (table, column) in enumerate(added, start=1):
             # One row per column, and therefore one VERSION per column.  This used to be
@@ -86,6 +91,12 @@ class Registry:
                 "ON CONFLICT(version) DO NOTHING",
                 (SCHEMA_VERSION * 1000 + self._next_migration_slot(i), utcnow(),
                  f"added {table}.{column}"))
+        if rebuilt:
+            self.conn.execute(
+                "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
+                "ON CONFLICT(version) DO NOTHING",
+                (SCHEMA_VERSION * 1000 + self._next_migration_slot(len(added) + 1),
+                 utcnow(), "rebuilt site_catalog: UNIQUE now includes slot"))
         cur = self.conn.execute("SELECT 1 FROM migrations WHERE version = ?", (SCHEMA_VERSION,))
         if cur.fetchone() is None:
             self.conn.execute(
@@ -123,6 +134,57 @@ class Registry:
                 self.conn.execute(row[1])
         finally:
             target.close()
+
+    def _rebuild_site_catalog(self, schema: str) -> bool:
+        """Widen `site_catalog`'s UNIQUE key to include `slot`.  Returns whether it ran.
+
+        The one migration in this file that `_reconcile_columns` cannot do.  Adding a
+        column is `ALTER TABLE ADD COLUMN`; CHANGING A CONSTRAINT is not expressible in
+        SQLite at all, so the table has to be rebuilt — and a rebuild is exactly the kind
+        of destructive step the rest of `migrate` refuses to guess at, which is why this
+        one is written out explicitly, guarded, and reported.
+
+        Why the key has to widen: a metal carries several vacant coordination vertices on
+        ONE atom, so `UNIQUE (structure_id, canonical_idx)` allows one site per atom and a
+        four-coordinate metal with three vacancies needs three rows on the same
+        `canonical_idx`.  Donors are unaffected — they are all slot 0, so their uniqueness
+        is unchanged, and every existing row migrates to `role='donor', slot=0` which is
+        what it already meant.
+
+        `site_state.site_id` references `site_catalog(id)`, so the rebuild PRESERVES `id`
+        rather than letting SQLite reassign it; otherwise every per-geometry state row
+        would silently point at a different site.  Foreign keys are disabled for the
+        swap — the reference is by name and would otherwise be enforced against the
+        half-built table mid-rename — and re-enabled afterwards, which the caller's
+        `PRAGMA foreign_keys = ON` in `__init__` does not do for us on this connection.
+        """
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='site_catalog'"
+        ).fetchone()
+        if row is None or "slot" in (row[0] or ""):
+            return False                        # fresh database, or already widened
+
+        target = self._target_schema(schema)
+        try:
+            want = target.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='site_catalog'"
+            ).fetchone()[0]
+        finally:
+            target.close()
+
+        have = [r[1] for r in self.conn.execute("PRAGMA table_info(site_catalog)")]
+        carried = ", ".join(have)               # only the columns this database actually has
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self.conn.execute("DROP TABLE IF EXISTS site_catalog__new")
+            self.conn.execute(want.replace("site_catalog", "site_catalog__new", 1))
+            self.conn.execute(
+                f"INSERT INTO site_catalog__new ({carried}) SELECT {carried} FROM site_catalog")
+            self.conn.execute("DROP TABLE site_catalog")
+            self.conn.execute("ALTER TABLE site_catalog__new RENAME TO site_catalog")
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+        return True
 
     def _reconcile_columns(self, schema: str) -> list[tuple[str, str]]:
         """Add columns present in the target schema and missing from this database."""
