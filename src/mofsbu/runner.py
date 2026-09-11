@@ -19,6 +19,7 @@ from typing import Any
 from mofsbu.config import compute_device, device_note, max_workers, parallel_enabled
 from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
+from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
@@ -65,6 +66,40 @@ GEOMETRY_BY_CN = {2: ["linear"], 3: ["trigonal"], 4: ["tetrahedral", "square_pla
 
 # ── planning ─────────────────────────────────────────────────────────────────
 
+#: Hard ceiling on compositions per (metal, n_ligands, CN).  A guard rail, not a policy:
+#: `max_distinct_ligands` is the knob a user turns, and this only stops a spec that turns
+#: it too far from filling a queue with tens of thousands of tasks before anyone notices.
+#: Hitting it is reported through the run diagnostics rather than silently truncating.
+MAX_COMPOSITIONS = 4000
+
+
+def _compositions(kinds: list[dict[str, Any]], total: int,
+                  max_distinct: int) -> list[list[dict[str, Any]]]:
+    """Every multiset of `total` ligand pieces drawn from `kinds`, at most `max_distinct`
+    of them different.
+
+    A "kind" is one (molecule, protomer, donor set, binding mode).  Two protomers of one
+    molecule are therefore two kinds, which is deliberate — a partially deprotonated set
+    on one centre is real chemistry for a polyprotic linker, and refusing to enumerate it
+    would be a chemistry decision smuggled in as a data-structure limit.
+
+    `max_distinct=1` returns exactly the homoleptic compositions, which is what the
+    planner did before this function existed, so an unchanged spec plans an unchanged run.
+    """
+    out: list[list[dict[str, Any]]] = []
+    for d in range(1, min(max_distinct, total) + 1):
+        for chosen in itertools.combinations(range(len(kinds)), d):
+            # Ordered compositions of `total` into exactly `d` positive parts.
+            for cuts in itertools.combinations(range(1, total), d - 1):
+                bounds = (0,) + cuts + (total,)
+                counts = [bounds[i + 1] - bounds[i] for i in range(d)]
+                out.append([{**kinds[k], "count": c}
+                            for k, c in zip(chosen, counts) if c])
+                if len(out) > MAX_COMPOSITIONS:
+                    return out[:MAX_COMPOSITIONS]
+    return out
+
+
 def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
     """Create the run and its tasks.  Returns (run_id, n_tasks)."""
     if spec.degree > 1:
@@ -98,6 +133,7 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
     def skip(reason: str, hint: str) -> None:
         entry = skipped.setdefault(reason, {"reason": reason, "hint": hint, "count": 0})
         entry["count"] += 1
+    kinds: list[dict[str, Any]] = []
     for mol_ix, molecule in enumerate(spec.molecules):
         base = mol_from_smiles(molecule.smiles)
         protomers = enumerate_protomers(base, max_deprotonations=molecule.max_deprotonations,
@@ -111,7 +147,11 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
 
         if not spec.metals:
             continue
-        for proto, metal_ix in itertools.product(protomers, range(len(spec.metals))):
+        # Every way this molecule could occupy vertices, flattened into ONE list across
+        # all molecules.  That flattening is the whole change: the enumeration used to
+        # run per molecule, so a coordination sphere could only ever hold copies of one
+        # of them and [Mg(dtBK)(Cl)] was not expressible by any spec.
+        for proto in protomers:
             mol = embed_molecule(proto.mol, seed=spec.seed or 7)
             sites = perceive(mol)
             bindings: list[tuple[tuple[int, ...], str]] = []
@@ -120,44 +160,63 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
                 bindings += [(tuple(p.donors), BindingMode.CHELATE.value) for p in allowed]
             if "mono" in spec.binding:
                 bindings += [((s.atom_idx,), BindingMode.MONODENTATE.value) for s in sites]
-
             for donors, mode in bindings:
-                for n_lig, cn in itertools.product(spec.ligands_per_metal, spec.coordination):
-                    used = len(donors) * n_lig
-                    n_co = cn - used
-                    if n_co < 0:
-                        skip(f"{used} donor sites exceed CN {cn}",
-                             f"{n_lig} x {len(donors)}-dentate needs CN >= {used}")
+                kinds.append({
+                    "molecule": mol_ix, "selection": list(proto.representative),
+                    "charge": proto.charge, "label": proto.label,
+                    "donors": list(donors), "mode": mode,
+                    "denticity": len(donors),
+                })
+
+    for metal_ix in range(len(spec.metals)):
+        for total_n, cn in itertools.product(spec.ligands_per_metal, spec.coordination):
+            compositions = _compositions(kinds, total_n, spec.max_distinct_ligands)
+            if not compositions and kinds:
+                skip(f"no ligand composition of {total_n} piece(s) from "
+                     f"{len(kinds)} kind(s)",
+                     "every combination exceeded max_distinct_ligands "
+                     f"({spec.max_distinct_ligands})")
+                continue
+            for combo in compositions:
+                used = sum(c["denticity"] * c["count"] for c in combo)
+                n_co = cn - used
+                if n_co < 0:
+                    skip(f"{used} donor sites exceed CN {cn}",
+                         f"this composition needs CN >= {used}")
+                    continue
+                n_vacant = 0
+                if n_co and not spec.co_ligand:
+                    if not spec.allow_unsaturated:
+                        skip(f"CN {cn} leaves {n_co} site(s) unfilled and no co-ligand is set",
+                             f"set a co-ligand (e.g. O for water), add {used} to the "
+                             f"coordination list, or enable allow_unsaturated")
                         continue
-                    if n_co and not spec.co_ligand:
-                        if not spec.allow_unsaturated:
-                            skip(f"CN {cn} leaves {n_co} site(s) unfilled and no co-ligand is set",
-                                 f"set a co-ligand (e.g. O for water), add {used} to the "
-                                 f"coordination list, or enable allow_unsaturated")
-                            continue
-                        n_co, cn = 0, used      # build the unsaturated product instead
-                    # Geometries must match the coordination number ACTUALLY being built.
-                    # Taking them from the requested CN after collapsing to an unsaturated
-                    # product asks for e.g. tetrahedral with two sites, which the placer
-                    # rightly refuses — and a refusal there is a crash, not a chemistry
-                    # answer, so it must not be reachable from a legal spec.
-                    candidates = [g for g in (spec.geometries or GEOMETRY_BY_CN.get(cn, []))
-                                  if g in GEOMETRY_BY_CN.get(cn, [])]
-                    if not candidates:
-                        skip(f"no coordination geometry for CN {cn}",
-                             f"known CNs: {sorted(GEOMETRY_BY_CN)}"
-                             + (f"; requested geometries {list(spec.geometries)} do not "
-                                f"apply to CN {cn}" if spec.geometries else ""))
-                        continue
-                    for geometry in candidates:
-                        n += 1
-                        add_task(reg, run_id, "place", {
-                            "molecule": mol_ix, "metal": metal_ix,
-                            "selection": list(proto.representative),
-                            "charge": proto.charge, "label": proto.label,
-                            "donors": list(donors), "mode": mode, "n_ligands": n_lig,
-                            "n_co": n_co, "cn": cn, "geometry": geometry,
-                        })
+                    # The requested CN is KEPT and the surplus vertices are left
+                    # empty.  This used to be `n_co, cn = 0, used` — rebuild it at
+                    # whatever CN the ligands could fill — and that is a different
+                    # molecule: two ketones on a tetrahedral Mg is not a linear
+                    # 2-coordinate Mg, and only the first is what the next assembly
+                    # step attaches to.  `allow_unsaturated`'s own docstring warned
+                    # against "quietly building something smaller than you asked
+                    # for", which is exactly what the collapse did.
+                    n_co, n_vacant = 0, n_co
+                # Geometries come from the requested CN, which is now also the CN
+                # actually built.
+                candidates = [g for g in (spec.geometries or GEOMETRY_BY_CN.get(cn, []))
+                              if g in GEOMETRY_BY_CN.get(cn, [])]
+                if not candidates:
+                    skip(f"no coordination geometry for CN {cn}",
+                         f"known CNs: {sorted(GEOMETRY_BY_CN)}"
+                         + (f"; requested geometries {list(spec.geometries)} do not "
+                            f"apply to CN {cn}" if spec.geometries else ""))
+                    continue
+                for geometry in candidates:
+                    n += 1
+                    add_task(reg, run_id, "place", {
+                        "metal": metal_ix, "components": combo,
+                        "n_co": n_co, "cn": cn, "geometry": geometry,
+                        "n_vacant": n_vacant,
+                    })
     if not spec.metals:
         skip("no metal centres in the spec",
              "molecular-only construction: activation states and sites are produced; "
@@ -180,6 +239,24 @@ def _protomer_mol(spec: BuildSpec, payload: dict[str, Any]):
         base, _ = deprotonate(base, [sites[i] for i in selection])
     mol, embed_report = embed_with_report(base, seed=spec.seed or 7)
     return mol, molecule, embed_report
+
+
+def _components(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ligand pieces of a `place` payload, old shape or new.
+
+    A payload used to name ONE molecule and a count (`molecule`/`n_ligands`); it now
+    carries a `components` list so a coordination sphere can hold more than one ligand
+    kind.  Both are read, because a queue filled by an earlier build may still be
+    draining — tasks outlive the process that wrote them, which is the entire premise of
+    `plan` and `work` being separate.
+    """
+    if "components" in payload:
+        return payload["components"]
+    return [{"molecule": payload["molecule"], "selection": payload["selection"],
+             "charge": payload["charge"], "label": payload["label"],
+             "donors": payload["donors"], "mode": payload["mode"],
+             "denticity": len(payload["donors"]),
+             "count": payload["n_ligands"]}]
 
 
 RELAX_PRIORITY = -10        # constructs drain first; relaxes are the expensive tail
@@ -327,17 +404,47 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
                             multiplicity=int(graph.multiplicity), target=target,
                             solvent=payload.get("solvent"), ml_model=ml_model)
 
+    # A relaxation MOVES ATOMS, so whatever QC said about the construct is a statement
+    # about coordinates that no longer exist.  Storing the result unchecked is how a
+    # geometry built despite a marginal clash would end up in the registry looking exactly
+    # like one that never had a problem — and after `MARGINAL_OVERLAP` this is no longer
+    # hypothetical, it is the intended path for hundreds of structures.
+    after = _post_relax_qc(graph, result.symbols, result.positions)
     geom = put_geometry(
         reg, structure_id, result.to_xyz(graph.name or ""), fidelity=result.fidelity,
         method=result.method, energy=result.energy, converged=result.converged,
-        relaxed_from=source_gid)
+        relaxed_from=source_gid, qc=after.to_dict())
     detail = {"relax": {"from_geometry": source_gid, "target": target.name,
                         "converged": result.converged, "steps": result.n_steps,
                         "fmax": round(result.fmax, 4), "energy": result.energy,
                         "relaxation_energy": result.relaxation_energy,
                         "device": compute_device(),
                         "method": result.method.describe()}}
+    if not after.ok:
+        # Stored, flagged, and NOT rejected.  The optimisation was paid for and its
+        # result is a real answer — "these ligands still do not fit once relaxed" is a
+        # finding about the chemistry, and rev 21's lesson was that discarding compute
+        # after it has been spent is the expensive mistake.  What it must never do is
+        # look clean: the QC report is on the geometry row.
+        detail["qc_failed_after_relax"] = after.to_dict()
     return Outcome(structure_id, geom.id, None, geom.created, detail)
+
+
+def _post_relax_qc(graph: TypedGraph, symbols, positions) -> qc_mod.QCReport:
+    """Clash check on relaxed coordinates, using the graph for what is bonded.
+
+    Clashes only, deliberately.  The construct's M-L bond lengths were a check on what
+    the PLACER built; after a relaxation the bond lengths are the optimiser's answer, not
+    a target that was missed, and flagging them as `bad_bonds` would report a converged
+    minimum as a construction defect.
+    """
+    import numpy as np
+
+    bonded = {(min(i, j), max(i, j)) for i, j, _ in graph.edges()}
+    report = qc_mod.QCReport()
+    report.clashes = qc_mod.check_clashes(list(symbols), np.asarray(positions), bonded)
+    report.ok = not report.clashes
+    return report
 
 
 def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
@@ -386,11 +493,10 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         # molecule index, so `_protomer_mol` has nothing to work with.
         return _execute_relax(reg, task, spec)
 
-    mol, molecule, embed_report = _protomer_mol(spec, payload)
-    detail: dict[str, Any] = {"embed": embed_report}
-    name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
-
     if task.kind == "ligand":
+        mol, molecule, embed_report = _protomer_mol(spec, payload)
+        detail: dict[str, Any] = {"embed": embed_report}
+        name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
         g = from_rdkit(mol, charge=payload["charge"], multiplicity=molecule.multiplicity,
                        name=name)
         put = put_structure(reg, g, tags=[molecule.name, "ligand"])
@@ -402,14 +508,45 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
 
     if task.kind == "place":
         metal = spec.metals[payload["metal"]]
-        sites = perceive(mol)
-        by_idx = {s.atom_idx: s for s in sites}
-        donors = tuple(payload["donors"])
-        ligands = [LigandPlacement(
-            mol=mol, donor_idxs=donors,
-            donor_types=tuple(by_idx[i].donor_type for i in donors),
-            mode=BindingMode(payload["mode"]), name=molecule.name)
-            for _ in range(payload["n_ligands"])]
+        detail = {}
+        components = _components(payload)
+        # One embed per COMPONENT, and every copy of a component shares that one
+        # conformer.  Two copies of a ligand are two placements of the same molecule, not
+        # two independent embeddings of it — re-embedding each copy would make a
+        # homoleptic complex's ligands silently non-identical and put stochastic
+        # conformer noise inside a single structure.
+        ligands: list[LigandPlacement] = []
+        parts: list[str] = []
+        ligand_charge = 0
+        multiplicities: list[int] = []
+        for comp in components:
+            cmol, cmolecule, cembed = _protomer_mol(spec, comp)
+            detail.setdefault("embed", cembed)
+            csites = perceive(cmol)
+            by_idx = {s.atom_idx: s for s in csites}
+            cdonors = tuple(comp["donors"])
+            missing = [i for i in cdonors if i not in by_idx]
+            if missing:
+                # The donor indices were chosen at PLAN time against a conformer embedded
+                # then; if perception no longer sees them the two halves have diverged and
+                # placing atom 9 because the payload says 9 would bind whatever now
+                # happens to sit there.
+                raise _Rejected(
+                    f"donor index/indices {missing} are no longer perceived on "
+                    f"{cmolecule.name}; the plan and this executor disagree about the "
+                    f"molecule", code="donor_index_stale",
+                    detail={"component": comp, "perceived": sorted(by_idx)})
+            cname = f"{cmolecule.name}{comp['label'] if comp['selection'] else ''}"
+            parts.append(f"{cname}x{comp['count']}" if comp["count"] > 1 else cname)
+            ligand_charge += int(comp["charge"]) * int(comp["count"])
+            multiplicities += [cmolecule.multiplicity] * int(comp["count"])
+            ligands += [LigandPlacement(
+                mol=cmol, donor_idxs=cdonors,
+                donor_types=tuple(by_idx[i].donor_type for i in cdonors),
+                mode=BindingMode(comp["mode"]), name=cname)
+                for _ in range(int(comp["count"]))]
+        name = "+".join(parts)
+        molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
         if payload["n_co"]:
             co, co_embed = embed_with_report(mol_from_smiles(spec.co_ligand), seed=3)
             detail["co_ligand_embed"] = co_embed
@@ -440,7 +577,12 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
                         for _ in range(payload["n_co"])]
 
         try:
-            result = place_mononuclear(metal.symbol, ligands, geometry=payload["geometry"])
+            # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
+            # was asked for and reports its empty vertices, instead of being silently
+            # rebuilt as a smaller, differently-shaped complex.
+            result = place_mononuclear(metal.symbol, ligands,
+                                       geometry=payload["geometry"],
+                                       cn=payload.get("cn"))
         except ValueError as exc:
             # The placer refusing a request is an ANSWER, not a breakage: a bidentate
             # ligand cannot span a linear two-coordinate centre, and saying so is the
@@ -451,27 +593,63 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
                                     "cn": payload["cn"]}) from exc
         detail["distances"] = [x.to_dict() for x in result.donor_distances]
         if not result.ok:
-            # The QC report is stored STRUCTURED, not just stringified: which atoms,
-            # which elements, how far inside which limit, and where each target M-L
-            # distance came from.  That is the difference between "2 clash(es), closest
-            # 1.40 A" — which is what a whole run used to collapse into — and a finding
-            # you can group, sort and act on.
-            raise _Rejected(str(result.report), code=result.report.code,
-                            detail={**detail, "qc": result.report.to_dict(),
-                                    "geometry": payload["geometry"],
-                                    "cn": payload["cn"]})
+            # A NEAR MISS is not a refusal.  A rigid placement that lands a hydrogen
+            # 0.06 A inside its limit has not made a chemical mistake — it has made a
+            # geometric one that an optimiser undoes in a few steps, and throwing the
+            # construct away means never finding that out.  So a marginal report is
+            # built and stored, and the relaxation this run is going to do anyway
+            # becomes the thing that decides.  `geometry.qc.MARGINAL_OVERLAP` documents
+            # where the threshold came from.
+            #
+            # Two guards on that leniency.  It only applies when there IS a relaxation
+            # coming: under `construct` there is no optimiser to appeal to, so the
+            # construct stays rejected and the code says a GO mode would have retried
+            # it.  And a marginal geometry is never stored looking clean — its QC
+            # report travels with it and `_execute_relax` re-checks it afterwards.
+            if not (result.report.marginal and spec.run_mode != "construct"):
+                # The QC report is stored STRUCTURED, not just stringified: which atoms,
+                # which elements, how far inside which limit, and where each target M-L
+                # distance came from.  That is the difference between "2 clash(es),
+                # closest 1.40 A" — which is what a whole run used to collapse into —
+                # and a finding you can group, sort and act on.
+                code = result.report.code
+                extra = {}
+                if result.report.marginal:
+                    code = "qc_clash_marginal_no_go"
+                    extra = {"hint": "this is a near miss, within "
+                                     f"{qc_mod.MARGINAL_OVERLAP} A. A run mode that "
+                                     "relaxes (ml_go, xtb_go) would have built it and "
+                                     "let the optimiser try to resolve the overlap."}
+                raise _Rejected(str(result.report), code=code,
+                                detail={**detail, "qc": result.report.to_dict(),
+                                        **extra,
+                                        "geometry": payload["geometry"],
+                                        "cn": payload["cn"]})
+            detail["built_despite_qc"] = {
+                "reason": "marginal clash, retried under a relaxation",
+                "worst_overlap": result.report.to_dict()["worst_overlap"],
+                "threshold": qc_mod.MARGINAL_OVERLAP}
         complex_mol = to_rdkit(metal.symbol, ligands, result)
-        charge = metal.oxidation_state + payload["charge"] * payload["n_ligands"]
+        # Summed over components, so a mixed sphere gets the charge it actually carries:
+        # [Mg(dtBK)(Cl)] is +1, not the +2 a neutral-ligand assumption would give or the
+        # 0 that two chlorides would.  Each component contributes `charge x count`.
+        charge = metal.oxidation_state + ligand_charge
         # The complex's multiplicity is the metal centre's own (from its spin_class,
-        # not a stale literal) combined with the ligand's — unpaired electrons add,
+        # not a stale literal) combined with EVERY ligand's — unpaired electrons add,
         # multiplicities don't.  See `spin_class_multiplicity`/`combined_multiplicity`.
         metal_multiplicity = spin_class_multiplicity(
             metal.symbol, metal.oxidation_state, metal.spin_class)
-        multiplicity = combined_multiplicity(metal_multiplicity, molecule.multiplicity)
+        multiplicity = combined_multiplicity(metal_multiplicity, *multiplicities)
         g = from_rdkit(complex_mol, charge=charge, multiplicity=multiplicity,
                        oxidation_states={0: metal.oxidation_state},
                        spin_classes={0: metal.spin_class}, name="")
-        put = put_structure(reg, g, tags=[molecule.name, "complex", metal.symbol],
+        detail["composition"] = {
+            "ligands": [{"molecule": spec.molecules[c["molecule"]].name,
+                         "label": c["label"], "charge": c["charge"],
+                         "mode": c["mode"], "count": c["count"]} for c in components],
+            "n_distinct": len(components), "ligand_charge": ligand_charge,
+            "n_co": payload["n_co"], "n_vacant": payload.get("n_vacant", 0)}
+        put = put_structure(reg, g, tags=[*molecule_names, "complex", metal.symbol],
                             provenance=Provenance(kind="assembly", depth=1,
                                                   note=payload["geometry"]))
         geom = put_geometry(reg, put.id, result.to_xyz(name), fidelity=Fidelity.RAW,

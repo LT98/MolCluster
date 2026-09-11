@@ -30,6 +30,25 @@ VDW = {"H": 1.20, "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47, "P": 1.80, "S": 1.
        "Ag": 1.72, "Cd": 1.58, "Pt": 1.75, "Au": 1.66, "Hg": 1.55, "Zr": 2.00}
 DEFAULT_VDW = 1.90
 
+#: Fraction of the summed vdW radii below which a non-bonded pair counts as a clash.
+#: Hydrogen gets its own, smaller fraction because its vdW radius is a poor model of how
+#: close an H will really sit.
+CLASH_SCALE = 0.62
+CLASH_SCALE_H = 0.50
+
+
+def clash_limit(sym_i: str, sym_j: str,
+                *, scale: float = CLASH_SCALE, scale_h: float = CLASH_SCALE_H) -> float:
+    """How close `sym_i` and `sym_j` may sit before it is a clash.
+
+    Shared with `geometry.placer`, which searches orientations by this exact number.  A
+    search that maximised raw separation instead would optimise the wrong thing whenever
+    a heavy pair and a hydrogen pair compete — C...Cl is allowed 2.14 A and H...Cl only
+    1.48, so the raw-distance winner is regularly the worse structure.
+    """
+    s = scale_h if "H" in (sym_i, sym_j) else scale
+    return s * (VDW.get(sym_i, DEFAULT_VDW) + VDW.get(sym_j, DEFAULT_VDW))
+
 
 class Clash(NamedTuple):
     """Two non-bonded atoms inside each other's van der Waals radii.
@@ -92,12 +111,41 @@ class BadBond(NamedTuple):
                 "tol": self.tol, "source": self.source}
 
 
+#: A clash this deep or shallower is a NEAR MISS: worth relaxing before it is thrown away.
+#:
+#: Calibrated, not guessed, from 2951 rejections in the working registry.  Split by whether
+#: hydrogen is involved, the H-clash population is flat-to-decaying below 0.30 A (96
+#: rejections) and then explodes at 0.30-0.40 (462) — a real valley, and where a rigid
+#: placement stops being nearly-right and starts being wrong.  Heavy-heavy clashes show no
+#: valley at all, which is itself the finding: an H position is the least reliable thing in
+#: a rigid placement and relaxes away, whereas two heavy atoms interpenetrating means the
+#: ligands do not fit.  The same number is used for both because this is a COMPUTE BUDGET,
+#: not a chemistry claim — the post-relaxation QC is the real gate, and this only bounds how
+#: much optimiser time is spent on hopeless cases.  Widen it when the post-relax pass rate
+#: says it is safe to; `runner` reports that rate for exactly this purpose.
+MARGINAL_OVERLAP = 0.30
+
+
 @dataclass
 class QCReport:
     ok: bool = True
     clashes: list[Clash] = field(default_factory=list)
     bad_bonds: list[BadBond] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def marginal(self) -> bool:
+        """Failed, but only just — a relaxation has a real chance of fixing it.
+
+        Bad M-L bonds disqualify a report from being marginal however small they are.  A
+        clash is the placer putting two things too close and an optimiser pulls them
+        apart; a wrong metal-donor distance means the centre was BUILT to the wrong
+        length, and relaxing it does not recover the geometry that was asked for.
+        """
+        if self.ok or self.bad_bonds or not self.clashes:
+            return False
+        worst = self.worst_clash
+        return worst is not None and worst.overlap <= MARGINAL_OVERLAP
 
     @property
     def code(self) -> str:
@@ -110,6 +158,11 @@ class QCReport:
             return "ok"
         if self.clashes and self.bad_bonds:
             return "qc_clash_and_bond"
+        if self.marginal:
+            # Grouped apart from `qc_clash` on purpose: a near miss and a real collision
+            # get different treatment downstream, so they must be countable separately
+            # in a run's rejection summary.
+            return "qc_clash_marginal"
         if self.clashes:
             return "qc_clash"
         if self.bad_bonds:
@@ -131,7 +184,7 @@ class QCReport:
 
     def to_dict(self) -> dict:
         worst = self.worst_clash
-        return {"ok": self.ok, "code": self.code,
+        return {"ok": self.ok, "code": self.code, "marginal": self.marginal,
                 "n_clashes": len(self.clashes),
                 "worst_clash": worst.distance if worst else None,
                 "worst_overlap": round(worst.overlap, 3) if worst else None,
@@ -154,7 +207,7 @@ class QCReport:
 
 
 def check_clashes(symbols: list[str], coords: np.ndarray, bonded: set[tuple[int, int]],
-                  *, scale: float = 0.62, scale_h: float = 0.50,
+                  *, scale: float = CLASH_SCALE, scale_h: float = CLASH_SCALE_H,
                   owners: list[str] | None = None) -> list[Clash]:
     """Non-bonded atom pairs sitting inside each other's van der Waals radii."""
     n = len(symbols)
@@ -164,10 +217,7 @@ def check_clashes(symbols: list[str], coords: np.ndarray, bonded: set[tuple[int,
             if (i, j) in bonded or (j, i) in bonded:
                 continue
             d = float(np.linalg.norm(coords[i] - coords[j]))
-            ri = VDW.get(symbols[i], DEFAULT_VDW)
-            rj = VDW.get(symbols[j], DEFAULT_VDW)
-            s = scale_h if "H" in (symbols[i], symbols[j]) else scale
-            limit = s * (ri + rj)
+            limit = clash_limit(symbols[i], symbols[j], scale=scale, scale_h=scale_h)
             if d < limit:
                 out.append(Clash(i, j, d, limit, symbols[i], symbols[j],
                                  owners[i] if owners else "",

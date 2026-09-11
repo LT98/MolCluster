@@ -203,6 +203,17 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
     embeds = reg.conn.execute(
         "SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND detail_json LIKE ?",
         (run_id, '%"retried": true%')).fetchone()
+    # The near-miss ledger.  `geometry.qc.MARGINAL_OVERLAP` is a compute budget set from
+    # one measurement, and the only way to know whether it is set well is to count how
+    # often the gamble paid: built_despite_qc is the bet, qc_failed_after_relax is the
+    # loss.  Reported per run so the threshold can be widened on evidence rather than on
+    # the feeling that it is probably fine.
+    marginal = reg.conn.execute(
+        "SELECT SUM(detail_json LIKE '%\"built_despite_qc\"%')   AS built, "
+        "       SUM(detail_json LIKE '%\"qc_failed_after_relax\"%') AS unresolved "
+        "FROM tasks WHERE run_id=?", (run_id,)).fetchone()
+    built = marginal["built"] or 0
+    unresolved = marginal["unresolved"] or 0
     return {
         "counts": counts,
         "by_code": by_code,
@@ -212,6 +223,9 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
         "reused_geometries": reuse["reused_geometries"] or 0,
         "retried_tasks": reuse["retried"] or 0,
         "embed_retries": embeds["n"] or 0,
+        "marginal_built": built,
+        "marginal_unresolved": unresolved,
+        "marginal_rescued": max(0, built - unresolved),
     }
 
 

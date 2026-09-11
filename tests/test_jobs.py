@@ -227,7 +227,11 @@ def test_a_version_3_spec_comes_forward_without_inventing_a_model(tmp_path):
         "molecules": [{"name": "x", "smiles": "O", "multiplicity": 1,
                        "max_deprotonations": None}]})
     assert spec.ml_model is None
-    assert spec.to_dict()["spec_version"] == 5
+    assert spec.to_dict()["spec_version"] == 6
+    # v6 adds mixed-ligand enumeration.  A v3 spec meant one molecule per coordination
+    # sphere, so it comes forward homoleptic — defaulting it to anything else would
+    # silently multiply the size of every run already on disk.
+    assert spec.max_distinct_ligands == 1
 
 
 def test_a_version_4_spec_drops_the_stale_metal_multiplicity():
@@ -275,3 +279,71 @@ def test_an_unknown_field_is_refused():
 def test_non_spec_json_is_not_mistaken_for_a_spec():
     assert not BuildSpec.looks_like_spec({"molecules": [{"name": "a", "smiles": "O"}]})
     assert BuildSpec.looks_like_spec({"spec_version": 2, "molecules": []})
+
+
+# ── heteroleptic enumeration: more than one ligand kind on a centre ──────────
+
+def _place_compositions(reg, spec):
+    from mofsbu.runner import plan
+    import json as _json
+
+    run_id, _ = plan(reg, spec)
+    out = []
+    for r in reg.conn.execute(
+            "SELECT payload_json FROM tasks WHERE run_id=? AND kind='place'", (run_id,)):
+        p = _json.loads(r["payload_json"])
+        out.append(tuple(sorted(
+            (spec.molecules[c["molecule"]].name, bool(c["selection"]), c["count"])
+            for c in p["components"])))
+    return set(out)
+
+
+def _two_ligand_spec(**over):
+    base = dict(
+        molecules=(MoleculeSpec("A", "CC(=O)C", 1), MoleculeSpec("B", "Cl", 1)),
+        metals=(MetalSpec("Mg", 2, "ls"),), coordination=(4,),
+        ligands_per_metal=(2,), binding=("mono",), co_ligand=None,
+        allow_unsaturated=True, geometries=("tetrahedral",))
+    base.update(over)
+    return BuildSpec(**base)
+
+
+def test_one_distinct_ligand_is_homoleptic_and_is_the_default(reg):
+    """The default must reproduce what every spec written before this field meant.
+
+    Two molecules in a spec used to be enumerated independently and could never share a
+    coordination sphere; that is still what happens unless you ask for otherwise, so no
+    stored run changes size or content underneath you.
+    """
+    spec = _two_ligand_spec()
+    assert spec.max_distinct_ligands == 1
+    combos = _place_compositions(reg, spec)
+    assert all(len(c) == 1 for c in combos), f"a default spec mixed ligands: {combos}"
+
+
+def test_raising_the_cap_mixes_two_molecules_on_one_centre(reg):
+    combos = _place_compositions(reg, _two_ligand_spec(max_distinct_ligands=2))
+    mixed = {c for c in combos if len({name for name, _, _ in c}) > 1}
+    assert mixed, "asked for 2 distinct ligand kinds and got only homoleptic spheres"
+    assert any(len(c) == 1 for c in combos), "the cap is a maximum, not a target"
+
+
+def test_two_protomers_of_one_molecule_are_two_kinds(reg):
+    """HCl and Cl- may share a metal: a partially deprotonated set is real chemistry
+    for a polyprotic linker, and this is the decision that allows it."""
+    combos = _place_compositions(reg, _two_ligand_spec(max_distinct_ligands=2))
+    same_mol_mixed = {
+        c for c in combos
+        if len(c) == 2 and len({name for name, _, _ in c}) == 1
+        and len({deprot for _, deprot, _ in c}) == 2}
+    assert same_mol_mixed, "no complex mixed a protonated and deprotonated form"
+
+
+def test_a_composition_never_exceeds_the_requested_ligand_count(reg):
+    for combo in _place_compositions(reg, _two_ligand_spec(max_distinct_ligands=2)):
+        assert sum(count for _, _, count in combo) == 2
+
+
+def test_max_distinct_ligands_must_be_at_least_one():
+    with pytest.raises(ValueError, match="at least 1"):
+        _two_ligand_spec(max_distinct_ligands=0)
