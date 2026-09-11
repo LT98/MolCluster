@@ -171,3 +171,4 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 | energies | `energy/reference.py` docstring — it explains what it refuses and why |
 | the build pipeline | `runner.execute`, top to bottom |
 | anything stored | `registry/api.py` — it is the only writer |
+| the web UI | `docs/UI_BACKLOG.md` — the known annoyances are already diagnosed |
