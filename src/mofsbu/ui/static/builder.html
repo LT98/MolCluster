@@ -125,6 +125,13 @@
       <label class="muted" style="margin-top:6px">
         <input type="checkbox" id="unsat"> build coordinatively unsaturated products
         when no co-ligand is set</label>
+      <label for="mixed">different ligand kinds per metal</label>
+      <div class="row">
+        <input id="mixed" type="number" min="1" value="1" style="flex:0 0 90px"
+               title="1 = homoleptic. 2+ lets two molecules (or two protomers of one)
+share a coordination sphere.">
+        <span class="muted" id="mixedNote" style="align-self:center"></span>
+      </div>
       <label>binding</label>
       <div class="row" style="justify-content:flex-start">
         <label class="muted"><input type="checkbox" id="bChel" checked> chelate</label>
@@ -195,7 +202,23 @@ async function loadCaps() {
   ).join('');
   $('#mlModel').onchange = showMlNote;
   showMlNote();
+  $('#mixed').oninput = showMixedNote;
+  showMixedNote();
   $('#metalList').title = state.caps.metals_note;
+}
+
+function showMixedNote() {
+  // The number decides how large a run is, so the page says what it will do rather than
+  // leaving it to be discovered when the queue is full.  A "kind" is one
+  // (molecule, protomer, donor set, binding mode) — two protomers of one molecule are
+  // two kinds, which is why a single molecule can still be mixed at 2+.
+  const n = +$('#mixed').value || 1;
+  const mols = state.molecules.length;
+  $('#mixedNote').textContent = n <= 1
+    ? 'homoleptic: one ligand kind per metal' + (mols > 1
+        ? ` — your ${mols} molecules are enumerated separately, never together` : '')
+    : `up to ${n} kinds share a metal (mixed ligands, and mixed protomers of one `
+      + 'molecule). Runs get substantially larger.';
 }
 
 function showMlNote() {
@@ -261,6 +284,8 @@ function renderMolecules() {
     : '<li class="muted">none yet</li>';
   el.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => {
     state.molecules.splice(+b.dataset.i, 1); renderMolecules(); });
+  // The note counts molecules, so it has to follow the list rather than only the input.
+  showMixedNote();
 }
 function renderMetals() {
   const el = $('#metalList');
@@ -354,6 +379,10 @@ function applySpec(spec) {
   $('#lpm').value = (spec.ligands_per_metal || [1]).join(',');
   $('#coligand').value = spec.co_ligand || '';
   $('#unsat').checked = !!spec.allow_unsaturated;
+  // Older specs have no such field and meant homoleptic, so `?? 1` is the migration
+  // showing through: loading a v5 spec must not silently present it as a mixed one.
+  $('#mixed').value = spec.max_distinct_ligands ?? 1;
+  showMixedNote();
   $('#bChel').checked = (spec.binding || []).includes('chelate');
   $('#bMono').checked = (spec.binding || []).includes('mono');
   $('#pRing').value = spec.pocket?.ring_size ?? '';
@@ -382,6 +411,7 @@ function buildSpec() {
     co_ligand: $('#coligand').value.trim() || null,
     binding, pocket, seed: 0,
     allow_unsaturated: $('#unsat').checked,
+    max_distinct_ligands: +$('#mixed').value || 1,
     run_mode: document.querySelector('input[name=mode]:checked').value,
     ml_model: $('#mlModel').value || null,
     note: $('#note').value,

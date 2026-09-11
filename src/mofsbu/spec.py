@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 5
+SPEC_VERSION = 6
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -91,6 +91,20 @@ class BuildSpec:
     # off by default, because quietly building something smaller than you asked for is
     # exactly the failure this project keeps running into.
     allow_unsaturated: bool = False
+    # How many DIFFERENT ligand kinds may share one coordination sphere.
+    #
+    # 1 is homoleptic — n copies of one thing, plus the co-ligand — and it is the default
+    # because it is what every spec written before this field meant.  Raising it is how
+    # you ask for [Mg(dtBK)(Cl)]: a "kind" is one (molecule, protomer, donor set, binding
+    # mode), so two protomers of one molecule are two kinds and a partially-deprotonated
+    # set on one centre is expressible.
+    #
+    # It is a cap and not a target: a spec asking for 2 still builds the homoleptic
+    # compositions too.  The number matters because the enumeration is over MULTISETS of
+    # kinds — a ligand with several protomers and pockets contributes a lot of kinds — so
+    # this is the knob that decides how large a run is, and it is set deliberately rather
+    # than discovered when the queue has 40,000 tasks in it.
+    max_distinct_ligands: int = 1
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     # Which ML potential `ml_go` means.  None = the machine's declared default.
     ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | None
@@ -101,6 +115,10 @@ class BuildSpec:
             raise ValueError(f"run_mode must be one of {RUN_MODES}, got {self.run_mode!r}")
         if not self.molecules:
             raise ValueError("a spec needs at least one molecule")
+        if self.max_distinct_ligands < 1:
+            raise ValueError(
+                f"max_distinct_ligands must be at least 1, got {self.max_distinct_ligands}; "
+                f"1 means homoleptic (one ligand kind per centre)")
         if self.ml_model is not None:
             from mofsbu.config import resolve_ml_backend
 
@@ -151,6 +169,12 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 5:
+            # v5 -> v6 adds `max_distinct_ligands`.  It defaults to 1, which is exactly
+            # what every earlier spec did — one molecule per coordination sphere — so an
+            # old spec re-run produces the same structures it produced before.  Defaulting
+            # it to anything else would silently multiply the size of every stored run.
+            d.setdefault("max_distinct_ligands", 1)
         if version <= 4:
             # v4 -> v5 drops `MetalSpec.multiplicity`.  It was never derived from
             # `oxidation_state`/`spin_class`, so an old spec's stored value cannot be

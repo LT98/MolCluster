@@ -29,6 +29,16 @@ ALGO_VERSIONS: dict[str, str] = {
     # version, because the weights ARE the model.
     "ease_model":       "floor1",  # pKa-table floor + cone occlusion (M4, C5/D18)
     "site_state":       "1",       # status rule + buried-volume convention (M4)
+    # 2: pinning a donor and its outward axis leaves two rotations undetermined — the
+    #    ligand's spin about the M-L axis, and the metal's swing out of the donor's
+    #    plane — and `1` left both wherever the alignment arithmetic dropped them.  They
+    #    are now searched over fixed grids and the winning indices are recorded, so the
+    #    coordinates of every monodentate placement differ from a `1` one.  Old rows keep
+    #    algo=1 and are never re-labelled (ground rule 6): they are not a worse version
+    #    of this recipe, they are a different one, and only comparable among themselves.
+    #    The grid sizes and the out-of-plane cap are part of the recipe, because an index
+    #    only means anything against a grid of a known size.
+    "placement":        "2",       # how a ligand is oriented on a coordination vertex
 }
 
 

@@ -506,3 +506,32 @@ def test_open_sites_uses_the_state_when_it_has_one():
     assert {o.atom_idx for o in opened} <= {s.atom_idx for s in sites}
     assert all(by_idx[o.atom_idx].status is SiteStatus.OPEN for o in opened)
     assert len(opened) == sum(1 for s in states if s.is_open)
+
+
+# ── near miss: a construct that would have been thrown away ──────────────────
+
+def test_a_marginal_clash_is_classified_apart_from_a_real_one():
+    """`MARGINAL_OVERLAP` is a compute budget, and it has to be legible as one."""
+    from mofsbu.geometry.qc import MARGINAL_OVERLAP, Clash, QCReport
+
+    near = QCReport(ok=False, clashes=[Clash(0, 1, 2.00, 2.00 + MARGINAL_OVERLAP - 0.01,
+                                             "H", "O")])
+    gross = QCReport(ok=False, clashes=[Clash(0, 1, 0.79, 2.11, "C", "C")])
+    assert near.marginal and near.code == "qc_clash_marginal"
+    assert not gross.marginal and gross.code == "qc_clash"
+    assert not QCReport().marginal, "a passing report is not a near miss"
+
+
+def test_a_bad_metal_bond_is_never_marginal():
+    """A clash is the placer putting two atoms too close and an optimiser undoes it.
+
+    A wrong M-L distance means the centre was BUILT to the wrong length — relaxing does
+    not recover the geometry that was asked for, so however small it is, it does not
+    earn a retry.
+    """
+    from mofsbu.geometry.qc import BadBond, Clash, QCReport
+
+    report = QCReport(ok=False,
+                      clashes=[Clash(0, 1, 2.00, 2.05, "H", "O")],
+                      bad_bonds=[BadBond(1, 2.4, 2.0, 0.1, "O")])
+    assert not report.marginal
