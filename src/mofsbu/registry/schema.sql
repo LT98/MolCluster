@@ -114,6 +114,19 @@ CREATE TABLE IF NOT EXISTS structures (
     -- and `registry.verify` fails if it has drifted from what the graph derives.
     display_label        TEXT NOT NULL DEFAULT '',
 
+    -- Soft delete, and deliberately NOT a real one.  Dropping a structure row cascades
+    -- to its geometries, site_catalog, site_state and its `reactions` edges — and
+    -- `reactions` is a DAG in which most products have more than one incoming edge, so
+    -- deleting "one entry" routinely severs some other route's history.  The registry is
+    -- regenerable by construction; cascaded-away provenance is not.  So a mistake is
+    -- HIDDEN (filtered out of every listing) rather than removed, and can be brought
+    -- back.  Nothing in the identity layer reads this column: a hidden structure still
+    -- occupies its L0/L1/L2 key, so re-deriving it is still recognised under D2 rather
+    -- than silently inserted a second time.
+    hidden               INTEGER NOT NULL DEFAULT 0,
+    hidden_at            TEXT             DEFAULT NULL,
+    hidden_reason        TEXT    NOT NULL DEFAULT '',
+
     created_at           TEXT NOT NULL,
     UNIQUE (l0_composition, l1_graph_hash, l2_isomer_tag)
 );
@@ -269,6 +282,13 @@ CREATE TABLE IF NOT EXISTS runs (
     status      TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed
     note        TEXT NOT NULL DEFAULT '',
     host        TEXT NOT NULL DEFAULT '',
+    -- Which accelerator this run was submitted under.  Ground rule 6 applied to
+    -- hardware: the device is DECLARED, and a stored run must still say which one
+    -- produced it — otherwise "this took four hours" loses the only fact that explains
+    -- it.  Empty on runs recorded before the column existed, which is honest: they
+    -- never expressed a choice, and back-filling 'cpu' would invent provenance.
+    device      TEXT NOT NULL DEFAULT '',
+    workers     INTEGER          DEFAULT NULL,
     -- Why candidates were NOT queued.  A run that plans zero tasks is a legitimate
     -- outcome and must never be silent: "your filter matched nothing" and "it worked"
     -- have to look different from the outside.

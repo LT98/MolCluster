@@ -1,238 +1,256 @@
-# UI backlog — known annoyances, diagnosed
+# UI backlog — all seven done
 
-Low priority by the user's own assessment, and none of them is a correctness bug: nothing
-here produces a wrong structure or a wrong number. They are all "the page does not behave
-the way a person expects", which is why they are written down rather than fixed in the
-middle of chemistry work — and why each entry carries a **diagnosis**, not just a
-complaint. The expensive part of a small fix is working out what causes it; that part is
-done here.
+Every item diagnosed in the previous revision of this file has been implemented. This
+version keeps the diagnoses, because they are the expensive part and they explain the
+shape of each fix, and records what was actually built underneath each one — including
+the three places where building it turned up something the diagnosis had not.
 
-Ordered by (annoyance ÷ effort), worst ratio first.
+None of these was a correctness bug: nothing here produced a wrong structure or a wrong
+number. They were all "the page does not behave the way a person expects".
 
----
-
-## 1. Arrow keys scroll the page instead of moving through results
-
-**Where** `ui/static/index.html`
-
-**Diagnosis** There is no keyboard handling on that page at all — `grep -n "keydown"` returns
-nothing. Selection is mouse-only (`tr.onclick = () => select(row.id)`, index.html:286), so
-the browser's default scroll behaviour is all that happens. Nothing is broken; the feature
-was never written.
-
-**Fix** A `keydown` listener on the results table: `ArrowDown`/`ArrowUp` move the selection
-by one row, `preventDefault()` to stop the scroll, and `scrollIntoView({block:"nearest"})`
-so the selected row stays visible without the page jumping. `Home`/`End` for first/last are
-nearly free once the handler exists. `PageDown`/`PageUp` should move a screenful rather
-than paginating, because pagination is a different action with a different control.
-
-Two details worth getting right rather than discovering later:
-* the handler must ignore key events originating in the filter inputs, or typing "d" in a
-  search box moves the selection;
-* the table needs `tabindex="0"` and a visible focus ring, or keyboard users cannot reach
-  it in the first place.
-
-**Effort** Small. One handler, ~25 lines.
+Covered by `tests/test_ui_controls.py` (25 tests) plus the existing viewer suite.
 
 ---
 
-## 2. An expanded error detail collapses every few seconds
+## 1. Arrow keys scroll the page instead of moving through results ✅
 
-**Where** `ui/static/runs.html:334`, `:124`, `:317`
+**Was** No keyboard handling on `index.html` at all — selection was mouse-only, so the
+browser's default scroll was the only thing that happened. The feature was never written.
 
-**Diagnosis** The run inspector polls on a fixed timer —
-`setInterval(() => { loadRuns(); if(state.runId !== null) render(); }, 4000)` — and
-`render()` replaces the whole panel with `$('#detail').innerHTML = ...`. The
-`<details><summary>full record</summary>` element (runs.html:317) is therefore *destroyed
-and recreated* every 4 s, and a fresh `<details>` defaults to closed. Reading a long
-traceback is a race against the timer.
+**Built** A `keydown` handler: `ArrowUp`/`ArrowDown` by one row, `PageUp`/`PageDown` by a
+screenful, `Home`/`End` to the ends. The table has `tabindex="0"` and a focus ring, and a
+click on a row focuses it so the arrows work immediately afterwards rather than needing a
+Tab press nobody would guess at.
 
-**Fix**, cheapest correct version first:
+Both details the diagnosis flagged were kept: the handler ignores events from any form
+control (typing "d" in the search box does not move the selection), and `preventDefault`
+is applied *only* to the keys it handles, so typing is untouched.
 
-1. **Do not re-render when nothing changed.** Hash the payload (`run` + `tasks`) and skip
-   the DOM write when the hash matches the last one. This alone fixes the collapse for a
-   finished run, which is the common reading case, and it also fixes item 3 below.
-2. **Preserve open state across a real re-render.** Give each `<details>` a stable key
-   (the task id), collect `[...$('#detail').querySelectorAll('details[open]')].map(d => d.dataset.key)`
-   before the write and re-apply `open` after it.
-3. **Stop polling a finished run.** When `run.status` is terminal and `thread !== 'running'`
-   there is nothing left to poll for; clear the interval and leave the manual `refresh`
-   button (runs.html:194) as the way back.
+**Also fixed, because keyboard movement made it obvious:** `select()` used to call
+`load()` purely to repaint the selection highlight — a full `/api/structures` round trip
+per selection. Tolerable for a click; absurd for holding down an arrow key. The highlight
+is now repainted locally.
 
-(1) and (3) are each a few lines. (2) is the one that survives a genuinely live run.
-
-**Effort** Small–medium. Do (1) and (3) together; add (2) if it still annoys.
+**Deliberately not done** Arrowing off the end does not fetch the next page. Pagination is
+a different action with its own control, and a key that sometimes issues a query and
+sometimes does not is not predictable.
 
 ---
 
-## 3. The server log scrolls constantly with no user action
+## 2 & 3. An expanded error collapses; the server log scrolls on its own ✅
 
-**Where** same `setInterval`, `ui/static/runs.html:334`
+These were one problem seen from two sides, and they got one fix.
 
-**Diagnosis** Not a backend behaviour at all — it is the same 4-second poll seen from the
-other side. Each tick issues `/api/runs`, `/api/runs/{id}` and `/api/runs/{id}/tasks`, and
-uvicorn logs one line per request, so an idle open tab produces ~45 log lines a minute
-forever. It maps to "a run inspector is open somewhere", which is why it looks unrelated
-to anything you are doing.
+**Was** `setInterval(… 4000)` with `$('#detail').innerHTML = …`, so every `<details>` was
+destroyed and recreated every 4 s — a fresh `<details>` is closed, and reading a long
+traceback was a race against the timer. From the server side the same loop issued three
+requests a tick (`/api/runs`, `/api/runs/{id}`, `/api/runs/{id}/tasks`), which uvicorn
+logged at ~45 lines a minute from an idle open tab, forever.
 
-**Fix** Item 2's (3) removes the steady state entirely. Beyond that, back the interval off
-while the run is active but unchanged (4 s → 15 s after a few identical polls), and
-consider `uvicorn --log-level warning` for the default launch so the access log is opt-in.
-A single `/api/runs/{id}/summary` returning all three payloads would cut the line count
-threefold, but that is a bigger change than the annoyance justifies.
+**Built**, and it went further than the diagnosis proposed:
 
-**Effort** Small, and mostly the same edit as item 2.
+1. **Skip the DOM write when nothing changed.** The payload is hashed and an identical
+   tick writes nothing at all.
+2. **Preserve open state across a real re-render.** Each `<details>` carries
+   `data-key="task-{id}"`; the open set is read out immediately before the write and
+   reapplied immediately after. This is the one that survives a genuinely live run.
+3. **The steady state is now ONE request, not three.** Rather than merely stopping the
+   poll on a terminal run, the tick asks `/api/runs` only — which already carries each
+   run's status and done/rejected/failed counts — and pays for the two detail requests
+   only when the selected run has actually moved.
+
+   *This is the part the diagnosis got slightly wrong.* Simply stopping the poll on a
+   finished run would have meant a run submitted from another tab never appeared in the
+   list. Cheapening the tick achieves the same reduction without going blind.
+4. **Back off.** 4 s while moving, 15 s when finished or unchanged. A failed fetch retries
+   on the slow cadence rather than hammering a server that is already unwell.
+
+`--log-level` now defaults to `warning`, so access lines are opt-in (`--log-level info`).
+The builder page's own run table went from polling every 2.5 s to every 10 s: it was never
+the place you watch a run move — `/runs` is.
+
+**Measured:** ~45 requests/minute → ~4, and the expanded traceback stays open across both
+a quiet tick and a forced rebuild.
 
 ---
 
-## 4. "22 done / 36, 14 rejected" makes the reader do arithmetic
+## 4. "22 done / 36, 14 rejected" makes the reader do arithmetic ✅
 
-**Where** `ui/static/runs.html:140-148` (the `cards` array)
+**Was** Four independent numbers, with nothing saying that **a rejection is a settled
+outcome** — the task ran, the chemistry answered no, nothing is pending. A finished run
+read as 22-of-36 when it was 36-of-36 settled.
 
-**Diagnosis** The cards report `done`, `rejected`, `failed` and `pending` as four
-independent numbers. Nothing says that **a rejection is a settled outcome** — the task ran,
-the chemistry answered "no", and there is nothing further to wait for. So a finished run
-reads as 22-of-36 complete when it is in fact 36-of-36 settled, and the reader has to add
-up the other cards to discover that. The project already draws this distinction correctly
-everywhere else (`rejected` is deliberately not `failed`, and `finish_run` returns `done`
-for a run full of rejections) — the UI just does not show it.
-
-**Fix** A headline above the existing cards:
+**Built** The headline from the diagnosis, verbatim in spirit:
 
 ```
-settled 36 / 36   ·   22 built · 14 rejected · 0 failed
+settled 48 / 48   ·   42 built · 6 rejected · 0 failed
 ```
 
-where `settled = done + rejected + failed` and the total is `settled + pending + claimed`.
-Keep the per-outcome cards underneath — they are the useful breakdown once you know the
-run is finished. The progress bar the user asked about is then almost free, since the ratio
-is already computed: one `<div>` with a percentage width, coloured by whether `failed > 0`.
+plus the three-segment progress bar (green/amber/red), which was nearly free once the
+ratio existed. The per-outcome cards stay underneath. A finished run also says *"every
+task has an answer — a rejection is one of them"*, and notes when it has stopped polling.
 
-Worth keeping: a rejection is not a failure, and the summary must not merge them into one
-"unsuccessful" bucket. It should merge them into one **settled** bucket, which is a
-different claim.
-
-**Effort** Small. The numbers are all already in `outcome_summary`.
+The distinction that mattered was kept: rejected is **not** merged with failed into one
+"unsuccessful" bucket. It is merged with them into one **settled** bucket, which is a
+different claim — and the one the rest of the project already makes (`finish_run` returns
+`done` for a run full of rejections).
 
 ---
 
-## 5. Choosing hardware requires a shell, which rules out most of the group
+## 5. Choosing hardware requires a shell ✅
 
-**Where** `ui/__main__.py::confirm_compute_settings`, `config.compute_device`
+**Was** The startup prompt made the device *visible* but not *reachable*: answering it
+needs a terminal, which most of the people who open the page do not have.
 
-**Diagnosis** The startup prompt made the device *visible*, which was the previous problem,
-but it did not make it *reachable*: it still assumes the person launching knows what a
-terminal is. For a labmate who opens the app and uses the browser, there is currently no
-path to the GPU at all.
+**Built** `GET/POST /api/compute` and a selector on `/builder`. Possible without a new
+process model for the reason the diagnosis identified: `submit_run` executes on a thread
+**in this process** and `compute_device()` reads the environment at execution time.
 
-**Fix** Put the control in the page, which is possible for a reason specific to this
-architecture: `submit_run` executes the run on a background thread **in the same process**,
-and `compute_device()` reads the environment at execution time. So a device selector in
-`/builder` that sets the value for subsequent runs works without any new process model.
+* the device list is enumerated honestly — `cpu` always, plus each visible CUDA device
+  *by its own name* (`NVIDIA RTX 4000 Ada Generation (cuda:0)`, not a bare `cuda:0`), plus
+  `mps` where applicable. A machine without torch reports cpu alone rather than offering a
+  device that would fail at the first structure of an hour-long run;
+* the choice is recorded in the **run row** (`runs.device`, `runs.workers`), not merely
+  applied — ground rule 6 for hardware. Pre-existing runs report `''`, which is honest:
+  they never expressed a choice, and back-filling `cpu` would invent provenance;
+* a typo is refused with the same message the CLI gives, and leaves the previous
+  declaration intact rather than a broken one.
 
-Shape of it:
-* `GET /api/capabilities` already reports installed backends; extend it with the available
-  devices (`cpu`, plus `cuda:N` for each visible GPU, `mps` where applicable) and which one
-  is currently declared;
-* a `<select>` next to the run-mode radio buttons, defaulting to the declared value;
-* the choice is recorded **in the run's spec/metadata**, not just applied, so a stored run
-  still says which device produced it. That is ground rule 6 applied to hardware, and it is
-  the part that must not be skipped for convenience.
+**Declared, never detected** survives: listing the GPUs and letting a person choose is a
+declaration. Nothing defaults to CUDA because a card exists — the default is still `cpu`,
+and there is a test asserting it does not move.
 
-The one thing to preserve: **declared, never detected.** Listing the GPUs and letting a
-person choose is still a declaration. Silently defaulting to CUDA because a card exists is
-not, and would undo the reason the prompt was added.
-
-Once the page can do it, the startup prompt should probably become opt-in
-(`--prompt-device`) rather than the default, since it will then be the second-best way to
-answer the same question.
-
-**Effort** Medium — small on the page, slightly more to enumerate devices honestly and to
-thread the value into the run record.
+As the diagnosis anticipated, the startup prompt is now opt-in behind `--prompt-device`
+(`--no-prompt` still accepted so old command lines keep working).
 
 ---
 
-## 6. A run always goes to whichever database the server was started with
+## 6. A run always goes to whichever database the server was started with ✅
 
-**Where** `ui/__main__.py::resolve_database`, `ui/builder.py::submit_run`
+**Was** `create_app(db, store)` closed over one path; `submit_run` opened `Registry(db_path)`
+on it. Separating exploratory runs from real ones meant restarting with a different flag —
+item 5's problem again.
 
-**Diagnosis** The database is chosen once, at launch, by `--db` or by discovery, and then
-baked into the app: `create_app(db, store)` closes over it and `submit_run` opens
-`Registry(db_path, ...)` on that single path. Nothing in the page can point a run
-somewhere else, so separating exploratory runs from real ones means restarting the server
-with a different flag — i.e. a shell, which is item 5's problem again.
+**Built** `ui/active.py::ActiveDatabase`: one mutable path that the viewer, the builder and
+the run inspector all read at request time, so a switch moves all three together. A page
+showing structures from one database and runs from another would be worse than no switch.
 
-The machinery to *find* the alternatives already exists and is already exposed:
-`discover_databases()` lists every `.db` under the data root, newest first, and
-`--list-db` prints them. It is only the selection that is missing.
+All three things the diagnosis said to get right were got right:
 
-**Fix** A database `<select>` on `/builder`, populated from `discover_databases()`, plus a
-"new database…" option that takes a name and creates it. Creation is genuinely cheap —
-`Registry(path).migrate()` builds a complete schema from nothing, which is how every
-registry in the project has ever been made.
+* **the viewer is still read-only.** `ActiveDatabase` holds a *path*, never a connection.
+  The viewer keeps opening `mode=ro`, the builder keeps opening its own writable ones.
+  Tested explicitly after a switch.
+* **name validation** — `_validate_name` applies `save_spec`'s rule (a name is a path
+  *component*) plus a character whitelist.
+* **row counts in the dropdown** — `registry.db — 594 structures · 38 runs`.
 
-Three things to get right:
-* **the viewer is read-only and must stay that way.** The registry page opens its
-  connection with `open_read_only()`; adding a writable path for runs must not widen that.
-  The write already happens on a different connection inside `submit_run`, so this is a
-  matter of not "simplifying" the two into one later.
-* **name validation**: `save_spec` already refuses a filename containing `/` or `\`, and
-  the same check belongs here — a database name is a path component, not a path.
-* **show the row count** next to each database in the dropdown. "Which one is my real
-  one" is the actual question being asked, and a name alone frequently does not answer it.
+**Two things the diagnosis had not anticipated, both found by testing:**
 
-**Effort** Small–medium. The listing exists; it is a select, a POST, and being careful
-about the read-only connection.
+* **Basenames collide.** The launch database may live outside the data root
+  (`--db /elsewhere/registry.db`) and share a name with one inside it. Selecting by *name*
+  was therefore ambiguous and silently resolved to the wrong file. Selection now quotes a
+  full path, matched against a whitelist the server itself produced; a bare name is
+  accepted only when unambiguous and returns 409 naming both folders when it is not.
+* **The switch was one-way.** The whitelist was built from `current()`, so switching off a
+  launch database outside the data root dropped it out of the list and the way back was a
+  404 — fixable only by restarting with the flag. The launch path is now in the whitelist
+  permanently. There is a regression test for exactly this.
 
----
-
-## 7. No way to re-run or delete a single entry
-
-**Where** `registry/api.py`, `ui/app.py`
-
-**Diagnosis** Two different requests that look like one.
-
-**Re-run** is nearly free and mostly exists: a geometry stores its `choice_vector` and
-`seed`, and the whole point of D13 is that `construct` is a deterministic function of the
-two. `/api/structures/{id}/spec` already returns the spec that produced a structure, for
-copy-paste. Re-running one entry is therefore "take that spec, narrow it to this one
-structure, queue it" — which is a button over machinery that is already there. Under D2 it
-will usually recognise the identity and write nothing, which is the correct outcome and
-should be *reported* as such rather than looking like a no-op.
-
-**Delete** is the one to be careful about, and it is not a UI problem. The schema cascades
-hard: deleting a structure takes its geometries, its `site_catalog`, its `site_state`, and
-its `reactions` edges with it. That is right for a mistake and wrong for a structure some
-other route also reached — `reactions` is a DAG, and **457 of 594 structures in the working
-registry — 77% — have more than one incoming edge**, so deleting "one entry" usually
-severs some other route's history. That is not an edge case to guard against; under D2 it
-is the normal state of the registry, because re-deriving an identity you already have is
-what most of an enumeration does.
-
-**Fix** Split them:
-* **Re-run**: a button on the structure page. Reuses the stored spec; shows the outcome
-  including "already present, nothing written".
-* **Delete**: offer it only for a structure with a single incoming provenance edge, and
-  refuse (with the reason, and a list of the other routes) otherwise. Prefer a soft delete
-  — a `hidden` flag filtered out of `v_structures` — over a real one: the registry is
-  meant to be regenerable, but provenance that has been cascaded away is not recoverable,
-  and "I deleted the wrong row" is a much worse afternoon than "the list has a filter on
-  it".
-
-A blanket "delete any row" button is the one thing here I would not build.
-
-**Effort** Re-run: small. Delete: medium, and mostly deciding the policy rather than
-writing it.
+A run **snapshots the database before its thread starts**, so switching mid-run cannot
+redirect a build already in flight. The blob store is deliberately *not* switched
+alongside: it is content-addressed, so two registries share one copy of a geometry.
 
 ---
 
-## Not in this list
+## 7. No way to re-run or delete a single entry ✅
 
-Things noticed while diagnosing the above, deliberately excluded because they are not UI:
+Split, as the diagnosis said to.
 
-* `index.html` has no polling at all, so the registry page can show a stale count after a
-  run finishes in another tab. Arguably correct — a registry view that moves under you
-  while you read it is worse — but it is a decision nobody made explicitly.
+### Re-run — small, and it worked out as predicted
+
+`POST /api/structures/{id}/rerun` finds the task that built the structure, takes its
+payload and its run's spec, and queues a new run of exactly one task.
+`GET .../origin` answers "can this be re-run at all" *before* the button is offered, so a
+seeded or ingested structure gets an explanation rather than a control that fails when
+pressed.
+
+The D2 outcome is reported as the confirmation it is: *"already present — re-running
+produced the same identity, so nothing was written."*
+
+**What testing on the real registry turned up.** Re-running structure 120 wrote a *new*
+structure (595) rather than recognising the identity. Not non-determinism: same L1 graph
+hash, same formula, same 49 atoms — different **multiplicity, 1 vs 4**. That is the spec
+v4→v5 migration doing exactly what its comment says, `MetalSpec.multiplicity` having been
+dropped because it was never kept in sync with `spin_class`, so an old spec's Co(+2,hs)
+carried a stale singlet and re-deriving it now yields the reachable quartet.
+
+So the page distinguishes three outcomes rather than two: same identity (reproducible),
+*same graph but a different derived identity* (a migration showing through — stated, with
+the difference named), and a genuinely different graph (flagged as worth looking at).
+A flat "wrote structure 595" would have hidden the only fact that explains it.
+
+**Consequence worth knowing:** re-running anything built before spec v5 will produce a
+second row carrying the corrected spin. Both rows are real. The registry very likely
+already contains such pairs.
+
+### Delete — became hide, as recommended
+
+The measurement in the diagnosis held up: **457 of 594 structures — 77% — have more than
+one incoming `reactions` edge**, so deleting "one entry" usually severs some other route's
+history. Everything in the registry is regenerable *except* provenance.
+
+So there is no `delete_structure` in `registry/api.py`, and its absence is the decision:
+
+* `structures.hidden` / `hidden_at` / `hidden_reason`, filtered out of listings;
+* a hidden structure keeps its row, geometries, blobs, every `reactions` edge, **and its
+  L0/L1/L2 identity** — so a later run that re-derives it is still recognised under D2
+  rather than inserting a duplicate;
+* hiding a structure with more than one incoming route is refused (409) **with the routes
+  listed**, because "is this safe to remove" is not answerable without seeing them;
+  `force` overrides after confirmation;
+* `include_hidden=1` and a sidebar switch bring them back. The undo is part of the
+  feature, not an advanced option.
+
+A blanket "delete any row" button was not built, as recommended.
+
+**Compatibility:** the viewer opens `mode=ro` and so cannot migrate a registry into having
+the column. Every query over it checks `has_column` first, and a registry written before
+the soft delete existed simply lists normally. Tested.
+
+---
+
+## Packaging (not previously in this list)
+
+`launch/mofsbu.sh`, `launch/mofsbu.bat`, `launch/install-desktop-entry.sh` — one
+double-clickable thing, so starting the app is not three commands.
+
+The load-bearing decision: **the interpreter is used by full path and never activated.**
+`conda activate` needs a shell that has been `conda init`-ed, which a double-click does not
+provide, and it fails differently depending on how conda was installed — none of the
+failures saying so clearly.
+
+The environment is **probed, not assumed**: `$MOFSBU_PYTHON`, then `$MOFSBU_ENV`, then the
+name in `environment.yml`, then *any* conda env that can `import fastapi, uvicorn, rdkit`.
+That last fallback is not hypothetical — `environment.yml` says the env is called `mofsbu`
+and on the development machine it is not, so a launcher hard-coding the name would have
+failed on the machine it was written on.
+
+---
+
+## Still not in this list
+
+Unchanged from the previous revision, and still deliberately excluded:
+
+* `index.html` has no polling, so the registry page can show a stale count after a run
+  finishes in another tab. Arguably correct — a registry view that moves under you while
+  you read it is worse — but it is a decision nobody made explicitly.
 * The builder posts `spec_version: 1` and relies on the migration chain to bring it
   forward. It works, and it means the page never has to know the current version, but it
   is load-bearing behaviour that no test covers.
+
+Noticed while implementing, and *not* fixed because it is outside this work:
+
+* The run inspector's "what was attempted" column renders `molecule undefined ·
+  undefined×0-dentate` for `place` tasks. The payload keys the JS reads (`p.molecule`,
+  `p.donors`) are not the keys the planner writes. Cosmetic, on a column that is otherwise
+  the most useful one on the page.

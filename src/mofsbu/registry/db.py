@@ -117,6 +117,41 @@ class Registry:
             (SCHEMA_VERSION * 1000,)).fetchone()[0]
         return max(int(top) - SCHEMA_VERSION * 1000, 0) + offset
 
+    def _record_note(self, note: str) -> None:
+        """Record an advisory note about this database, at most once.
+
+        Notes are not migrations — nothing was applied — but they live in the same table
+        because that table is the migration log and a reader looking for "what is odd
+        about this registry" should find it in one place.  They therefore need a version,
+        and a version is the PRIMARY KEY.
+
+        This used to insert at a hard-coded `version = 0` with no conflict handling,
+        which is the same defect `_next_migration_slot` exists to fix for added columns,
+        left in the one place that did not get it.  Two consequences, and the second is
+        the expensive one:
+
+        * two tables with unexpected columns in one migration collided with each other;
+        * more importantly, a note is re-derived on EVERY migrate, because an extra
+          column stays extra.  So once a registry had recorded one, every later
+          `migrate()` raised `UNIQUE constraint failed: migrations.version` and rolled
+          the whole migration back — which, since `submit_run` migrates before planning,
+          turned every subsequent run submission into a 500.  The registry was fine; the
+          bookkeeping row was what refused.
+
+        Notes take negative slots so they can never collide with a schema version, and an
+        identical note is recognised rather than rewritten — the same advisory fact
+        recorded a hundred times is not a hundred facts.
+        """
+        if self.conn.execute("SELECT 1 FROM migrations WHERE note = ?",
+                             (note,)).fetchone() is not None:
+            return
+        floor = self.conn.execute(
+            "SELECT COALESCE(MIN(version), 0) FROM migrations").fetchone()[0]
+        self.conn.execute(
+            "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
+            "ON CONFLICT(version) DO NOTHING",
+            (min(0, int(floor)) - 1, utcnow(), note))
+
     def _target_schema(self, schema: str) -> sqlite3.Connection:
         """The schema as it SHOULD be, built in memory so SQLite itself parses it."""
         target = sqlite3.connect(":memory:")
@@ -216,11 +251,9 @@ class Registry:
                     added.append((table, name))
                 extra = have - set(want)
                 if extra:
-                    self.conn.execute(
-                        "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?)",
-                        (0, utcnow(),
-                         f"NOTE: {table} has column(s) {sorted(extra)} not in the schema; "
-                         "left alone (destructive changes are never applied automatically)"))
+                    self._record_note(
+                        f"NOTE: {table} has column(s) {sorted(extra)} not in the schema; "
+                        "left alone (destructive changes are never applied automatically)")
         finally:
             target.close()
         return added

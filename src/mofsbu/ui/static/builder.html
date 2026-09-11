@@ -151,6 +151,34 @@ share a coordination sphere.">
     <select id="mlModel"></select>
     <div class="notice" id="mlNote"></div>
 
+    <!-- ── hardware ───────────────────────────────────────────────────────
+         Declared, never detected.  The list is what this machine actually has;
+         choosing from it is a person deciding, which is what ground rule 9 asks for.
+         Nothing here picks CUDA because a card happens to be present. -->
+    <fieldset>
+      <legend>hardware</legend>
+      <label for="device">compute device</label>
+      <select id="device"></select>
+      <label for="workers">in-process workers</label>
+      <div class="row">
+        <input id="workers" type="number" min="1" value="1" style="flex:0 0 90px"
+               title="1 keeps a laptop responsive. More than one declares a workstation.">
+        <span class="muted" id="hwNote" style="align-self:center"></span>
+      </div>
+    </fieldset>
+
+    <!-- ── which registry ─────────────────────────────────────────────────
+         The row count is the point: "which one is my real one" is the question,
+         and two plausible filenames do not answer it. -->
+    <fieldset>
+      <legend>database</legend>
+      <div class="row">
+        <select id="database" style="flex:2 1 60%"></select>
+        <button id="newDb" style="flex:0 0 auto">new…</button>
+      </div>
+      <div class="muted" id="dbNote" style="margin-top:6px"></div>
+    </fieldset>
+
     <label for="note">note</label>
     <input id="note" placeholder="what this run is for">
 
@@ -169,7 +197,8 @@ share a coordination sphere.">
 
 <script>
 const $ = s => document.querySelector(s);
-const state = {molecules: [], metals: [], caps: null, current: null};
+const state = {molecules: [], metals: [], caps: null, current: null,
+               compute: null, databases: []};
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -205,7 +234,94 @@ async function loadCaps() {
   $('#mixed').oninput = showMixedNote;
   showMixedNote();
   $('#metalList').title = state.caps.metals_note;
+  renderCompute(state.caps.compute);
 }
+
+// ── hardware ────────────────────────────────────────────────────────────────
+// This control exists because the startup prompt made the device visible but not
+// REACHABLE: answering it needed a terminal. `submit_run` executes on a thread in the
+// server process and `compute_device()` reads the environment when the work starts, so
+// a selection here reaches the run without any new process model.
+function renderCompute(c) {
+  state.compute = c;
+  $('#device').innerHTML = c.devices.map(d =>
+    `<option value="${d.id}" ${d.id === c.device ? 'selected' : ''}>${d.label}</option>`).join('');
+  $('#workers').value = c.workers;
+  showHwNote();
+  $('#device').onchange = applyCompute;
+  $('#workers').onchange = applyCompute;
+}
+
+function showHwNote() {
+  const c = state.compute || {};
+  const dev = $('#device').value;
+  const n = +$('#workers').value || 1;
+  const onlyCpu = (c.devices || []).length <= 1;
+  $('#hwNote').textContent =
+    (dev === 'cpu'
+      ? (onlyCpu ? 'no GPU visible to torch here' : 'GPU available but not selected')
+      : 'GPU runs apply to ml_go only')
+    + ' · ' + (n > 1 ? `workstation: ${n} workers` : 'laptop: one worker');
+}
+
+async function applyCompute() {
+  try {
+    const c = await api('/api/compute', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({device: $('#device').value, workers: +$('#workers').value || 1})});
+    state.compute = c;
+    showHwNote();
+    $('#submitMsg').textContent = `device ${c.device} · ${c.workers} worker(s)`;
+  } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+// ── which database a run writes to ──────────────────────────────────────────
+async function loadDatabases() {
+  let body;
+  try { body = await api('/api/databases'); }
+  catch (e) { $('#dbNote').textContent = 'could not list databases'; return; }
+  state.databases = body.databases;
+  // Two folders can hold a `registry.db`, and the launch one may sit outside the data
+  // root entirely, so the option VALUE is the full path and the label disambiguates
+  // only when it has to. A dropdown with two identical entries is not a choice.
+  const counts = {};
+  body.databases.forEach(d => counts[d.name] = (counts[d.name] || 0) + 1);
+  $('#database').innerHTML = body.databases.map(d => {
+    const size = d.error ? 'unreadable'
+      : d.exists ? `${d.n_structures} structures · ${d.n_runs} runs`
+      : 'empty (not created yet)';
+    const where = counts[d.name] > 1 ? ` [${d.folder}]` : '';
+    return `<option value="${d.path}" title="${d.path}" ${d.active ? 'selected' : ''}>`
+         + `${d.name}${where} — ${size}</option>`;
+  }).join('');
+  const active = body.databases.find(d => d.active) || {};
+  $('#dbNote').textContent = `runs write to ${active.path || '—'} · the viewer reads the `
+    + `same one (read-only) · new ones are created in ${body.data_root}`;
+  $('#database').onchange = async () => {
+    try {
+      await api('/api/database/select', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: $('#database').value})});
+      const to = $('#database').value;
+      await loadDatabases();
+      pollRuns();
+      $('#submitMsg').textContent = `switched to ${to}`;
+    } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
+  };
+}
+
+$('#newDb').onclick = async () => {
+  const name = prompt('Name for the new registry (letters, digits, - and _):');
+  if (!name) return;
+  try {
+    const r = await api('/api/databases', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name})});
+    await loadDatabases();
+    pollRuns();
+    $('#submitMsg').textContent = r.note;
+  } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
+};
 
 function showMixedNote() {
   // The number decides how large a run is, so the page says what it will do rather than
@@ -431,10 +547,14 @@ $('#saveSpec').onclick = async () => {
 $('#submit').onclick = async () => {
   $('#submitMsg').textContent = 'submitting…';
   try {
+    // The device travels WITH the submission, so the run row records the hardware it was
+    // started under rather than only having it applied to the process.
     const res = await api('/api/runs', {method: 'POST',
-      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({spec: buildSpec()})});
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: buildSpec(), device: $('#device').value,
+                            workers: +$('#workers').value || 1})});
     $('#submitMsg').textContent =
-      `run ${res.run_id} queued — ${res.tasks} tasks` +
+      `run ${res.run_id} queued — ${res.tasks} tasks · ${res.database} · ${res.device}` +
       (res.tasks === 0 ? ' (nothing to build — see below)' : '');
     renderDiagnostics(res.diagnostics);
     pollRuns();
@@ -460,5 +580,10 @@ async function pollRuns() {
   } catch (e) { /* the viewer may not have a registry yet */ }
 }
 
-loadCaps(); loadLibrary(); loadSpecs(); pollRuns(); setInterval(pollRuns, 2500);
+loadCaps(); loadLibrary(); loadSpecs(); loadDatabases(); pollRuns();
+// 2.5 s was chosen when this table was the only way to see a run move. It is not any
+// more — /runs is — and an idle builder tab polling 24 times a minute is half of the
+// "server log scrolls with no user action" problem. Six times a minute is still faster
+// than anyone reads a number off a table.
+setInterval(pollRuns, 10000);
 </script>

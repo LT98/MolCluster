@@ -9,6 +9,13 @@ Design constraints, all load-bearing:
   internal layout can change underneath the viewer (schema.sql says so explicitly).
 * **Parameterised SQL only.**  The only identifiers that ever reach a query string
   are drawn from module-level whitelists (:data:`SORTABLE`, :data:`BRIDGE_CLASSES`).
+* **The database is a live reference, not a captured constant.**  Every endpoint asks
+  :class:`~mofsbu.ui.active.ActiveDatabase` where the registry is at request time, so the
+  builder's database switch moves the viewer with it.  It is still a *path* — the
+  connections opened from it are as read-only as they ever were.
+* **Hidden structures are filtered, not deleted.**  ``hidden`` is a soft-delete flag
+  (see ``registry/api.set_hidden`` for why a real delete is refused).  Listings exclude
+  it by default and ``include_hidden=1`` brings it back, so nothing becomes unreachable.
 * **Reserved columns degrade, they do not crash.**  ``donor_types``,
   ``binding_modes``, ``n_open_sites`` (M4/M5) and ``reactions.depth`` are NULL in a
   current database.  Their filters keep strict SQL semantics (NULL never matches),
@@ -78,6 +85,21 @@ def open_read_only(db_path: Path | str) -> sqlite3.Connection:
 
 def _rows(cur: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(r) for r in cur]
+
+
+def has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
+    """Does this database have that column yet?
+
+    The viewer opens `mode=ro` and therefore CANNOT migrate: a registry written before a
+    column existed stays that way until something writable touches it.  So every query
+    over a column added after M3.5 has to ask first, or a viewer pointed at an older
+    file dies on `no such column` — which is a packaging accident presented as a bug in
+    the page.  `table` is never user input; it comes from a literal in this module.
+    """
+    try:
+        return any(r[1] == column for r in con.execute(f"PRAGMA table_info({table})"))
+    except sqlite3.Error:
+        return False
 
 
 def _like(term: str) -> str:
@@ -156,6 +178,13 @@ def _where(params: dict[str, Any]) -> tuple[str, list[Any]]:
         add("EXISTS (SELECT 1 FROM structure_tags t"
             " WHERE t.structure_id = v.id AND t.tag = ?)", tag)
 
+    # The soft delete.  Hidden rows are excluded from every listing unless asked for,
+    # which is the only thing "hidden" means — the row, its geometries and its
+    # provenance are all still there, and `include_hidden` is how you get back to a
+    # structure you hid by mistake.
+    if params.get("hidden_supported") and not params.get("include_hidden"):
+        add("v.hidden = 0")
+
     return (" WHERE " + " AND ".join(sql)) if sql else "", args
 
 
@@ -165,9 +194,18 @@ DEPTH_EXPR = ("(SELECT MIN(r.depth) FROM reactions r "
 
 # ── app ──────────────────────────────────────────────────────────────────────
 
-def create_app(db_path: Path, store_root: Path) -> FastAPI:
-    """Build the viewer app.  No server is started; tests use ``TestClient``."""
+def create_app(db_path: Path, store_root: Path,
+               active: "ActiveDatabase | None" = None) -> FastAPI:
+    """Build the viewer app.  No server is started; tests use ``TestClient``.
+
+    `active` is the switchable registry reference shared with the builder.  It defaults
+    to a fresh one wrapping `db_path`, so the two-argument call every test and script
+    already makes keeps working and simply cannot switch.
+    """
+    from mofsbu.ui.active import ActiveDatabase
+
     db_path = Path(db_path)
+    active = active or ActiveDatabase(db_path)
     store = BlobStore(store_root)
 
     app = FastAPI(
@@ -180,18 +218,25 @@ def create_app(db_path: Path, store_root: Path) -> FastAPI:
     # ui/builder.py for why that boundary is kept.
     from mofsbu.ui.builder import build_router
 
+    # The blob store is deliberately NOT switched alongside the database.  It is
+    # content-addressed: a geometry's .xyz is keyed by the hash of its own text, so two
+    # registries that both contain a structure point at one blob rather than at two
+    # copies of it.  Giving each database its own store would duplicate every shared
+    # geometry and gain nothing.
     app.include_router(build_router(db_path, store_root,
-                                    Path(db_path).parent / "specs"))
-    app.state.db_path = db_path
+                                    Path(db_path).parent / "specs", active=active))
+    app.state.db_path = db_path                  # where it STARTED; see active for now
+    app.state.active = active
     app.state.store = store
     # Exposed so callers (and the read-only test) can get a connection the same way
     # the endpoints do.  There is deliberately no writable counterpart.
-    app.state.connect = lambda: open_read_only(db_path)
+    app.state.connect = lambda: open_read_only(active.path)
 
     def db() -> Any:
-        if not db_path.exists():
-            raise HTTPException(503, f"registry not found: {db_path}")
-        con = open_read_only(db_path)
+        path = active.path
+        if not path.exists():
+            raise HTTPException(503, f"registry not found: {path}")
+        con = open_read_only(path)
         try:
             yield con
         finally:
@@ -223,6 +268,8 @@ def create_app(db_path: Path, store_root: Path) -> FastAPI:
         has_route: bool | None = None,
         depth_max: int | None = Query(None, description="RESERVED M8"),
         tag: str | None = None,
+        include_hidden: bool = Query(False,
+            description="include soft-deleted structures (nothing is ever really deleted)"),
         sort: str = "id",
         order: str = "asc",
         limit: int = 100,
@@ -240,15 +287,22 @@ def create_app(db_path: Path, store_root: Path) -> FastAPI:
         limit = max(1, min(int(limit), MAX_LIMIT))
         offset = max(0, int(offset))
 
-        clause, args = _where(locals())
+        # A registry written before the soft delete existed has no `hidden` column, and
+        # the viewer cannot migrate it (mode=ro).  Nothing can be hidden in such a file,
+        # so the filter is simply not applied rather than the query failing.
+        hidden_supported = has_column(con, "structures", "hidden")
+        clause, args = _where({**locals(), "hidden_supported": hidden_supported})
         total = con.execute(f"SELECT COUNT(*) FROM v_structures v{clause}", args).fetchone()[0]
         # `sort`/`order` are whitelisted above; every value is still bound.
         rows = _rows(con.execute(
             f"SELECT v.*, {DEPTH_EXPR} FROM v_structures v{clause}"
             f" ORDER BY v.{sort} IS NULL, v.{sort} {order.upper()}, v.id ASC"
             f" LIMIT ? OFFSET ?", [*args, limit, offset]))
+        n_hidden = con.execute("SELECT COUNT(*) FROM structures WHERE hidden = 1"
+                               ).fetchone()[0] if hidden_supported else 0
         return {"total": total, "limit": limit, "offset": offset,
-                "sort": sort, "order": order.lower(), "rows": rows}
+                "sort": sort, "order": order.lower(), "rows": rows,
+                "n_hidden": n_hidden, "include_hidden": bool(include_hidden)}
 
     # ── one structure ────────────────────────────────────────────────────────
     @app.get("/api/structures/{structure_id}")
@@ -389,7 +443,8 @@ def create_app(db_path: Path, store_root: Path) -> FastAPI:
     @app.get("/api/meta")
     def meta(con: sqlite3.Connection = Con) -> dict[str, Any]:
         return {
-            "db": str(db_path),
+            "db": str(active.path),
+            "db_name": active.path.name,
             "store": str(store.root),
             "read_only": True,
             "algo_versions": {r["name"]: r["version"] for r in

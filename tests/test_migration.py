@@ -106,6 +106,45 @@ def test_an_unexpected_extra_column_is_reported_not_dropped(tmp_path):
     assert any("not in the schema" in n for n in notes)
 
 
+def test_an_extra_column_does_not_break_every_later_migration(tmp_path):
+    """The note about an extra column must not be re-inserted on every migrate.
+
+    An extra column stays extra, so the note is re-derived every time `migrate()` runs.
+    It used to be written at a hard-coded `version = 0` with no conflict handling — the
+    same defect `_next_migration_slot` fixes for added columns, left in the one place
+    that did not get it.  So the SECOND migrate of any registry carrying an unexpected
+    column raised `UNIQUE constraint failed: migrations.version` and rolled the whole
+    migration back.
+
+    That is not a cosmetic failure.  `ui.builder.submit_run` migrates before it plans,
+    so it turned every run submission after the first into a 500 — on a registry that
+    was itself perfectly healthy.
+    """
+    db = tmp_path / "extra.db"
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        reg.conn.execute("ALTER TABLE runs ADD COLUMN somebodys_experiment TEXT")
+        # A second table with an extra column too: two notes in ONE migration collided
+        # with each other, which is the same bug seen from the other side.
+        reg.conn.execute("ALTER TABLE tasks ADD COLUMN another_experiment TEXT")
+
+    for _ in range(3):                                 # the 2nd is what used to raise
+        with Registry(db, BlobStore(tmp_path / "store")) as reg:
+            reg.migrate()
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        versions = [r[0] for r in reg.conn.execute("SELECT version FROM migrations")]
+        notes = [r[0] for r in reg.conn.execute(
+            "SELECT note FROM migrations WHERE note LIKE '%not in the schema%'")]
+        columns = {r[1] for r in reg.conn.execute("PRAGMA table_info(runs)")}
+
+    assert len(versions) == len(set(versions)), "migration versions must stay unique"
+    # Both tables reported, each exactly once however many times we migrated.
+    assert len(notes) == 2, notes
+    assert any("runs" in n for n in notes) and any("tasks" in n for n in notes)
+    assert "somebodys_experiment" in columns, "and nothing was dropped"
+
+
 def test_several_columns_can_be_added_in_one_revision(tmp_path):
     """Every added column got the SAME migration version — `SCHEMA_VERSION * 1000 +
     len(added)` — so a revision adding more than one violated the UNIQUE constraint on

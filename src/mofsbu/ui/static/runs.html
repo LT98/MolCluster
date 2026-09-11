@@ -66,6 +66,21 @@ select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px s
 button{cursor:pointer}
 .filterchip{border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);
             border-radius:11px;padding:1px 9px;font-size:11px}
+/* ── settled headline ──────────────────────────────────────────────────────
+   A rejection is a SETTLED outcome: the task ran, the chemistry answered no, and
+   there is nothing further to wait for.  The cards below report done/rejected/
+   failed/pending as four independent numbers, which left a finished run reading as
+   "22 of 36" when it was 36 of 36 settled.  This line does that arithmetic. */
+.settled{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:8px 0 2px}
+.settled .big{font-size:22px;font-variant-numeric:tabular-nums;line-height:1.1}
+.settled .sub{color:var(--muted);font-size:12px}
+.bar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 2px;
+     display:flex}
+.bar i{display:block;height:100%}
+.bar .i-done{background:var(--good)}
+.bar .i-rej{background:var(--warn)}
+.bar .i-fail{background:var(--bad)}
+.live{font-size:11px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -93,13 +108,42 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(u){ const r = await fetch(u); if(!r.ok) throw new Error((await r.text()).slice(0,300)); return r.json(); }
 
-const state = {runId: null, code: null, status: null, tasks: []};
+const state = {
+  runId: null, code: null, status: null, tasks: [],
+  // ── why these four exist ────────────────────────────────────────────────────
+  // The panel used to be rewritten wholesale every 4 s, which destroyed and recreated
+  // every <details> in it — so an expanded traceback collapsed under you while you were
+  // reading it, and reading a long one was a race against the timer.  `lastHash` is how
+  // a tick that found nothing new writes no DOM at all; `openKeys` is how a tick that
+  // DID find something new still leaves your open sections open; `interval` and
+  // `quietTicks` are how an unchanged live run stops asking four times a minute.
+  lastHash: null, openKeys: new Set(), interval: 4000, quietTicks: 0, timer: null,
+};
+
+const LIVE_MS = 4000, QUIET_MS = 15000, QUIET_AFTER = 3;
+// A run in one of these states, with no thread still working on it, has nothing left to
+// report.  Polling it forever is the whole of the "the server log scrolls with no user
+// action" complaint, seen from the server side: three requests per tick, ~45 log lines a
+// minute, from an idle tab someone left open.
+const TERMINAL = ['done', 'failed', 'cancelled'];
+const isTerminal = r => TERMINAL.includes(r.status) && r.thread !== 'running';
+
+// Cheap, order-sensitive digest.  It only has to answer "is this byte-for-byte what I
+// rendered last time"; a collision would cost one skipped repaint, and the manual
+// refresh button is right there.
+function digest(s){
+  let h = 5381;
+  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return h + ':' + s.length;
+}
 
 // ── run list ────────────────────────────────────────────────────────────────
 async function loadRuns(){
   let runs = [];
   try { runs = (await api('/api/runs?limit=40')).runs; }
   catch(e){ $('#runs').innerHTML = `<li class="muted">${esc(e.message)}</li>`; return; }
+  // Kept so a tick can ask "has the selected run moved?" without fetching its detail.
+  state.runRows = Object.fromEntries(runs.map(r => [r.id, r]));
   if(!runs.length){ $('#runs').innerHTML = '<li class="muted">no runs yet</li>'; return; }
   $('#runs').innerHTML = runs.map(r => `
     <li data-run="${r.id}" class="${r.id === state.runId ? 'sel' : ''}">
@@ -115,13 +159,19 @@ async function loadRuns(){
 
 function selectRun(id){
   state.runId = id; state.code = null; state.status = null;
+  // A different run is different content, so the skip-if-unchanged guard must not
+  // suppress the first paint of it — and its open sections are not this one's.
+  state.lastHash = null; state.openKeys = new Set();
+  state.interval = LIVE_MS; state.quietTicks = 0;
   $('#runs').querySelectorAll('li[data-run]').forEach(li =>
     li.classList.toggle('sel', +li.dataset.run === id));
   render();
 }
 
 // ── the run ─────────────────────────────────────────────────────────────────
-async function render(){
+// `force` is what the refresh button and a run change pass: repaint even if the payload
+// is identical.  A poll tick passes nothing and gets the skip.
+async function render(force){
   if(state.runId === null) return;
   let run, tasks;
   try {
@@ -130,10 +180,40 @@ async function render(){
     if(state.status) q.set('status', state.status);
     if(state.code) q.set('code', state.code);
     tasks = await api(`/api/runs/${state.runId}/tasks?` + q);
-  } catch(e){ $('#detail').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  } catch(e){
+    $('#detail').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    // A failed fetch must not silently end the loop — the server may just be restarting.
+    // Retry on the slow cadence rather than hammering something that is already unwell.
+    clearTimeout(state.timer);
+    state.timer = setTimeout(tick, QUIET_MS);
+    return;
+  }
+
+  // Nothing changed → write no DOM at all.  This is the cheapest correct fix for the
+  // collapsing <details>: for a finished run, which is the common reading case, the
+  // payload never changes again and the panel is simply never rebuilt.  The filter
+  // state is in the hash too, so changing the status filter still repaints.
+  const stamp = digest(JSON.stringify([run, tasks, state.code, state.status]));
+  if(!force && stamp === state.lastHash){ state.quietTicks++; schedule(run.run); return; }
+  state.lastHash = stamp;
+
+  // A live run genuinely does change, and its panel genuinely must be rebuilt.  So
+  // remember which sections were open and put them back afterwards — keyed by task id,
+  // which is stable across repaints, rather than by position, which is not.
+  rememberOpen();
+
   state.tasks = tasks.tasks;
   const s = run.summary, c = s.counts || {};
   const spec = run.spec || {};
+
+  // settled = the outcomes that are finished being decided.  A rejection belongs here:
+  // the task ran and the answer was no.  Merging rejected into "unsuccessful" alongside
+  // failed would be the wrong claim — the project keeps them apart everywhere else, and
+  // `finish_run` returns `done` for a run full of rejections.
+  const done = c.done || 0, rej = c.rejected || 0, fail = c.failed || 0;
+  const waiting = (c.pending || 0) + (c.claimed || 0);
+  const settled = done + rej + fail, totalTasks = settled + waiting;
+  const pct = n => totalTasks ? (100 * n / totalTasks) : 0;
 
   // At a glance.  "Reused" is the D2 idempotency case: the task ran and wrote nothing
   // because the registry already had that identity — a success, not a no-op.
@@ -154,6 +234,24 @@ async function render(){
         ${esc(run.run.thread === 'running' ? 'running' : run.run.status)} ·
         ${esc(run.run.created_at || '')}</span></h1>
     ${run.run.note ? `<div class="muted">${esc(run.run.note)}</div>` : ''}
+    ${run.run.device ? `<div class="muted" style="font-size:11.5px">device
+      <span class="mono">${esc(run.run.device)}</span>${run.run.workers
+        ? ` · ${run.run.workers} worker(s)` : ''}</div>` : ''}
+
+    <div class="settled">
+      <span class="big">settled <b>${settled}</b> / ${totalTasks}</span>
+      <span class="sub">${done} built · ${rej} rejected · ${fail} failed${
+        waiting ? ` · ${waiting} still to run` : ''}</span>
+    </div>
+    <div class="bar" title="${done} built, ${rej} rejected, ${fail} failed of ${totalTasks}">
+      <i class="i-done" style="width:${pct(done)}%"></i>
+      <i class="i-rej"  style="width:${pct(rej)}%"></i>
+      <i class="i-fail" style="width:${pct(fail)}%"></i>
+    </div>
+    <div class="live">${waiting === 0
+      ? 'every task has an answer — a rejection is one of them'
+      : `${waiting} of ${totalTasks} still waiting`}${
+        isTerminal(run.run) ? ' · not polling: this run is finished' : ''}</div>
 
     <div class="cards">${cards.map(([k, n, cls]) =>
       `<div class="card"><div class="n ${cls ? 'b-x' : ''}" style="${cls === 'b-bad' ? 'color:var(--bad)' : cls === 'b-warn' ? 'color:var(--warn)' : cls === 'b-good' ? 'color:var(--good)' : cls === 'b-info' ? 'color:var(--accent)' : ''}">${n ?? 0}</div>
@@ -200,15 +298,18 @@ async function render(){
       <tbody>${state.tasks.map(taskRow).join('') ||
         '<tr><td colspan="6" class="empty">nothing matches</td></tr>'}</tbody></table>`;
 
+  restoreOpen();
+
   $('#detail').querySelectorAll('.group[data-code]').forEach(g => g.onclick = () => {
     state.code = state.code === g.dataset.code ? null : g.dataset.code;
     state.status = state.code ? g.dataset.status : null;
-    render();
+    render(true);
   });
   const fs = $('#fstatus');
-  if(fs) fs.onchange = () => { state.status = fs.value || null; render(); };
-  if($('#clearcode')) $('#clearcode').onclick = () => { state.code = null; render(); };
-  if($('#refresh')) $('#refresh').onclick = render;
+  if(fs) fs.onchange = () => { state.status = fs.value || null; render(true); };
+  if($('#clearcode')) $('#clearcode').onclick = () => { state.code = null; render(true); };
+  if($('#refresh')) $('#refresh').onclick = () => render(true);
+  schedule(run.run);
   const stop = $('#stoprun');
   if(stop) stop.onclick = async () => {
     // No confirm() dialog: the action is reversible (resume puts the queue back) and
@@ -218,7 +319,7 @@ async function render(){
       const r = await post(`/api/runs/${state.runId}/cancel`);
       note(r.note);
     } catch(e){ note(e.message, true); }
-    render();
+    render(true);
   };
   const resume = $('#resumerun');
   if(resume) resume.onclick = async () => {
@@ -227,8 +328,72 @@ async function render(){
       const r = await post(`/api/runs/${state.runId}/resume`);
       note(`${r.revived} task(s) back in the queue — ${r.note}`);
     } catch(e){ note(e.message, true); }
-    render();
+    // A resumed run is live again, so go back to the fast cadence.
+    state.interval = LIVE_MS; state.quietTicks = 0;
+    render(true);
   };
+}
+
+// ── keeping an open section open ────────────────────────────────────────────
+// `<details>` has no memory: a fresh element is closed, and `innerHTML = ...` always
+// makes fresh elements.  So the open set is read out of the DOM immediately before the
+// write and applied immediately after it, keyed by task id.
+function rememberOpen(){
+  const panel = $('#detail');
+  if(!panel) return;
+  const found = [...panel.querySelectorAll('details[data-key]')];
+  if(!found.length) return;          // nothing rendered yet — do not clear what we know
+  state.openKeys = new Set(found.filter(d => d.open).map(d => d.dataset.key));
+}
+
+function restoreOpen(){
+  if(!state.openKeys.size) return;
+  $('#detail').querySelectorAll('details[data-key]').forEach(d => {
+    if(state.openKeys.has(d.dataset.key)) d.open = true;
+  });
+  // Keep the set alive: a task that is open, scrolls out of the current filter and
+  // comes back should still be open.  It is bounded by the number of tasks in a run.
+}
+
+// ── how often to ask again, and for what ────────────────────────────────────
+// The old loop issued three requests every four seconds forever: /api/runs,
+// /api/runs/{id} and /api/runs/{id}/tasks.  uvicorn logs a line per request, so one
+// idle tab left open produced ~45 log lines a minute and looked, from the console, like
+// something was happening.  Two changes fix it without making the page go stale:
+//
+//   * the steady state is ONE request.  /api/runs already reports each run's status and
+//     its done/rejected/failed counts, so the tick can tell whether the selected run has
+//     moved before paying for the two detail requests.  Polling the list is what keeps a
+//     run submitted from another tab from being invisible here.
+//   * a run that is finished, or live but unchanged, is asked about every 15 s instead
+//     of every 4 s.
+function rowSignature(id){
+  const r = (state.runRows || {})[id];
+  if(!r) return 'gone';
+  return [r.status, r.thread, r.n_tasks, r.n_done, r.n_rejected, r.n_failed].join('/');
+}
+
+function schedule(run){
+  clearTimeout(state.timer);
+  const quiet = isTerminal(run) || state.quietTicks >= QUIET_AFTER;
+  state.interval = quiet ? QUIET_MS : LIVE_MS;
+  state.timer = setTimeout(tick, state.interval);
+}
+
+async function tick(){
+  const before = rowSignature(state.runId);
+  await loadRuns();
+  if(state.runId === null){ state.timer = setTimeout(tick, LIVE_MS); return; }
+  if(rowSignature(state.runId) === before){
+    // The run has not moved.  Do not fetch its detail, and above all do not rewrite the
+    // panel — that rewrite is what used to close the traceback you were reading.
+    state.quietTicks++;
+    const row = (state.runRows || {})[state.runId] || {};
+    schedule(row);
+    return;
+  }
+  state.quietTicks = 0;
+  await render();
 }
 
 // ── stopping a run ──────────────────────────────────────────────────────────
@@ -314,7 +479,7 @@ function result(t){
     ${qc.elements && qc.elements.length ?
       `<div>elements involved: ${qc.elements.map(e => `<span class="badge">${esc(e)}</span>`).join('')}</div>` : ''}
     ${d.hint ? `<div class="muted">→ ${esc(d.hint)}</div>` : ''}
-    <details><summary>full record</summary><pre>${esc(t.error)}\n\n${esc(JSON.stringify(t.detail, null, 1))}</pre></details>`;
+    <details data-key="task-${t.id}"><summary>full record</summary><pre>${esc(t.error)}\n\n${esc(JSON.stringify(t.detail, null, 1))}</pre></details>`;
 }
 
 function taskRow(t){
@@ -330,8 +495,9 @@ function taskRow(t){
     <td>${flags(t)}</td></tr>`;
 }
 
-loadRuns();
-setInterval(() => { loadRuns(); if(state.runId !== null) render(); }, 4000);
+// A self-scheduling chain rather than setInterval: each tick decides when the next one
+// happens (or that there should not be one), which setInterval cannot express.
+loadRuns().then(() => { if(state.runId === null) state.timer = setTimeout(tick, LIVE_MS); });
 </script>
 </body>
 </html>
