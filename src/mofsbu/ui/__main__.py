@@ -65,13 +65,16 @@ def resolve_database(given: Path | None) -> tuple[Path, list[Path], str]:
 
 
 def confirm_compute_settings() -> None:
-    """Ask, once at startup, how this server should use CUDA and in-process workers.
+    """Ask, at startup, how this server should use CUDA and in-process workers.
 
-    Ground rule 9 still holds — the device and worker count are DECLARED
-    (`MOFSBU_DEVICE`, `MOFSBU_WORKERS`/`MOFSBU_PROFILE`), never auto-detected — this
-    just puts that declaration in front of a human at the moment it matters, because
-    `viewer.py` is the process that actually runs any `ml_go`/`xtb_go` task submitted
-    through `/builder`, using whatever was already (maybe silently) set.  Skipped
+    No longer the default, and that is the point.  The prompt made the device VISIBLE,
+    which was the original problem, but it did not make it REACHABLE: answering it
+    requires a terminal, which most of the people who use the page do not have open.
+    `/builder` now carries the same control (`POST /api/compute`), so this is the
+    second-best way to answer the same question and is opt-in behind `--prompt-device`.
+
+    Ground rule 9 is unchanged either way: the device and worker count are DECLARED
+    (`MOFSBU_DEVICE`, `MOFSBU_WORKERS`/`MOFSBU_PROFILE`), never auto-detected.  Skipped
     outright without a TTY, so a systemd/docker/nohup launch never blocks on stdin.
     """
     if not sys.stdin.isatty():
@@ -116,9 +119,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="uvicorn autoreload (development)")
+    p.add_argument("--prompt-device", action="store_true",
+                   help="ask about CUDA and workers at startup. Off by default: the "
+                        "same control is on /builder, which does not need a terminal")
     p.add_argument("--no-prompt", action="store_true",
-                   help="skip the CUDA/worker confirmation; use MOFSBU_DEVICE and "
-                        "MOFSBU_WORKERS/MOFSBU_PROFILE exactly as already declared")
+                   help=argparse.SUPPRESS)     # kept so old command lines keep working
+    p.add_argument("--device", default=None,
+                   help="declare the compute device for this server (cpu, cuda, cuda:1, "
+                        "mps). Changeable afterwards on /builder")
+    p.add_argument("--workers", type=int, default=None,
+                   help="declare how many in-process workers a run may use (default 1)")
+    p.add_argument("--log-level", default="warning",
+                   choices=["critical", "error", "warning", "info", "debug"],
+                   help="uvicorn log level. Defaults to 'warning', so an open run "
+                        "inspector polling every few seconds does not fill the console "
+                        "with access lines; pass 'info' to get them back")
+    p.add_argument("--open", action="store_true",
+                   help="open the viewer in a browser once the server is up")
     a = p.parse_args(argv)
 
     if a.list_db:
@@ -131,32 +148,79 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {path.name:28s} {size:8.2f} MB   {path}")
         return 0
 
+    # A flag is a declaration too, and it is the one a launcher script can make on the
+    # user's behalf.  Applied before anything reads the environment.
+    if a.device or a.workers:
+        from mofsbu.ui.active import declare_compute
+
+        try:
+            declare_compute(a.device, a.workers)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+
     # `--reload` re-execs this process on every code change; asking again each time
     # would be a prompt loop, not a confirmation.
-    if not a.no_prompt and not a.reload:
+    if a.prompt_device and not a.reload:
         confirm_compute_settings()
 
     db, others, why = resolve_database(a.db)
     store = a.store or store_root()
 
+    from mofsbu.ui.active import ActiveDatabase, compute_state
+
+    active = ActiveDatabase(db)
+    state = compute_state()
+
     print(f"mofsbu  db={db}  ({why})")
     if others:
         print("  also available: " + ", ".join(o.name for o in others)
-              + "   — pass --db to choose")
+              + "   — choose one on /builder, or pass --db")
     if not db.exists():
         print("  this file does not exist yet; open /builder and submit a run to create it")
     print(f"  store={store}")
+    print(f"  device={state['device']}  workers={state['workers']}"
+          f"  ({len(state['devices'])} device(s) visible — change on /builder)")
     print(f"  → http://{a.host}:{a.port}/         registry viewer (read-only)")
     print(f"  → http://{a.host}:{a.port}/builder  spec builder")
+    print(f"  → http://{a.host}:{a.port}/runs     run inspector")
 
     import uvicorn
 
     from mofsbu.ui.app import create_app
 
-    print(f"mofsbu viewer (read-only)  db={db}  store={store}")
-    print(f"  → http://{a.host}:{a.port}/")
-    uvicorn.run(create_app(db, store), host=a.host, port=a.port, reload=a.reload)
+    if a.open:
+        _open_browser_when_up(a.host, a.port)
+    uvicorn.run(create_app(db, store, active), host=a.host, port=a.port,
+                reload=a.reload, log_level=a.log_level)
     return 0
+
+
+def _open_browser_when_up(host: str, port: int, timeout: float = 30.0) -> None:
+    """Open a browser once the port answers, on a daemon thread.
+
+    Polling the port rather than sleeping a fixed second: importing torch or rdkit can
+    make startup take a while on a cold cache, and a browser tab that opens onto a
+    connection-refused page is worse than one that opens two seconds later.
+    """
+    import socket as _socket
+    import threading
+    import time
+    import webbrowser
+
+    target = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
+    def wait() -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with _socket.socket() as s:
+                s.settimeout(0.5)
+                if s.connect_ex((target, port)) == 0:
+                    webbrowser.open(f"http://{target}:{port}/")
+                    return
+            time.sleep(0.3)
+
+    threading.Thread(target=wait, daemon=True, name="mofsbu-open-browser").start()
 
 
 if __name__ == "__main__":

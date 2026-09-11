@@ -41,12 +41,32 @@ class Task:
     attempts: int
 
 
-def create_run(reg: Registry, spec: BuildSpec, *, note: str = "") -> int:
+def create_run(reg: Registry, spec: BuildSpec, *, note: str = "",
+               device: str | None = None, workers: int | None = None) -> int:
+    """Open a run row.
+
+    `device` and `workers` are recorded, not applied: what the machine will actually use
+    is read from the environment at execution time (`config.compute_device`,
+    `config.max_workers`), and this is the record of what that was when the run was
+    submitted.  Left to the caller because the caller is the only one that knows whether
+    a choice was expressed — `None` means "not stated", which is different from "cpu".
+    """
+    if device is None:
+        from mofsbu.config import compute_device
+
+        try:
+            device = compute_device()
+        except ValueError:
+            device = ""                      # a malformed declaration is not a run error
+    if workers is None:
+        from mofsbu.config import max_workers
+
+        workers = max_workers()
     cur = reg.conn.execute(
-        "INSERT INTO runs (spec_digest, spec_json, status, note, host, created_at) "
-        "VALUES (?,?,?,?,?,?)",
+        "INSERT INTO runs (spec_digest, spec_json, status, note, host, device, workers,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?)",
         (spec.digest, spec.to_json(indent=None), PENDING, note or spec.note,
-         socket.gethostname(), utcnow()))
+         socket.gethostname(), device, workers, utcnow()))
     return int(cur.lastrowid)
 
 

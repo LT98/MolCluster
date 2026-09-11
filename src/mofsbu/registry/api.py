@@ -290,6 +290,58 @@ def put_reaction(reg: Registry, product_id: int, prov: Provenance) -> int:
     return rid
 
 
+# ── hiding a structure (the soft delete) ─────────────────────────────────────
+# There is no `delete_structure` in this module, and that is the decision rather than an
+# omission.  `structures` cascades to geometries, site_catalog, site_state and the
+# `reactions` edges that point at it, so a real delete of one row takes provenance with
+# it.  Measured on the working registry: 457 of 594 structures — 77% — have more than one
+# incoming edge, so "delete this one entry" usually severs some other route's history.
+# Under D2 that is the NORMAL state of an enumeration, not an edge case, because
+# re-deriving an identity you already have is most of what an enumeration does.
+#
+# Everything here is regenerable except provenance.  So the registry hides.
+
+
+def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
+    """Every provenance edge that arrives at this structure, with its reagents.
+
+    This is what makes a delete refusable with a reason rather than with a warning: the
+    caller can show the other routes that would be severed.
+    """
+    out = []
+    for row in reg.conn.execute(
+            "SELECT id, kind, intermediate, depth, note, created_at FROM reactions "
+            "WHERE product_structure_id = ? ORDER BY id", (structure_id,)):
+        item = dict(row)
+        item["reagent_ids"] = [r[0] for r in reg.conn.execute(
+            "SELECT structure_id FROM reaction_reagents WHERE reaction_id = ?", (row["id"],))]
+        out.append(item)
+    return out
+
+
+def set_hidden(reg: Registry, structure_id: int, hidden: bool = True, *,
+               reason: str = "") -> dict[str, Any]:
+    """Hide (or restore) one structure.  Nothing is deleted and nothing cascades.
+
+    A hidden structure keeps its row, its geometries, its blobs and every reaction edge
+    that mentions it, and it keeps its L0/L1/L2 identity — so a later run that re-derives
+    it is still recognised under D2 instead of inserting a duplicate.  It simply stops
+    appearing in listings, which is the whole of what "delete this mistake" actually
+    needs to mean here.
+    """
+    row = reg.conn.execute("SELECT id, hidden FROM structures WHERE id = ?",
+                           (structure_id,)).fetchone()
+    if row is None:
+        raise RegistryError(f"no structure {structure_id}")
+    reg.conn.execute(
+        "UPDATE structures SET hidden = ?, hidden_at = ?, hidden_reason = ? WHERE id = ?",
+        (int(bool(hidden)), utcnow() if hidden else None,
+         reason if hidden else "", structure_id))
+    return {"structure_id": structure_id, "hidden": bool(hidden),
+            "was_hidden": bool(row["hidden"]),
+            "routes": len(incoming_routes(reg, structure_id))}
+
+
 # ── geometries ───────────────────────────────────────────────────────────────
 
 def put_geometry(

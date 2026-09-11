@@ -48,6 +48,14 @@ th.sorted{color:var(--accent)}
 tbody tr{cursor:pointer}
 tbody tr:hover{background:var(--accent-soft)}
 tbody tr.sel{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+tbody tr.hidden-row td{opacity:.5;font-style:italic}
+/* The table has to be REACHABLE by keyboard before it can be driven by one: without a
+   tabindex it is not a focus target at all, and without a visible ring you cannot tell
+   whether the arrow keys will move the selection or scroll the page. */
+#results table{outline:none}
+#results table:focus-visible,#results table.kb{outline:2px solid var(--accent);
+  outline-offset:2px;border-radius:4px}
+.kbhint{font-size:11px;color:var(--muted)}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:11px}
 .muted{color:var(--muted)}
@@ -129,6 +137,12 @@ dd{margin:0;overflow-wrap:anywhere}
     <label for="f-tag">Tag</label>
     <select id="f-tag"><option value="">any</option></select>
 
+    <!-- Hiding is this project's delete (see registry/api.set_hidden). The switch to
+         see what you hid is part of the feature, not an advanced option: a delete you
+         cannot undo is the thing being avoided. -->
+    <label class="chk" style="margin-top:10px">
+      <input type="checkbox" id="show-hidden"> show hidden structures</label>
+
     <p style="margin-top:16px"><button id="reset">Reset filters</button></p>
   </aside>
 
@@ -137,13 +151,15 @@ dd{margin:0;overflow-wrap:anywhere}
     <div class="toolbar">
       <strong id="count">…</strong>
       <span class="spacer"></span>
+      <span class="kbhint" id="kbhint" title="click the table (or Tab to it) first">
+        ↑↓ move · PgUp/PgDn · Home/End</span>
       <label for="f-limit" style="margin:0">page size</label>
       <select id="f-limit" style="width:auto">
         <option>25</option><option selected>50</option><option>100</option><option>250</option>
       </select>
       <button id="prev">‹ prev</button><button id="next">next ›</button>
     </div>
-    <table>
+    <table id="table" tabindex="0" aria-label="structures">
       <thead><tr id="head"></tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -171,6 +187,14 @@ dd{margin:0;overflow-wrap:anywhere}
       </div>
       <dl id="d-props"></dl>
       <div id="d-tags" class="chips"></div>
+
+      <h2>this entry</h2>
+      <div class="toolbar">
+        <button id="rerun" title="queue the task that built this, again">re-run</button>
+        <button id="hide" title="remove it from listings — nothing is deleted">hide</button>
+      </div>
+      <div id="entry-msg" class="muted" style="font-size:11.5px"></div>
+
       <h2>provenance</h2>
       <div id="d-routes" class="muted"></div>
     </div>
@@ -197,6 +221,11 @@ const state = {
   sort:"id", order:"asc", limit:50, offset:0, total:0,
   selected:null,            // structure id — survives paging and re-filtering
   detail:null, geomId:null, style:"ball", filters:null, xyzCache:new Map(),
+  // The ids on the page, in display order.  Arrow-key movement is an index into this,
+  // which is why it is kept rather than re-derived from the DOM: the DOM order and the
+  // query order are the same thing only as long as nobody sorts client-side, and this
+  // does not quietly depend on that.
+  pageIds:[], includeHidden:false, nHidden:0,
 };
 let viewer = null, viewerModel = null;
 
@@ -234,6 +263,7 @@ function params(){
   put("energy_min", val("f-emin"));   put("energy_max", val("f-emax"));
   put("has_route", val("f-route"));   put("depth_max", val("f-depth"));
   put("tag", val("f-tag"));
+  if(state.includeHidden) p.set("include_hidden", "1");
   p.set("sort", state.sort); p.set("order", state.order);
   p.set("limit", state.limit); p.set("offset", state.offset);
   return p;
@@ -259,14 +289,19 @@ async function load(){
   if(!r.ok){ toast("query rejected ("+r.status+")"); return; }
   const data = await r.json();
   state.total = data.total;
+  state.pageIds = data.rows.map(r=>r.id);
+  state.nHidden = data.n_hidden || 0;
   const from = data.total ? state.offset+1 : 0;
-  $("count").textContent = `${from}–${Math.min(state.offset+data.rows.length, data.total)} of ${data.total}`;
+  $("count").textContent = `${from}–${Math.min(state.offset+data.rows.length, data.total)} of ${data.total}`
+    + (state.nHidden ? (state.includeHidden ? ` · ${state.nHidden} hidden shown` : ` · ${state.nHidden} hidden`) : "");
   $("prev").disabled = state.offset<=0;
   $("next").disabled = state.offset + state.limit >= data.total;
   const tb = $("rows"); tb.innerHTML="";
   for(const row of data.rows){
     const tr = document.createElement("tr");
+    tr.dataset.id = row.id;
     if(row.id===state.selected) tr.classList.add("sel");
+    if(row.hidden) tr.classList.add("hidden-row");
     for(const c of COLS){
       const td = document.createElement("td");
       let v;
@@ -283,22 +318,83 @@ async function load(){
       }
       tr.appendChild(td);
     }
-    tr.onclick = () => select(row.id);
+    // Focus follows the click, so the arrow keys work straight after picking a row
+    // with the mouse rather than needing a separate Tab press nobody would guess at.
+    tr.onclick = () => { select(row.id); $("table").focus(); };
     tb.appendChild(tr);
   }
   $("empty").hidden = data.rows.length>0;
   renderHead();
 }
 
+/* ── keyboard ─────────────────────────────────────────────────
+   The page had no keyboard handling at all, so the arrow keys did what the browser
+   does by default: scroll.  Three details matter more than the movement itself.
+   1. `preventDefault` is what stops the scroll — without it the page moves AND the
+      selection moves, which is worse than either.
+   2. The handler ignores anything originating in a form control, or typing "d" in the
+      search box would jump the selection while you were still spelling a formula.
+   3. Movement is within the current page only.  Arrowing off the end does not silently
+      fetch the next page: pagination is a separate action with its own control, and a
+      key that sometimes triggers a query and sometimes does not is not predictable. */
+function isTyping(e){
+  const t = e.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA"
+               || t.isContentEditable);
+}
+function moveSelection(delta, absolute){
+  if(!state.pageIds.length) return;
+  const at = state.pageIds.indexOf(state.selected);
+  let next;
+  if(absolute === "first") next = 0;
+  else if(absolute === "last") next = state.pageIds.length - 1;
+  else if(at < 0) next = delta > 0 ? 0 : state.pageIds.length - 1;   // nothing selected yet
+  else next = Math.min(state.pageIds.length - 1, Math.max(0, at + delta));
+  const id = state.pageIds[next];
+  if(id === state.selected) return;
+  select(id);
+}
+function scrollSelectedIntoView(){
+  const tr = $("rows").querySelector("tr.sel");
+  // `block:"nearest"` scrolls the minimum needed to reveal the row.  "center" would
+  // jump the table on every press even when the row was already perfectly visible.
+  if(tr) tr.scrollIntoView({block:"nearest"});
+}
+function onKey(e){
+  if(isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const page = Math.max(1, Math.floor($("results").clientHeight / 27) - 1);
+  const moves = {
+    ArrowDown: () => moveSelection(1),
+    ArrowUp:   () => moveSelection(-1),
+    // A screenful, NOT a page of results: paginating is what prev/next do, and binding
+    // PageDown to it would make two different actions share one key.
+    PageDown:  () => moveSelection(page),
+    PageUp:    () => moveSelection(-page),
+    Home:      () => moveSelection(0, "first"),
+    End:       () => moveSelection(0, "last"),
+  };
+  const fn = moves[e.key];
+  if(!fn) return;
+  e.preventDefault();
+  fn();
+}
+
 /* ── detail pane ─────────────────────────────────────────────── */
+function highlight(){
+  for(const tr of $("rows").children)
+    tr.classList.toggle("sel", Number(tr.dataset.id) === state.selected);
+}
 async function select(id){
   state.selected = id;
-  [...$("rows").children].forEach((tr,i)=>tr.classList.toggle("sel", false));
+  // Repaint the highlight locally instead of re-running the query.  `load()` used to be
+  // called here purely to move the highlight, which cost a full /api/structures round
+  // trip per selection — tolerable for a click, absurd for holding down an arrow key.
+  highlight();
+  scrollSelectedIntoView();
   const r = await fetch("/api/structures/"+id);
   if(!r.ok){ toast("structure "+id+" not found"); return; }
   state.detail = await r.json();
   renderDetail();
-  load();                                     // repaint selection highlight
 }
 function renderDetail(){
   const d = state.detail; if(!d) return;
@@ -351,7 +447,149 @@ function renderDetail(){
     const rr = await fetch(`/api/structures/${s.id}/spec${q}`);
     copyText(JSON.stringify(await rr.json(), null, 2), "spec");
   };
+  renderEntryActions(s.id);
 }
+
+/* ── re-running and hiding one entry ──────────────────────────
+   Two requests that look like one.  Re-running is cheap and safe, because `construct`
+   is a deterministic function of the stored choice vector and seed (D13) — so the
+   button replays a task rather than composing a new one.  Hiding is the careful one:
+   the server decides whether it is allowed (registry/api.set_hidden explains why a real
+   delete is refused), and this only renders that decision. */
+function entryMsg(html, cls){
+  $("entry-msg").innerHTML = html;
+  $("entry-msg").style.color = cls === "bad" ? "var(--warn)" : "";
+}
+
+async function renderEntryActions(id){
+  const rerun = $("rerun"), hide = $("hide");
+  rerun.disabled = hide.disabled = true;
+  entryMsg("");
+  let o;
+  try { o = await (await fetch(`/api/structures/${id}/origin`)).json(); }
+  catch(e){ entryMsg("could not read this entry's origin", "bad"); return; }
+
+  rerun.disabled = !o.can_rerun;
+  rerun.title = o.can_rerun
+    ? `replay task ${o.task_id} from run ${o.run_id}`
+    : (o.why_not || "nothing to replay");
+  hide.disabled = false;
+  hide.textContent = o.hidden ? "unhide" : "hide";
+  if(!o.can_rerun) entryMsg(`<span class="muted">${o.why_not}</span>`);
+  else if(o.hidden) entryMsg('<span class="muted">hidden from listings — ' +
+    'its geometries and provenance are untouched</span>');
+
+  rerun.onclick = async () => {
+    rerun.disabled = true; entryMsg("queuing…");
+    try {
+      const r = await fetch(`/api/structures/${id}/rerun`, {method:"POST"});
+      const body = await r.json();
+      if(!r.ok) throw new Error(body.detail || r.statusText);
+      entryMsg(`run ${body.run_id} · replaying task ${body.source_task} …`);
+      watchRerun(body.run_id, id);
+    } catch(e){ entryMsg(esc(e.message), "bad"); rerun.disabled = false; }
+  };
+
+  hide.onclick = async () => {
+    const nowHidden = !o.hidden;
+    hide.disabled = true;
+    try {
+      let r = await fetch(`/api/structures/${id}/hide`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({hidden: nowHidden})});
+      let body = await r.json();
+      if(r.status === 409){
+        // Refused WITH the routes, not with a bare warning: "is this safe to remove" is
+        // only answerable by seeing what else reached it.
+        const d = body.detail || {};
+        const routes = (d.routes || []).map(x => `#${x.id} ${x.kind}`).join(", ");
+        if(!confirm(`${d.message}\n\nRoutes: ${routes}\n\n` +
+                    `Hiding removes it from listings only. Nothing is deleted and ` +
+                    `every route above stays intact. Continue?`)){
+          hide.disabled = false; return;
+        }
+        r = await fetch(`/api/structures/${id}/hide`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({hidden: nowHidden, force: true})});
+        body = await r.json();
+      }
+      if(!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : r.statusText);
+      entryMsg(esc(body.note));
+      toast(nowHidden ? "hidden" : "restored");
+      await load();
+      await renderEntryActions(id);
+    } catch(e){ entryMsg(esc(e.message), "bad"); hide.disabled = false; }
+  };
+}
+
+async function watchRerun(runId, structureId, tries = 0){
+  // The run executes on a thread, so the outcome arrives a moment later. Poll the one
+  // task until it settles, then say what happened — including "nothing was written",
+  // which under D2 is the correct result and is worth stating rather than leaving the
+  // button looking like it did nothing.
+  if(tries > 100){ entryMsg("still running — see the run inspector"); return; }
+  let t;
+  try { t = (await (await fetch(`/api/runs/${runId}/tasks`)).json()).tasks[0]; }
+  catch(e){ entryMsg("re-run queued; see the run inspector"); return; }
+  if(!t || t.status === "pending" || t.status === "claimed"){
+    setTimeout(() => watchRerun(runId, structureId, tries + 1), 700);
+    return;
+  }
+  $("rerun").disabled = false;
+  if(t.status === "done"){
+    // Two questions, and conflating them is how "already present" ends up being said
+    // about a DIFFERENT structure.  First: did the replay land on the entry you were
+    // looking at?  Only then does "nothing was written" mean "this row is reproducible".
+    if(t.structure_id === structureId){
+      entryMsg(t.structure_created === 0
+        ? `<b>already present</b> — re-running produced the same identity, so nothing was `
+          + `written. That is the expected result and confirms this row is reproducible. `
+          + `<a href="/runs">run ${runId}</a>`
+        : `<b>rebuilt structure ${structureId}</b> · <a href="/runs">run ${runId}</a>`);
+    } else {
+      entryMsg(await explainNewIdentity(structureId, t.structure_id, runId,
+                                        t.structure_created === 0));
+    }
+  } else {
+    entryMsg(`<b>${esc(t.status)}</b> ${esc(t.error_code || "")} — `
+      + `<a href="/runs">see run ${runId}</a>`, "bad");
+  }
+  await load();
+}
+/* A re-run that writes a NEW row is not automatically a surprise, and saying only "wrote
+   structure 595" hides the one fact that explains it.  A stored spec can predate a
+   migration: `MetalSpec.multiplicity` was dropped in spec v5 precisely because it was
+   never kept in sync with `spin_class`, so an old spec's Co(+2,hs) carried a stale
+   singlet and re-deriving it now yields the reachable quartet instead.  Same graph,
+   different derived identity — which is the migration working, not the build drifting.
+   Distinguishing the two costs one comparison of the L1 hash, so it is worth making. */
+async function explainNewIdentity(oldId, newId, runId, reused){
+  const link = `<a href="/runs">run ${runId}</a>`;
+  // "recognised" and "wrote" are different facts and the D2 idempotency check is the
+  // only thing that tells them apart, so carry it through rather than guessing.
+  const verb = reused ? `recognised structure ${newId}` : `wrote structure ${newId}`;
+  let a, b;
+  try {
+    a = (await (await fetch("/api/structures/"+oldId)).json()).structure;
+    b = (await (await fetch("/api/structures/"+newId)).json()).structure;
+  } catch(e){ return `<b>${verb}</b> · ${link}`; }
+  if(a.l1_graph_hash === b.l1_graph_hash && a.l0_composition !== b.l0_composition){
+    const diff = a.multiplicity !== b.multiplicity
+      ? `multiplicity ${a.multiplicity} → ${b.multiplicity}`
+      : `L0 ${esc(a.l0_composition)} → ${esc(b.l0_composition)}`;
+    return `<b>${verb}</b>, not ${oldId} — same molecular graph, different derived `
+      + `identity (${diff}). The spec stored with ${oldId} predates a migration, so `
+      + `re-running derives that value afresh instead of resurrecting the one recorded `
+      + `alongside it. Both rows are real; ${newId} is the current derivation. ${link}`;
+  }
+  if(a.l1_graph_hash !== b.l1_graph_hash)
+    return `<b>${verb}</b> — a different graph from ${oldId}, so these inputs no longer `
+      + `produce what they did. Worth looking at. ${link}`;
+  return `<b>${verb}</b>, not ${oldId} · ${link}`;
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 /* ── 3D ──────────────────────────────────────────────────────── */
 function ensureViewer(){
@@ -447,6 +685,19 @@ async function boot(){
     $("sidebar").querySelectorAll("select").forEach(s=>{ if(s.id!=="f-limit") s.value=""; });
     $("sidebar").querySelectorAll(".chip.on").forEach(c=>c.classList.remove("on"));
     rerun();
+  };
+  // Listen on the table (so Tab reaches it) and on the document (so the keys work
+  // immediately after a click anywhere harmless, which is what people actually do).
+  $("table").addEventListener("keydown", onKey);
+  document.addEventListener("keydown", (e) => {
+    if(isTyping(e)) return;
+    if(document.activeElement === $("table")) return;   // already handled above
+    onKey(e);
+  });
+
+  $("show-hidden").onchange = () => {
+    state.includeHidden = $("show-hidden").checked;
+    state.offset = 0; load();
   };
   $("style-stick").onclick = () => { state.style="stick"; applyStyle(); };
   $("style-ball").onclick  = () => { state.style="ball";  applyStyle(); };

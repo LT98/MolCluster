@@ -34,7 +34,36 @@ conditions), and store everything for recall and further construction.
     conda activate mofsbu
     pip install -e .        # editable install of the package
 
-## Running things
+## Starting the viewer (no terminal needed)
+
+For anyone who just wants to use the app, there is one file to run:
+
+    ./launch/mofsbu.sh              # Linux / macOS — double-click, or run it
+    launch\mofsbu.bat               # Windows — double-click
+
+It finds the conda environment itself, starts the server and opens a browser. To get a
+menu entry (or a desktop icon) so it never has to be found in a file manager:
+
+    ./launch/install-desktop-entry.sh
+    ./launch/install-desktop-entry.sh --gpu       # a second shortcut that uses the GPU
+
+The launcher takes the two options worth having up front, and passes anything else
+through to `scripts/viewer.py`:
+
+    ./launch/mofsbu.sh --gpu --workers 8
+    ./launch/mofsbu.sh --db scratch.db --port 8001
+
+It does **not** run `conda activate`. The environment's interpreter is used by full path,
+because `activate` needs a shell that has been `conda init`-ed and a double-click does not
+give you one. The environment is found by trying the name in `environment.yml`, then
+`$MOFSBU_ENV`, then **any** conda env that can import `fastapi`, `uvicorn` and `rdkit` —
+so an environment created under a different name still works. Override it directly if you
+prefer: `MOFSBU_PYTHON=/path/to/envs/NAME/bin/python ./launch/mofsbu.sh`.
+
+Device and database are also changeable **inside the page** (`/builder`), so neither one
+needs a restart or a flag. See "Choosing hardware and database" below.
+
+## Running things (development)
 
 Always run from the **repo root**, never from inside `src/` or a package folder: Python puts the
 current directory first on `sys.path`, and a package folder on the path shadows stdlib modules.
@@ -75,6 +104,50 @@ what it refused — grouped by cause, with the evidence attached.
 Metal–donor distances are per *pair*, not per metal (`geometry/distances.py`): a centre carrying
 a water and an iodide has two different M–L distances. A pair the table has not calibrated is
 still placed, but its distance is labelled an estimate everywhere it appears.
+
+**Settled, not done.** The headline reads `settled 36 / 36 · 22 built · 14 rejected · 0 failed`.
+A rejection is a *settled* outcome — the task ran and the chemistry answered no — so a run full
+of rejections is finished, not stuck at 22-of-36. It is deliberately not merged with `failed`:
+those are different claims, and `finish_run` returns `done` for a run full of rejections.
+
+**The page stops asking when there is nothing to ask about.** A finished run is a document; it is
+not re-fetched or repainted, so an expanded traceback stays expanded. While a run is live the
+panel is rebuilt, and open sections are restored by task id. The steady state is one request
+every 15 s instead of three every 4 s — which is why the console no longer scrolls on its own.
+The server also defaults to `--log-level warning`; pass `--log-level info` to get access lines back.
+
+## Choosing hardware and database (`/builder`)
+
+Both used to be decided once on the command line, which put them behind a terminal.
+
+* **Device.** A selector lists what this machine actually has (`cpu`, plus each visible CUDA
+  device by name, `mps` where applicable) and what is currently declared. It stays a
+  *declaration*: enumerating the GPUs and letting a person choose is not detection, and nothing
+  ever selects CUDA because a card is present. The chosen device is written into the run row,
+  so a stored run still says which hardware produced it. It applies process-wide, so two runs
+  going at once share one declaration.
+* **Database.** A dropdown lists every registry under the data root **with its row count** —
+  "which one is my real one" is the actual question, and two plausible filenames do not answer
+  it. "new…" creates an empty one. Switching moves the viewer, the builder and the run inspector
+  together. The viewer stays read-only across a switch; only paths the server already listed can
+  be selected.
+
+## Re-running and hiding one entry
+
+* **Re-run** replays the task that built a structure — its payload and its run's spec are both
+  stored, and `construct` is a deterministic function of the choice vector and seed (D13). The
+  usual result is "already present, nothing written", which is reported as the confirmation it
+  is. If the stored spec predates a migration the replay can land on a *different* identity
+  (same graph, different derived multiplicity, say); the page says so rather than reporting a
+  bare new row.
+* **Hide** is this project's delete, and it is soft on purpose. The schema cascades hard —
+  deleting a structure takes its geometries, `site_catalog`, `site_state` and its `reactions`
+  edges — and 457 of 594 structures in the working registry (77%) have more than one incoming
+  edge, so deleting "one entry" usually severs some other route's history. Everything here is
+  regenerable except provenance. So a hidden structure keeps its row, its blobs, its edges and
+  its L0/L1/L2 identity (it is still recognised under D2) and simply leaves the listing.
+  Hiding a multi-route structure is refused until confirmed, and the refusal names the routes.
+  "show hidden structures" in the sidebar is the way back.
 
 ## Energies (M7)
 
