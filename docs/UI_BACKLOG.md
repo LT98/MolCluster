@@ -152,6 +152,80 @@ thread the value into the run record.
 
 ---
 
+## 6. A run always goes to whichever database the server was started with
+
+**Where** `ui/__main__.py::resolve_database`, `ui/builder.py::submit_run`
+
+**Diagnosis** The database is chosen once, at launch, by `--db` or by discovery, and then
+baked into the app: `create_app(db, store)` closes over it and `submit_run` opens
+`Registry(db_path, ...)` on that single path. Nothing in the page can point a run
+somewhere else, so separating exploratory runs from real ones means restarting the server
+with a different flag — i.e. a shell, which is item 5's problem again.
+
+The machinery to *find* the alternatives already exists and is already exposed:
+`discover_databases()` lists every `.db` under the data root, newest first, and
+`--list-db` prints them. It is only the selection that is missing.
+
+**Fix** A database `<select>` on `/builder`, populated from `discover_databases()`, plus a
+"new database…" option that takes a name and creates it. Creation is genuinely cheap —
+`Registry(path).migrate()` builds a complete schema from nothing, which is how every
+registry in the project has ever been made.
+
+Three things to get right:
+* **the viewer is read-only and must stay that way.** The registry page opens its
+  connection with `open_read_only()`; adding a writable path for runs must not widen that.
+  The write already happens on a different connection inside `submit_run`, so this is a
+  matter of not "simplifying" the two into one later.
+* **name validation**: `save_spec` already refuses a filename containing `/` or `\`, and
+  the same check belongs here — a database name is a path component, not a path.
+* **show the row count** next to each database in the dropdown. "Which one is my real
+  one" is the actual question being asked, and a name alone frequently does not answer it.
+
+**Effort** Small–medium. The listing exists; it is a select, a POST, and being careful
+about the read-only connection.
+
+---
+
+## 7. No way to re-run or delete a single entry
+
+**Where** `registry/api.py`, `ui/app.py`
+
+**Diagnosis** Two different requests that look like one.
+
+**Re-run** is nearly free and mostly exists: a geometry stores its `choice_vector` and
+`seed`, and the whole point of D13 is that `construct` is a deterministic function of the
+two. `/api/structures/{id}/spec` already returns the spec that produced a structure, for
+copy-paste. Re-running one entry is therefore "take that spec, narrow it to this one
+structure, queue it" — which is a button over machinery that is already there. Under D2 it
+will usually recognise the identity and write nothing, which is the correct outcome and
+should be *reported* as such rather than looking like a no-op.
+
+**Delete** is the one to be careful about, and it is not a UI problem. The schema cascades
+hard: deleting a structure takes its geometries, its `site_catalog`, its `site_state`, and
+its `reactions` edges with it. That is right for a mistake and wrong for a structure some
+other route also reached — `reactions` is a DAG, and **457 of 594 structures in the working
+registry — 77% — have more than one incoming edge**, so deleting "one entry" usually
+severs some other route's history. That is not an edge case to guard against; under D2 it
+is the normal state of the registry, because re-deriving an identity you already have is
+what most of an enumeration does.
+
+**Fix** Split them:
+* **Re-run**: a button on the structure page. Reuses the stored spec; shows the outcome
+  including "already present, nothing written".
+* **Delete**: offer it only for a structure with a single incoming provenance edge, and
+  refuse (with the reason, and a list of the other routes) otherwise. Prefer a soft delete
+  — a `hidden` flag filtered out of `v_structures` — over a real one: the registry is
+  meant to be regenerable, but provenance that has been cascaded away is not recoverable,
+  and "I deleted the wrong row" is a much worse afternoon than "the list has a filter on
+  it".
+
+A blanket "delete any row" button is the one thing here I would not build.
+
+**Effort** Re-run: small. Delete: medium, and mostly deciding the policy rather than
+writing it.
+
+---
+
 ## Not in this list
 
 Things noticed while diagnosing the above, deliberately excluded because they are not UI:
