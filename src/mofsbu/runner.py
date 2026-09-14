@@ -105,9 +105,21 @@ def _compositions(kinds: list[dict[str, Any]], total: int,
 def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
     """Create the run and its tasks.  Returns (run_id, n_tasks)."""
     if spec.degree > 1:
-        from mofsbu.assembly.join import grow
+        from mofsbu._types import NotBuiltYet
 
-        grow(None, (), degree=spec.degree)      # raises NotBuiltYet, loudly and with why
+        # This used to CALL `grow(None, (), degree=...)` purely to borrow the exception it
+        # raised.  That was fine while grow was a stub and became a lie the moment M5/S4
+        # built it: the tripwire would have thrown an AttributeError on the None seed
+        # instead of explaining anything.  The refusal is stated directly now, and it
+        # refuses something different from what it used to — not "growth is not written"
+        # but "the RUN PIPELINE does not drive it yet".
+        raise NotBuiltYet(
+            f"degree {spec.degree}: the branch tree and `assembly.grow` are built (M5/S4), "
+            "but planning a multi-step construction as TASKS is not — that is S4.1, where "
+            "the enumerator becomes what the builder drives. Call "
+            "`assembly.construct.enumerate_constructions` directly in the meantime. A run "
+            "that quietly queued degree-1 work instead would be the wrong answer wearing "
+            "the right count.")
 
     if spec.run_mode != "construct":
         from mofsbu.energy.relax import mode_status

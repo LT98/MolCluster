@@ -83,6 +83,20 @@ class AmbiguousSpecError(MofsbuError):
     """
 
 
+class NotBuiltYet(NotImplementedError, MofsbuError):
+    """Raised by a settled interface whose body is still scheduled work.
+
+    Lives here, with the rest of the hierarchy, because five modules across four
+    subsystems raise it and every one of them was importing it from `assembly.join` —
+    the module that happened to declare it first.  Most did so inside the function to
+    dodge the import cycle that created; `descriptors.ease` imported it at module scope,
+    so the cycle became real the moment `assembly.join` needed anything from `sites` or
+    `descriptors`.  An exception is not owned by the first subsystem to need it.
+
+    `assembly.join` re-exports the name, so existing imports are unaffected.
+    """
+
+
 class GraphValidationError(MofsbuError):
     """A typed-graph invariant was violated."""
 
