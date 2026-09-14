@@ -1,0 +1,16 @@
+# Search-only exclusions. These remain inspectable with `rg -uu` when explicitly needed.
+.git/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+data/store/
+data/_archive-*/
+data/_scratch/
+*.db
+*.sqlite
+*.sqlite3
