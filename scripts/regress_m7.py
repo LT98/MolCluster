@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """M7 exit gate — does the new energy stack reproduce the archived work?
 
-`docs/PLAN_implementation.md` §M7 sets the gate: re-run the Ni/BTC and Fe/BTC cases
+`docs/PLAN_implementation.md` §2 (M7) sets the gate: re-run the Ni/BTC and Fe/BTC cases
 through the new stack and reproduce the rankings in `docs/reports/*.md` within noise.
 "If the new stack can't reproduce the old results, one of them is wrong and you want to
 know NOW, not in M8."

@@ -1,11 +1,17 @@
 # Code architecture — the quick reference
 
-`PLAN_implementation.md` is the detail (milestones, changelog, rationale) and
-`DESIGN_registry_assembly.md` is the reasoning (decision ledger, subsystems). **This file is
-the map.** Read it first; go to the other two when you need to know *why*.
+**This file is the map.** Read it first; go elsewhere when you need to know *why*.
 
-Rule for keeping it useful: if something here needs a paragraph, it belongs in one of the
-other two documents with a pointer from here.
+| Document | Holds |
+|---|---|
+| `PLAN_implementation.md` | what is **left to build** — remaining milestones, exit gates, open decision gates |
+| `DESIGN_registry_assembly.md` | the **reasoning** — decision ledger, subsystems, open checkpoints |
+| `BUGS.md` | what is **built and behaving wrongly**. Open only |
+| `archive/` | finished milestones, resolved bugs, and the full changelogs |
+
+Rule for keeping this file useful: if something here needs a paragraph, it belongs in one of
+the others with a pointer from here. Rule for keeping the set useful: an item leaves the active
+document the moment it is done — it moves to `archive/`, it is not struck through in place.
 
 ---
 
@@ -141,24 +147,19 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 
 ---
 
-## 6. Known seams (real tensions, not bugs)
+## 6. Known seams
 
-- ~~**`site_catalog` is not a pure function of identity.**~~ **Closed.** D15 excludes bond
-  order from the hash and perception used to read it, so two routes to one acetate complex
-  perceived different donor sets. `sites.perception.DELOCALISED_GROUPS` now types an
-  oxo-acid as a whole group — all its oxygens, one donor type, one charge, no bond order
-  read. `registry.catalog_drift` stays as the guard (`put_sites` keeps the FIRST catalog,
-  so a regression here is silent otherwise); `test_no_build_route_drifts_from_the_stored_catalog`
-  is the gate.
-- **Perception counts a metal as an ordinary heavy neighbour.** A coordinated aqua oxygen
-  is therefore perceived as no donor at all, so its `SiteStatus.OCCUPIED` row is never
-  written. Separate from the resonance seam above and not fixed with it: closing it moves
-  `n_perceived_donors` for every assembled structure.
-- **L2 is `''` everywhere**, so cis and trans currently collapse into one `structures` row.
-  Filling it in retroactively **splits identities** — decide backfill-vs-version before M5
-  touches `l2_isomer_tag`.
-- **569 existing structures have no `site_state`** (built before M4's second half).
-  `n_open_sites` is NULL for them — correct, but a query that treats NULL as 0 will lie.
+Three places where the code is internally consistent and still reports something misleading.
+Full diagnosis and current measurements in `BUGS.md`; one line each here.
+
+| | Seam | Bites when |
+|---|---|---|
+| [B1](BUGS.md#b1) | Perception counts a metal as an ordinary heavy neighbour, so a **coordinated** donor is perceived as no donor | you look for the `OCCUPIED` rows and they are not there |
+| [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` everywhere, so cis and trans are one `structures` row | M5 fills it in and **splits identities** — decide backfill-vs-version first |
+| [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure |
+
+*Closed, and worth reading before touching perception: `site_catalog` was not a pure function
+of identity — `archive/BUGS_resolved.md`.*
 
 ---
 
@@ -171,4 +172,4 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 | energies | `energy/reference.py` docstring — it explains what it refuses and why |
 | the build pipeline | `runner.execute`, top to bottom |
 | anything stored | `registry/api.py` — it is the only writer |
-| the web UI | `docs/UI_BACKLOG.md` — the known annoyances are already diagnosed |
+| the web UI | `docs/BUGS.md` — B4/B5/B6 are the open ones, already diagnosed |
