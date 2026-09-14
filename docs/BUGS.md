@@ -14,33 +14,12 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 
 | # | Severity | Where | One line |
 |---|---|---|---|
-| [B1](#b1) | honesty | `sites/perception.py` | A coordinated donor is perceived as no donor at all |
-| [B2](#b2) | honesty | `identity/keys.py` | `l2_isomer_tag` is `''` for all 39 structures, so cis and trans are one row |
-| [B3](#b3) | honesty | registry data | 16 structures have no `site_state`; `n_open_sites` is NULL, not 0 |
+| [B2](#b2) | honesty | `identity/keys.py` | `l2_isomer_tag` is `''` for all 39 structures, so cis and trans are one row. **Resolution decided (D19)** |
+| [B3](#b3) | honesty | registry data | 16 structures have no `site_state`; `n_open_sites` is NULL, not 0. **Self-healing (D19)** |
 | [B4](#b4) | cosmetic | `ui/static/runs.html` | "What was attempted" renders `molecule undefined · undefined×0-dentate` |
 | [B5](#b5) | undecided | `ui/static/builder.html` | The builder posts `spec_version: 1` and no test covers the migration it relies on |
 | [B6](#b6) | undecided | `ui/static/index.html` | The registry page never refreshes, so its counts go stale silently |
 | [B7](#b7) | blocked | `scripts/ingest.py` | The legacy `.xyz` corpus cannot be ingested: no charge, no multiplicity |
-
----
-
-## B1
-
-**A coordinated donor is perceived as no donor at all.** `honesty` ·
-`sites/perception.py`
-
-Perception counts a metal as an ordinary heavy neighbour. A coordinated aqua oxygen therefore
-fails the donor test, no `site_catalog` row is written for it, and the
-`SiteStatus.OCCUPIED` row that should exist on every geometry never appears. The sites that
-are *occupied* are exactly the ones that vanish.
-
-Not the same seam as the resonance one (closed — see the archive): that was perception reading
-bond order, this is perception reading coordination. They were filed together and only one of
-them was fixed.
-
-**Why it is still open:** closing it moves `n_perceived_donors` for every assembled structure,
-so it wants its own fixture set and a decision about whether stored catalogs are re-derived or
-versioned.
 
 ---
 
@@ -53,9 +32,17 @@ Measured 2026-09-14: 39 of 39 structures carry an empty L2. The stub is by desig
 the signature, M5 fills the body), but the *consequence* is a live misreport — the registry
 currently claims two isomers are one structure.
 
-**The decision this blocks:** filling L2 in retroactively **splits identities**. Backfill
-versus version bump has to be called before M5 touches `l2_isomer_tag`, because after that
-point the split is happening either way and the only question is whether it was chosen.
+**Called: version bump, not backfill — D19.** `ALGO_VERSIONS["l2_isomer_tag"]` moves off
+`0-stub` when M5 fills the body; rows written under the stub keep `l2_isomer_tag = ''` and are
+never re-derived. Backfilling was refused because it would rewrite stored identities and every
+`reactions` edge pointing at them — the one thing here that is not regenerable.
+
+`structures.algo_l2` already records the generation per row (all 39 currently read `0-stub`),
+so a `''` is readable as *"this predates L2"* rather than *"this has no isomerism"*.
+
+**Still open until M5 lands**, because the misreport is live until then: the registry presently
+claims cis and trans are one structure. Accepted cost of D19: the same species built before and
+after M5 can occupy two rows.
 
 ---
 
@@ -67,8 +54,16 @@ Measured 2026-09-14: 16 of 39 structures were built before M4's second half, so 
 catalog and no state, and `n_open_sites` is NULL for them.
 
 NULL is the correct value — absent is not zero (ground rule 9 / invariant 9) — and the bug is
-that nothing stops a consumer from treating it as zero and reporting a fully-occupied
-structure. Either backfill the state for the old rows or make NULL loud at the read side.
+that nothing stops a consumer from treating it as zero and reporting a fully-occupied structure.
+
+**Now self-healing, and the cause turned out to be shared.** These 16 are the same 16 whose
+`site_catalog` was *empty*, because perception dropped every donor the moment it coordinated
+(archived). Under D19 a `perception/1` catalog is rewritten the next time anything touches its
+structure, and `_record_sites` writes fresh state straight after — so each one is repaired as
+it is next built or relaxed.
+
+**What is still open** is the read side: nothing yet makes a NULL `n_open_sites` loud to a
+consumer that treats it as 0. Until every row has been touched, the registry is a mix.
 
 *(An earlier revision of this note said 569 of 594. That was a different registry; the numbers
 above are a fresh query against `data/registry.db`.)*

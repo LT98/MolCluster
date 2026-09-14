@@ -237,6 +237,18 @@ def _classify_anionic(atom: Chem.Atom) -> str | None:
     return None
 
 
+def _constitutional_heavy(atom: Chem.Atom) -> list[Chem.Atom]:
+    """Heavy neighbours that are part of the molecule's CONSTITUTION, i.e. not metals.
+
+    A coordinated donor must classify the same way it did before it bound, or a site
+    disappears from `site_catalog` at exactly the moment it becomes occupied and the
+    bond that formed has no row to be recorded against.  `_terminal_oxygens` already
+    draws this line for the delocalised path; the valence-rule classifier needs it too.
+    """
+    return [nb for nb in atom.GetNeighbors()
+            if nb.GetAtomicNum() > 1 and nb.GetSymbol() not in METALS]
+
+
 def _classify_neutral(atom: Chem.Atom) -> str | None:
     if atom.GetFormalCharge() != 0:
         return _classify_anionic(atom)
@@ -262,13 +274,13 @@ def _classify_neutral(atom: Chem.Atom) -> str | None:
     if sym == "O":
         n_h = _n_hydrogens(atom)
         if n_h > 0:
-            heavy = [nb for nb in atom.GetNeighbors() if nb.GetAtomicNum() > 1]
+            heavy = _constitutional_heavy(atom)
             if not heavy:
                 return "aqua_O"                 # free or coordinated water
             if n_h == 1 and len(heavy) == 1:
                 return None                     # a hydroxyl: the labile list's business
             return None
-        heavy = [nb for nb in atom.GetNeighbors() if nb.GetAtomicNum() > 1]
+        heavy = _constitutional_heavy(atom)
         bonds = atom.GetBonds()
         if len(heavy) == 1 and any(b.GetBondTypeAsDouble() == 2 for b in bonds):
             # ADDED: a ketone / quinone oxygen is a donor, and in a hydroxyquinone it is
@@ -282,7 +294,7 @@ def _classify_neutral(atom: Chem.Atom) -> str | None:
 
     if sym == "S":
         if _n_hydrogens(atom) == 0:
-            heavy = [nb for nb in atom.GetNeighbors() if nb.GetAtomicNum() > 1]
+            heavy = _constitutional_heavy(atom)
             if len(heavy) == 2 and all(b.GetBondTypeAsDouble() == 1 for b in atom.GetBonds()):
                 return "thioether_S"
         return None

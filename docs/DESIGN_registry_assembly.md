@@ -507,6 +507,28 @@ coordinates.
   precisely why the components are the record and the scalar is only a sort key (D6).
   **C7 is untouched**: `hsab_match` still raises and `activation_ease(partner=...)` refuses
   rather than returning the partner-free number under a partner-shaped call.
+- **D19** **A stored identity is never re-derived under a new recipe version; it keeps the
+  answer its own version gave.** Forced by M5, which fills in `l2_isomer_tag` and so would
+  otherwise **split** every identity written while L2 was a stub. Backfilling is refused:
+  re-deriving L2 for the existing rows would rewrite stored identities and every `reactions`
+  edge pointing at them, which is the one thing in this registry that is not regenerable
+  (D2). So `ALGO_VERSIONS["l2_isomer_tag"]` bumps from `0-stub`, rows written under the stub
+  keep `l2_isomer_tag = ''`, and anything built from M5 onward carries a real tag.
+
+  **What makes this honest rather than a silent fork is that the generation is already on
+  the row** — `structures.algo_l2` records which recipe produced each value, so a `''` is
+  readable as *"this predates L2"* rather than as *"this has no isomerism"*. The cost is
+  real and is accepted: the same species built before and after M5 can occupy two rows.
+  That is a visible duplicate with its cause recorded, which is strictly better than an
+  invisible one — and it follows ground rule 6, which already says a version bump marks
+  rows stale rather than re-labelling them.
+
+  **The narrower case goes the other way, and the difference is the point.** `site_catalog`
+  IS re-derived on a version bump (`perception/1` → `/2`), because a catalog is a derived
+  annotation that nothing points at, so rewriting it costs only the state rows underneath
+  it. An identity is pointed at by the provenance DAG. The rule is therefore not "always
+  re-derive" or "never" but: **re-derive what is only an annotation; version what is an
+  address.**
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in

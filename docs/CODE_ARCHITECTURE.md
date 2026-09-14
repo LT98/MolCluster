@@ -112,7 +112,9 @@ one row with two incoming `reactions` edges — 441 such products exist today.
 6. **Pinned recipe versions.** Bump `ALGO_VERSIONS`; never silently re-label existing rows.
 7. **Fidelity is a property of a GEOMETRY**, never of a structure. Exception:
    `Fidelity.HEURISTIC = -1` is an *ease* rung and `put_geometry` refuses it.
-8. **Perceive once per structure.** `site_catalog` is written once and kept;
+8. **Perceive once per structure.** `site_catalog` is written once and kept *within a
+   perception version*; a catalog older than `ALGO_VERSIONS["perception"]` is rewritten the
+   next time anything touches the structure, and its `site_state` goes with it (D19).
    `refresh_state` never perceives (there is a test counting calls).
 9. **Absent ≠ zero.** An uncomputed ease component is omitted, `n_open_sites` is NULL not 0,
    and a missing number never renders as a low one.
@@ -142,6 +144,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D16** | L1 = sha256 of a canonical **certificate**, not the WL hash (1-WL cannot separate µ2-bridging from chelating). WL is a bucket index; nauty is unused |
 | **D17** | An energy difference needs an **isodesmic** equation, not merely a balanced one |
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
+| **D19** | Re-derive what is only an **annotation** (`site_catalog`); **version** what is an address (identity). A stored identity keeps the answer its own recipe version gave |
 
 **Open checkpoints:** C2 (θ_geom + energy window — M5), C6 (barrier proxy — M8),
 C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→curated tables.*
@@ -155,12 +158,12 @@ Full diagnosis and current measurements in `BUGS.md`; one line each here.
 
 | | Seam | Bites when |
 |---|---|---|
-| [B1](BUGS.md#b1) | Perception counts a metal as an ordinary heavy neighbour, so a **coordinated** donor is perceived as no donor | you look for the `OCCUPIED` rows and they are not there |
 | [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` everywhere, so cis and trans are one `structures` row | M5 fills it in and **splits identities** — decide backfill-vs-version first |
-| [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure |
+| [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
 
-*Closed, and worth reading before touching perception: `site_catalog` was not a pure function
-of identity — `archive/BUGS_resolved.md`.*
+*Closed, and both worth reading before touching perception: `site_catalog` was not a pure
+function of identity, and a coordinated donor was perceived as no donor at all —
+`archive/BUGS_resolved.md`.*
 
 ---
 
