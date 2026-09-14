@@ -281,3 +281,59 @@ enumeration, so this fired constantly: a structure built twice kept state only o
 geometry, and `n_open_sites` counted against a best geometry that no longer had any.
 
 The catalog is geometry-independent; it is now written once per structure and kept.
+
+---
+
+## Perception, pre-M5 — a donor was deleted at the moment it became occupied ✅
+
+**Was** `_classify_neutral` counts heavy neighbours to tell an ether from an alcohol and a
+ketone from a carboxylate — and **a metal is a heavy neighbour**. So three donor types were
+perceived while free and not perceived once bound:
+
+| ligand | free | coordinated |
+|---|---|---|
+| water | `aqua_O` | — |
+| THF | `ether_O` | — |
+| acetone | `carbonyl_O` | — |
+
+The site left `site_catalog` at exactly the moment it became occupied, so `refresh_state` had
+no row to mark `OCCUPIED` and the bond that had just formed was recorded nowhere.
+
+**Uneven, which is why it survived this long.** N-donors and anionic donors were never
+affected — they are classified by aromaticity, bond order or formal charge, none of which a
+metal neighbour perturbs. A pyridine complex looked perfect; an aqua complex was empty.
+
+**Measured on the registry before the fix:** 34 of 35 metal-bearing structures had a catalog
+smaller than their own dative-bond count, and **16 had entirely empty catalogs** —
+`Mg[THF]4[H2O]2` recorded 6 dative bonds and 0 perceived donors.
+
+**Why it was caught before M5 and not during.** M5's exit gate is the anthrarufin–Cu cis/trans
+pair, and an anthrarufin peri-pocket is phenolate + quinone C=O. The C=O vanished the moment
+the pocket closed:
+
+```
+anthrarufin free:       phenolate_O x2, carbonyl_O x2
+anthrarufin-Cu bound:   phenolate_O x2, carbonyl_O x1
+```
+
+An assembled block's `open_sites()` was therefore wrong, and `join()` inheriting sites through
+the atom map would have disagreed with what `runner._record_sites` re-perceives — for exactly
+the donor types assembly creates. The gate could have passed on the surviving second pocket
+while the bookkeeping underneath it was wrong.
+
+**Built** `_constitutional_heavy()` excludes metals from the heavy-neighbour count, and the
+valence-rule classifier uses it. This is not a new rule: `_terminal_oxygens` already drew the
+same line for the delocalised path, in those words — *coordination rather than constitution*.
+The fix makes the two paths agree.
+
+**The part worth keeping.** The fix passed all 431 pre-existing tests **unchanged**, which is
+itself the finding: nothing covered the coordinated case at all. Every perception test used a
+free ligand. `test_a_donor_survives_being_coordinated` is the gate — 8 pairs, each asserting
+the donor multiset is identical free and bound; 4 of them fail without the fix.
+
+**Consequence, handled by D19:** `ALGO_VERSIONS["perception"]` 1 → 2, and a `perception/1`
+catalog is rewritten the next time anything touches its structure rather than being kept under
+D5's write-once rule. An old catalog is not a differently-worded answer to the same question;
+it is the answer to a question the current recipe no longer asks. This also closes the
+"569 structures have no `site_state`" complaint from the other direction: the 16 empty catalogs
+and the 16 missing-state structures were the same 16, one cause.

@@ -106,3 +106,35 @@ you are about to reverse one and need to know what it cost last time.
   proposals for C5 (heuristic pKa+HSAB floor), C6 (ΔG + sink + concurrent-bond-change +
   exchange-lability proxies), C7 (factorized HSAB-match, not a matrix). Added C2 worked examples,
   new **C8** (descriptor sourcing/provenance). Roadmap re-sequenced polynuclear-native.
+
+---
+
+- *(pre-M5)* **D19 — re-derive what is only an annotation; version what is an address.**
+
+  Two questions arrived together and looked like one. Perception had a bug (a coordinated
+  donor was perceived as no donor — see `BUGS_resolved.md`), so `ALGO_VERSIONS["perception"]`
+  had to bump and 34 stored catalogs were known-wrong. Separately M5 is about to fill in
+  `l2_isomer_tag`, which would split every identity written while L2 was a stub.
+
+  Both are "a recipe changed; what happens to rows written under the old one?" — and the
+  answers are opposite, which is the useful part:
+
+  * **`site_catalog` is re-derived.** It is a derived annotation that nothing points at, so
+    rewriting it costs only the `site_state` rows beneath it, and those were computed against
+    a catalog now known to be incomplete. Absent beats stale (ground rule 9). Done lazily —
+    a `perception/1` catalog is replaced the next time anything touches its structure — so
+    there is no bulk migration and no window where the registry silently claims the old rows
+    are current.
+  * **An identity is versioned, never re-derived.** It is pointed at by the provenance DAG,
+    and provenance is the one thing in this registry that is not regenerable (D2). Backfilling
+    L2 would rewrite stored identities *and* every `reactions` edge pointing at them.
+
+  What makes the second one honest rather than a silent fork is that `structures.algo_l2`
+  already stamps the generation on every row, so `''` reads as "this predates L2" rather than
+  "this has no isomerism". The accepted cost, stated rather than discovered later: the same
+  species built before and after M5 can occupy two rows. A visible duplicate with its cause
+  recorded is strictly better than an invisible one.
+
+  Also fixed while pinning this down: `put_sites` took its version as a hardcoded
+  `"perception/1"` literal, so the recipe was unpinned in violation of ground rule 6 and there
+  was nothing for a staleness check to compare against. It now reads `ALGO_VERSIONS`.

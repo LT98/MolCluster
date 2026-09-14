@@ -38,6 +38,7 @@ from mofsbu.sites.frames import site_frame
 from mofsbu.sites.inherit import inherit_sites, merge_inherited
 from mofsbu.sites.model import chelate_pockets, perceive
 from mofsbu.sites.state import SiteStatus, refresh_state
+from mofsbu.versions import ALGO_VERSIONS
 
 FF = MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF")
 
@@ -155,6 +156,51 @@ def test_the_catalog_is_written_once_per_structure(reg):
         "writing the catalog again destroyed the first geometry's state")
     put_site_state(reg, sid, gid_b, states, fidelity=Fidelity.RAW)
     assert len(get_site_state(reg, sid, gid_b)) == len(sites)
+
+
+def test_a_catalog_from_an_older_perception_is_replaced(reg):
+    """A version bump makes the stored catalog stale, and stale beats geometry-free.
+
+    Keeping the first catalog is the D5 rule and it holds *within* a version: a second
+    build of one identity has nothing new to say.  Across a version it is the wrong call.
+    An older catalog is not a differently-worded answer to the same question, it is the
+    answer to a question the current recipe no longer asks — perception/1 dropped a donor
+    the moment it coordinated — so keeping it would preserve a known-incomplete row and
+    silently re-label it as current (ground rule 6).
+
+    The state rows go with it, and that is the honest outcome rather than collateral: they
+    were computed against the catalog now known to be wrong, and absent beats stale
+    (ground rule 9).  The caller writes fresh state for the geometry it is holding.
+    """
+    mol, graph, sid, gid, sites = _store(reg, SALICYLIC, "sal")
+    current = f"perception/{ALGO_VERSIONS['perception']}"
+    assert {r["algo_perception"] for r in get_sites(reg, sid)} == {current}
+
+    # Same version, second call: kept, exactly as before.
+    conf = mol.GetConformer()
+    coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
+               conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
+    put_site_state(reg, sid, gid, refresh_state(sites, coords, graph=graph),
+                   fidelity=Fidelity.FF)
+    ids_before = [r["id"] for r in get_sites(reg, sid)]
+    put_sites(reg, sid, sites)
+    assert [r["id"] for r in get_sites(reg, sid)] == ids_before, (
+        "a second write at the SAME version must keep the first catalog (D5)")
+    assert len(get_site_state(reg, sid, gid)) == len(sites)
+
+    # Now age the stored catalog, as a registry written before the bump would be.
+    reg.conn.execute("UPDATE site_catalog SET algo_perception='perception/1' "
+                     "WHERE structure_id=?", (sid,))
+    put_sites(reg, sid, sites)
+    rows = get_sites(reg, sid)
+    assert {r["algo_perception"] for r in rows} == {current}, (
+        "a catalog older than the current perception version was kept")
+    # The cascade is the evidence the rows were REWRITTEN rather than re-labelled in
+    # place: `site_state` hangs off `site_catalog.id`, so it only empties if the catalog
+    # rows were actually deleted.  (Row ids themselves prove nothing — SQLite hands the
+    # same rowids straight back when the deleted rows were the highest ones.)
+    assert get_site_state(reg, sid, gid) == [], (
+        "state derived from the replaced catalog must go with it, not linger")
 
 
 def _store_route(reg, name: str, mol, route: tuple[int, ...], donor_type: str):
