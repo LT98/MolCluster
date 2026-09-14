@@ -127,7 +127,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 |---|---|
 | **D1** | Central object = recursive `BuildingBlock`; assembly re-exposes open sites |
 | **D2** | Identity ≠ address ≠ provenance. Identity on node, sequence on edges |
-| **D3/D16** | L1 = sha256 of a canonical **certificate**, not the WL hash (1-WL cannot separate µ2-bridging from chelating) |
+| **D3** | L1 = canonical hash of an explicit typed graph; never SMILES/InChI. *Producer superseded by D16* |
 | **D4** | Fidelity/coords live in child `geometries`; structure identity is fidelity-invariant |
 | **D5** | Sites by **canonical index**; `site_catalog` (geometry-free) + `site_state` (per-geometry); inherit via atom map |
 | **D6** | Ease = **named components** + derived scalar, tagged by fidelity |
@@ -137,8 +137,9 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D10** | L2 is in scope; discriminator is downstream **relevance**, not ΔE |
 | **D11** | L3 = provenance-primary (choice-vector), geometry-verifier |
 | **D13** | A site is **frame + live-DOF tag + binding-mode set**; torsion stored as a discrete well index |
-| **D14** | Bridging is **derived**, not an edge type |
+| **D14** | Bridging is **derived**, not an edge type (`EdgeType` is `{COVALENT, DATIVE, METAL_METAL}`) |
 | **D15** | Net charge is **graph-level**; bond order excluded from the hash (resonance/Kekulé) |
+| **D16** | L1 = sha256 of a canonical **certificate**, not the WL hash (1-WL cannot separate µ2-bridging from chelating). WL is a bucket index; nauty is unused |
 | **D17** | An energy difference needs an **isodesmic** equation, not merely a balanced one |
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
 

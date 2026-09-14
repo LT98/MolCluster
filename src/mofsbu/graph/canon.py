@@ -287,8 +287,9 @@ def certificate_digest(g: TypedGraph, order: list[int] | None = None) -> str:
     """sha256 over the canonical certificate — the L1 key producer.
 
     Exact (no collisions) and fixed length.  Pure Python, so the laptop and the
-    workstation agree (ground rule 9); pynauty stays a verifier and must never
-    produce a stored key, because its canonical form differs from this one.
+    workstation agree (ground rule 10).  Nothing that is installed on only one
+    machine may produce a stored key — D16 dropped nauty for exactly this reason,
+    its canonical form being different from this one.
 
     Pass `order` when the caller has already canonicalised, to avoid paying for it
     twice — the registry needs both the digest and the order on every insert.

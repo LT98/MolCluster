@@ -15,7 +15,9 @@ mofsbu-ui = "mofsbu.ui.__main__:main"
 
 [project.optional-dependencies]
 xtb   = ["tblite"]
-canon = ["pynauty"]
+# No `canon` extra: D16 dropped pynauty. The L1 key comes from a pure-Python
+# canonical certificate, because an optional native package must never be able
+# to produce a key one machine can compute and the other cannot.
 # MACE-MP-0 works on any recent mace-torch; the `mace_omol` loader for
 # MACE-OMOL-0 landed in 0.3.14, so the extra pins that floor rather than
 # letting an older install fail at the first structure of a long run.

@@ -78,275 +78,353 @@ These are cheap to hold now and expensive to add later. Every one of them is a t
    (`MOFSBU_PROFILE=workstation`, or `MOFSBU_WORKERS=N`).  The default is one in-process
    worker, so running a build on the laptop cannot swamp it.  Scaling up is a
    configuration change, never a code change.
-10. **Two-machine parity.** The primary L1 hash is computed by a path available on *both* machines
-   (networkx WL). `pynauty` is a Linux-side *verifier*, never the primary key producer — otherwise
-   the laptop and the workstation disagree about identity.
+10. **Two-machine parity.** The L1 key is computed by a path available on *both* machines — the
+   canonical certificate is pure Python and depends on no optional native package (D16).
+   Nothing that is installed on only one machine may ever produce a key, or the laptop and the
+   workstation disagree about identity. The golden-hash test in M2 is what enforces this.
 
 ---
 
 ## 1. Package map and API surface
 
-Signatures below are the contract to code against. Types are indicative (dataclasses,
-`from __future__ import annotations` everywhere).
+This section was originally a contract to code against, written before the code existed. Most
+of it now exists, and where the built thing differs from the original sketch, **the code is the
+contract** — the sketch is not a target to migrate toward. So §1 is split:
 
-### `mofsbu/graph/` — the typed molecular graph (identity substrate)
+* **§1a** is a map of what is built, verified against the modules. Signatures are exact as of
+  the last audit; treat the module as authoritative if they ever disagree again.
+* **§1b** is design intent for what is *not* built. Those signatures are still proposals.
+
+Types are indicative throughout (dataclasses, `from __future__ import annotations` everywhere).
+
+---
+
+### 1a. Built — the seams M5–M8 will call
+
+#### `mofsbu/graph/` — the typed molecular graph (identity substrate)
 
 ```python
-# types.py
-class EdgeType(StrEnum):
-    COVALENT = "cov"; DATIVE = "dat"; MU2 = "mu2"; MU3 = "mu3"; METAL_METAL = "mm"
+# _types.py
+class EdgeType(str, Enum):
+    COVALENT = "cov"; DATIVE = "dat"; METAL_METAL = "mm"
+class BridgeClass(str, Enum):                 # DERIVED, never stored as an edge (D14)
+    NONE; TERMINAL; MU2; MU3; MU_N
 
 @dataclass(frozen=True)
 class NodeLabel:
-    element: str
-    formal_charge: int = 0
-    oxidation_state: int | None = None     # per-center, D12 — set on metals
-    spin_class: str | None = None          # per-center, D12 — e.g. "hs", "ls"
-    role: str = "atom"                     # "atom" | "metal" | "bridge_anchor"
+    element: str; formal_charge: int = 0
+    oxidation_state: int | None = None        # per-center, D12 — set on metals
+    spin_class: str | None = None             # per-center, D12 — e.g. "hs", "ls"
+    role: str = "atom"
 
 class TypedGraph:
-    def add_atom(self, label: NodeLabel) -> int
-    def add_bond(self, i: int, j: int, etype: EdgeType, order: float = 1.0) -> None
-    def neighbors(self, i: int, etype: EdgeType | None = None) -> list[int]
+    def add_atom(self, ...) -> int
+    def add_bond(self, i: int, j: int, etype: EdgeType, *, order: float = 1.0) -> None
+    def neighbors(self, i, etype: EdgeType | None = None) -> list[int]
     def metals(self) -> list[int]
-    def subgraph(self, idxs: Iterable[int]) -> TypedGraph
+    def bridging_metals(self, i: int) -> tuple[int, ...]   # µ-ness is COUNTED, not tagged
+    def bridge_class(self, i: int) -> BridgeClass
+    def ligand_fragments(self) -> list[tuple[int, ...]]
+    def net_charge(self) -> int                            # graph-level (D15)
+    def localised_charge(self) -> int                      # the per-atom sum, separately
+    def subgraph(self, idxs) -> TypedGraph
     def relabel(self, mapping: dict[int, int]) -> TypedGraph
+    def permuted(self, seed: int) -> TypedGraph            # the build-order-invariance test
     def to_networkx(self) -> nx.Graph
-    @classmethod
-    def from_rdkit(cls, mol: Chem.Mol, *, metal_idxs=(), dative_pairs=()) -> TypedGraph
-    @classmethod
-    def from_json(cls, blob: bytes) -> TypedGraph
-    def to_json(self) -> bytes                       # the stored typed_graph_blob
+    def to_json(self) -> bytes / from_json(blob) -> TypedGraph
 ```
+
+A µ2-carboxylate is **not** a duplicated fragment: its atoms appear once, and its two O atoms
+each carry a `DATIVE` edge to a different metal. Nothing tags the pair — `bridge_class` counts
+the distinct metals reached (D14).
 
 ```python
-# canon.py
-def wl_hash(g: TypedGraph, iterations: int = 3) -> str          # PRIMARY key producer (both machines)
-def nauty_canon(g: TypedGraph) -> list[int]                     # optional; Linux verifier + canonical order
-def canonical_order(g: TypedGraph) -> list[int]                 # nauty if available else WL-refine + deterministic tiebreak
-def is_isomorphic(a: TypedGraph, b: TypedGraph) -> bool         # VF2 — collision resolver ONLY
+# canon.py — D16.  Pure Python: no optional native package may produce a key (ground rule 10)
+def certificate_digest(g, order=None) -> str      # PRIMARY key producer
+def canonical_order(g, *, max_leaves=200_000) -> list[int]   # individualisation-refinement
+def canonical_certificate(g) -> Certificate
+def canonical_index_map(g) -> dict[int, int]
+def wl_hash(g, iterations=3) -> str               # fast BUCKET INDEX, not a key
+def automorphism_generators(g, ...) / automorphism_group(g, ...) / atom_orbits(g)
+def is_isomorphic(a, b) -> bool                   # certificate compare
+def vf2_isomorphic(a, b) -> bool                  # collision resolver ONLY
+
+# from_mol.py — the molecular input path
+def from_rdkit(mol, ...) -> TypedGraph
+def from_smiles(...) -> TypedGraph
+def mol_from_smiles(smiles, *, embed=False, seed=0xC0FFEE) -> Chem.Mol
 ```
 
-Note: a µ2-carboxylate is **not** a duplicated fragment — its atoms appear once, and its two O
-atoms each carry a `DATIVE` edge to a different metal, with the pair additionally tagged `MU2`.
+There is **no `nauty_canon`**, and `pynauty` is imported nowhere — dropped with D16.
 
-### `mofsbu/identity/` — the composite L0–L3 key
+#### `mofsbu/identity/` — the composite L0–L3 key
 
 ```python
-def l0_composition(g: TypedGraph) -> str        # "Cu2_C8H20O8_q0_s3|Cu:+2/hs,Cu:+2/hs"
-def l1_graph_hash(g: TypedGraph) -> str         # wl_hash + algo_version tag
-def l2_isomer_tag(g: TypedGraph, geom: Geometry | None) -> str   # cis/trans, fac/mer, Δ/Λ  (M5)
-def l3_conformer_id(choice_vector: ChoiceVector, geom: Geometry) -> str   # provenance-primary (D11)
-def block_id(l0: str, l1: str, l2: str = "", l3: str = "") -> str
+def l0_composition(g) -> str            # "Cu2_C8H20O8_q0_s3|Cu:+2/hs,Cu:+2/hs"
+def l1_graph_hash(g) -> str             # = certificate_digest(g); version ALGO_VERSIONS['l1_certificate']
+def wl_index(g) -> str                  # the bucket, stored in its own column
+def block_id(l0, l1, l2=L2_UNSET, l3=L3_UNSET) -> str
+def identity(g, *, geom=None) -> dict[str, str]
+def hill_formula(counts: dict[str, int]) -> str
 ```
 
-`l2_isomer_tag` ships in M2 with a fixed signature returning `""`; M5 fills it in. The *signature*
-must be right in M2 because it lands in the schema.
+`l2_isomer_tag` / `l3_conformer_id` exist with their final signatures and return the unset
+placeholder — see §1b.
 
-### `mofsbu/registry/` — SQLite + content-addressed blobs
+#### `mofsbu/registry/` — SQLite + content-addressed blobs
 
 ```python
 class BlobStore:
-    def __init__(self, root: Path)
-    def put(self, data: bytes) -> str            # sha256 hex; writes store/ab/cdef….bin
-    def get(self, digest: str) -> bytes
-    def path(self, digest: str) -> Path
+    def __init__(self, root: str | Path)
+    def put(self, data: bytes) -> str            # sha256 hex; store/ab/cdef….bin
+    def put_text(self, text: str) -> str
+    def get(self, digest) -> bytes / get_text(digest) -> str
+    def path(self, digest) -> Path / has(digest) -> bool
 
-class Registry:                                   # context manager; owns the sqlite conn + migrations
-    def __init__(self, db_path: Path, store: BlobStore)
-    def migrate(self) -> None
-
-# api.py — the ONLY write surface
-def put_structure(reg, g: TypedGraph, *, l2: str = "", provenance: Provenance | None = None) -> int
-def put_geometry(reg, structure_id: int, coords: Coords, *, fidelity: Fidelity, method: MethodSpec,
-                 energy: float | None = None, converged: bool | None = None,
-                 relaxed_from: int | None = None, choice_vector: ChoiceVector | None = None) -> int
-def put_reaction(reg, product_id: int, reagent_ids: list[int], *, atom_map: AtomMap,
-                 conditions: Conditions, dG: float | None = None,
-                 barrier_proxy: ProxyRecord | None = None) -> int
-def get_structure(reg, ref: int | str) -> StructureRecord            # id or block_id
-def best_geometry(reg, structure_id: int, min_fidelity: Fidelity | None = None) -> GeometryRecord
-def find(reg, *, l0=None, l1=None, formula=None, has_metal=None, open_site_type=None) -> list[StructureRecord]
-def export_xyz(reg, geometry_id: int, path: Path) -> Path            # files are a VIEW, not a record
+class Registry:                                   # context manager; owns conn + migrations
+    def __init__(self, db_path, store: BlobStore | None = None, ...)
+    def migrate(self, note: str = "") -> None     # additive reconcile; a schema file is not a migration
+    def record_algo_versions(self) / stale_algo_versions() -> dict[str, tuple[str, str]]
+    def count(self, table: str) -> int
 ```
 
-`put_structure` is **idempotent** on `(L0, L1, L2)`: same key returns the existing id and adds a
-provenance edge. That single property is what makes "one node, two build routes" real.
-
-### `mofsbu/sites/` — perceive once, refresh accessibility
+`api.py` is the **only write surface** (ground rule 1). It returns a `Put` NamedTuple, not a
+bare id, because "was this newly inserted or recognised under D2" is the answer most callers
+need:
 
 ```python
-# perception.py  (port of legacy/donor_perception.py, ~verbatim, re-keyed to canonical indices)
-@dataclass(frozen=True)
-class DonorSite:
-    canonical_idx: int; donor_type: str; labile: bool
-    h_canonical_idx: int | None; charge_after: int
-def find_donor_sites(g: TypedGraph, mol: Chem.Mol) -> list[DonorSite]
-def activate(mol: Chem.Mol, sites: list[DonorSite]) -> tuple[Chem.Mol, list[DonorSite]]
-
-# frames.py  (D13 — promoted out of legacy GeometryPlacer)
-@dataclass(frozen=True)
-class SiteFrame:
-    origin: Vec3; axis_hat: Vec3; ref_hat: Vec3; mode: Literal["aligned","tilted","fallback"]
-class LiveDOF(StrEnum): TORSION_LIVE = "live"; TORSION_FREE = "free"
-class BindingMode(StrEnum): MONODENTATE="mono"; CHELATE="chel"; BRIDGE_SYN_SYN="mu2ss"; ...
-def site_frame(mol, conf, donor_idx: int, donor_type: str) -> SiteFrame       # <- _donor_placement_frame
-def live_dof(donor_type: str) -> LiveDOF
-def binding_modes(donor_type: str) -> tuple[BindingMode, ...]
-def torsion_wells(donor_type: str, mode: BindingMode) -> tuple[float, ...]    # discrete wells (D13)
-
-@dataclass(frozen=True)
-class Site:                       # what site_catalog stores
-    canonical_idx: int; donor_type: str; frame: SiteFrame
-    live_dof: LiveDOF; binding_modes: tuple[BindingMode, ...]
-    labile: bool; charge_after: int
-
-# state.py
-class SiteStatus(StrEnum): OPEN="open"; OCCUPIED="occ"; BLOCKED="blk"
-def refresh_state(structure: StructureRecord, geom: GeometryRecord) -> list[SiteState]
-def buried_volume(coords, site: Site, radius: float = 3.5) -> float
-
-# inherit.py
-def inherit_sites(parent_sites: list[Site], atom_map: AtomMap, consumed: set[int]) -> list[Site]
+def put_structure(reg, g, *, l2=None, provenance: Provenance | None = None, tags=()) -> Put
+def put_geometry(reg, structure_id, xyz_text: str, *, fidelity: Fidelity, method: MethodSpec,
+                 energy=None, converged=None, relaxed_from=None,
+                 choice_vector=None, seed=None, qc=None) -> Put
+def put_reaction(reg, product_id: int, prov: Provenance) -> int   # ONE provenance object
+def put_sites(reg, structure_id, sites, *, algo="perception/1", ...) # written ONCE per structure
+def put_site_state(reg, structure_id, geometry_id, states, ...)     # per geometry
+def get_structure(reg, ref: int | str) -> sqlite3.Row               # id or block_id
+def get_graph(reg, structure_id) -> TypedGraph
+def get_sites(reg, sid) / get_site_state(reg, sid, ...) / canonical_map(reg, sid)
+def best_geometry(reg, structure_id, min_fidelity=None) -> sqlite3.Row | None
+def catalog_drift(reg, structure_id, sites) -> list[str]            # the D15 guard
+def set_hidden(reg, structure_id, hidden=True, ...)                 # hide IS the delete
+def incoming_routes(reg, structure_id) -> list[dict]
+def display_label(g, aliases=None) -> str                           # derived, never a lookup key
+def export_xyz(reg, geometry_id, path) -> Path                      # files are a VIEW
+def find(reg, *, l0=None, l1=None, formula_like=None, metal=None, n_metals=None, charge=None,
+         max_bridge_class=None, has_metal_metal=None, min_fidelity=None, has_route=None,
+         tag=None, fragment_l1=None, fragment_formula=None,
+         sort="id", order="asc", limit=100, offset=0) -> list[sqlite3.Row]
 ```
 
-### `mofsbu/descriptors/` — the shared lookup substrate (§6.6)
+`put_structure` is **idempotent** on `(L0, L1, L2)`: the same key returns the existing id and
+adds a provenance edge. That single property is what makes "one node, two build routes" real.
+
+Rows come back as `sqlite3.Row`, not as typed record objects — there is no `StructureRecord` or
+`GeometryRecord`.
+
+#### `mofsbu/sites/` — perceive once, refresh accessibility
 
 ```python
+# perception.py — takes an RDKit mol, NOT a graph
 @dataclass(frozen=True)
-class DonorDescriptor:
-    donor_type: str; pka: float; pka_sigma: float; hsab: Literal["hard","borderline","soft"]
-    default_denticity: int; live_dof: LiveDOF; source: str; source_version: str
+class DonorSite: ...
+def find_donor_sites(mol) -> list[DonorSite]
+def deprotonate(mol, sites) -> tuple[Chem.Mol, list[DonorSite]]     # (was sketched as `activate`)
+LABILE_DONOR_PATTERNS / DELOCALISED_GROUPS                          # group-level typing (D15)
 
+# frames.py — D13
+class LiveDOF(str, Enum): TORSION_LIVE; TORSION_FREE
+class BindingMode(str, Enum): MONODENTATE; CHELATE; BRIDGE_*; ...
 @dataclass(frozen=True)
-class MetalDescriptor:
-    symbol: str; charge: int; ionic_radius: float; hsab: str
-    preferred_cn: tuple[int, ...]; d_electrons: int
-    exchange_lability: Literal["fast","moderate","slow"]; source: str; source_version: str
+class SiteFrame: ...
+def site_frame(mol, donor_idx, donor_type, conf=None, ...) -> SiteFrame
+def live_dof(donor_type) -> LiveDOF
+def binding_modes(donor_type) -> tuple[BindingMode, ...]
+def torsion_wells(donor_type, mode=BindingMode.MONODENTATE) -> tuple[float, ...]
 
-DONOR_TABLE: dict[str, DonorDescriptor]
-METAL_TABLE: dict[tuple[str, int], MetalDescriptor]
+# model.py — the pocket layer M5 needs
+@dataclass
+class Site: ...                                   # DONOR or VACANCY
+def perceive(mol, *, with_frames=True) -> list[Site]
+def vacancy_sites(metal_idx, origin, directions) -> list[Site]
+@dataclass
+class Pocket: ...
+def chelate_pockets(...) / find_pockets(...) / find_pocket(mol, sites, **predicate)
+def shifting_pocket_donors(mol, sites) -> frozenset[int]
 
-# ease.py
-@dataclass(frozen=True)
-class EaseRecord:
-    components: dict[str, float]      # deprotonation / electronic / steric / marginal_dE
-    scalar: float; fidelity: Fidelity; confidence: float; provisional: bool; method: MethodSpec
-def activation_ease(site: Site, *, partner: MetalDescriptor | None = None,
-                    conditions: Conditions | None = None, state: SiteState | None = None) -> EaseRecord
-def hsab_match(donor: DonorDescriptor, metal: MetalDescriptor) -> float     # C7 factorization
+# state.py — NEVER perceives (there is a test counting calls)
+class SiteStatus(str, Enum): OPEN; OCCUPIED; BLOCKED
+@dataclass
+class SiteState: ...
+def refresh_state(...) -> list[SiteState]
+def buried_volume(coords, site, *, radius=3.5, ...) -> float
+
+# inherit.py — M5 consumes this
+def inherit_sites(parent_sites, atom_map: AtomMap, ...) -> list[Site]
+def merge_inherited(*groups) -> list[Site]
+
+# protomers.py — protonation as an enumerated branch, not a default
+@dataclass
+class Protomer: ...
+def enumerate_protomers(...) / labile_sites(mol, donor_type=None) / configuration_key(...)
 ```
 
-### `mofsbu/geometry/` — local geometries, the multi-center placer, QC
+#### `mofsbu/descriptors/` — the shared lookup substrate
+
+TSV-backed (C8 resolved), loaded through functions rather than exposed as module-level dicts,
+so a missing row raises `UnknownDescriptor` at the point of use:
 
 ```python
-# local.py
+@dataclass(frozen=True)
+class DonorDescriptor: donor_type; pka; pka_sigma; hsab; ... ; source; source_version
+@dataclass(frozen=True)
+class MetalDescriptor: symbol; charge; ionic_radius; hsab; preferred_cn; d_electrons; ...
+def donor_table(path=None) -> dict[str, DonorDescriptor]        # data/reference/donor_descriptors.tsv
+def metal_table(path=None) -> dict[tuple[str, int], MetalDescriptor]
+def donor(donor_type) -> DonorDescriptor                        # raises UnknownDescriptor
+def metal(symbol, charge) -> MetalDescriptor
+def known_donor_types() / known_ions() / sync_to_registry(reg, ...)
+
+# ease.py — D18
+@dataclass(frozen=True)
+class EaseRecord: components: dict[str, float]; scalar; fidelity; confidence; provisional; method
+def activation_ease(site, *, partner=None, conditions=None, state=None) -> EaseRecord
+def deprotonation_energy(backend, symbols, positions, ...) -> float    # the charge-aware rung
+def hsab_match(donor, metal) -> float                                  # RAISES — C7 open
+```
+
+#### `mofsbu/geometry/` — local geometries, the placer, QC
+
+There is **no `local.py`** and no `templates.py`; `site_vectors` lives in `placer.py`.
+
+```python
+# placer.py
 def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray
-#   planar | tetrahedral | octahedral | trigonal_bipyramidal | square_pyramidal | trigonal_planar
-#   (legacy mapped CN=5 to "planar" — that is wrong and is fixed here)
-
-# placer.py  — THE headline cost (D12)
+GEOMETRIES: dict[str, dict[int, str]]             # CN -> local geometry; CN=5 fixed
 @dataclass
-class Center:
-    element: str; charge: int; oxidation_state: int; spin_class: str
-    cn: int; local_geometry: str
+class LigandPlacement: ...                        # incl. azimuth_step / oop_step = the replay coords
 @dataclass
-class Join:
-    center: int; block: BuildingBlock; site: Site; mode: BindingMode; torsion_well: int
-@dataclass
-class InterCenterConstraint:
-    centers: tuple[int, int]; mm_distance: float | None; bridge: BridgeSpec | None
+class PlacementResult: ...
+def place_mononuclear(...) -> PlacementResult     # fills ONE coordination sphere in one shot
+def to_rdkit(metal, ligands, result, ...)
 
-class MultiCenterPlacer:
-    def place(self, centers: list[Center], joins: list[Join],
-              constraints: list[InterCenterConstraint], *, seed: int) -> PlacementResult
-    # PlacementResult(coords, strain, per_join_torsion, qc: QCReport, converged: bool)
+# distances.py — M–L target distance is a property of the PAIR
+def metal_donor_distance(metal, donor_element, ...) -> Distance
+def base_distance(metal) -> float
 
-# templates.py  — plan-B / accelerator for M6 (see §4 risk)
-def node_template(name: str) -> TemplateNode      # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
-def graft(template: TemplateNode, joins: list[Join], *, seed: int) -> PlacementResult
+# qc.py
+def check_clashes(symbols, coords, bonded, ...) -> list[Clash]
+def check_metal_bonds(coords, metal_idx, donor_idxs, ...) -> list[BadBond]
+def qc(symbols, coords, bonded, ...) -> QCReport
 
-# qc.py  (port of legacy/geometry_qc.py + new polynuclear checks)
-def check_clashes(coords, ...) -> QCResult
-def check_ml_bonds(coords, center_idx, donor_idxs, ...) -> QCResult
-def check_ring_planarity(free, placed, ...) -> QCResult
-def check_intercenter(coords, constraints) -> QCResult        # NEW: M–M distance, bridge bite angle
-def qc_report(...) -> QCReport
+# embed.py
+def embed_molecule(mol, *, seed=0xC0FFEE, relax=True) -> Chem.Mol
+def embed_with_report(...) / coordinates(mol) / set_coordinates(mol, coords) / to_xyz(mol, comment="")
 ```
 
-### `mofsbu/assembly/` — the recursive BuildingBlock
+#### `mofsbu/energy/` — backends behind one protocol
 
 ```python
+class Fidelity(IntEnum):
+    HEURISTIC = -1      # ease only; put_geometry REFUSES it (D18)
+    RAW = 0; FF = 1; ML = 2; XTB = 3; DFT = 4
+
+@dataclass(frozen=True)
+class MethodSpec:
+    code; version; method; solvent; charge; multiplicity; extras
+
+class EnergyBackend(Protocol):
+    def single_point(...) -> EnergyResult
+    def relax(...) -> RelaxResult
+class NullBackend / XTBBackend / MACEBackend (MP-0) / MACEOmolBackend (OMOL-0)
+#   charge_aware / spin_aware are CLASS ATTRIBUTES — "does this model see charge?" in one place
+
+def backend_for(fidelity, *, ml_model=None, ...) -> EnergyBackend
+def get_backend(name, **kw) / available_backends() -> dict[str, bool]
+def high_spin_multiplicity(symbol, charge) -> int
+def spin_class_multiplicity(...) / combined_multiplicity(...) / check_spin(...)
+
+# relax.py
+def relax_geometry(coords, symbols, *, charge, multiplicity, ...) -> ...
+def single_point(...) / available_modes(ml_model=None) / mode_status(ml_model=None)
+
+# reference.py — REFUSES bad subtractions (D17)
+def reaction_terms(reg, reaction_id) -> tuple[Term, ...]
+def check_balance(reg, reaction_id) -> BalanceReport
+def check_reference_quality(reg, reaction_id, ...) -> ReferenceQuality
+def reaction_balanced_energy(reg, ...) -> ReactionEnergy      # strict=False to reproduce legacy
+def store_reaction_energy(...) / put_balanced_reaction(...)
+```
+
+#### The run layer, and `scripts/`
+
+`spec.py` (`BuildSpec`, versioned + migrated, currently v5) is the input; `runner.plan` writes
+tasks and `runner.work` drains them; `registry/jobs.py` is the queue. `naming.py` derives labels
+from retrieved rows and is never an input to retrieval.
+
+There is **no unified `mofsbu` CLI with subcommands.** `pyproject.toml` declares one console
+script, `mofsbu-ui`. Everything else is a standalone file under `scripts/`: `build.py`,
+`run_spec.py`, `verify_registry.py`, `regress_m7.py`, `seed_demo_registry.py`,
+`build_metal_descriptors.py`, `check_cases.py`, `regen_golden.py`, `viewer.py`, `check.sh`.
+Those scripts contain no logic — they parse args and call the package. Consolidating them behind
+one entry point is M9, not a thing that already happened.
+
+---
+
+### 1b. Design intent — not built, signatures still proposals
+
+Do not code against these as though they were real; each currently raises. `NotBuiltYet`
+(a `NotImplementedError` subclass) means *missing body*; `EnergyBackendUnavailable` means
+*missing install*. Never collapse the two (ground rule 8).
+
+```python
+# identity/keys.py — signatures are final and IN THE SCHEMA; bodies return the unset placeholder
+def l2_isomer_tag(g, geom=None) -> str            # cis/trans, fac/mer, Δ/Λ        -> M5
+def l3_conformer_id(choice_vector=None, geom=None) -> str                        # -> M5
+
+# assembly/join.py — HALF built.  BuildingBlock and open_sites work today:
 @dataclass
 class BuildingBlock:
-    structure_id: int | None; graph: TypedGraph; geometry: Coords | None
-    sites: list[Site]; net_charge: int; provenance: Provenance
-    def open_sites(self, state: list[SiteState] | None = None) -> list[Site]
+    structure_id; graph; geometry; sites; net_charge; provenance
+    def open_sites(self, ...) -> list[Site]       # RAISES on a block with no state, by design
+def compatible(a, b, *, partner=None) -> Compatibility     # raises NotBuiltYet -> M5
+def join(a, b, site_a, site_b, *, ...) -> JoinResult       # raises NotBuiltYet -> M5
+def grow(seed_block, partners, *, ...)                     # raises NotBuiltYet -> M5/M6
 
-# choice.py  (D13)
+# assembly/choice.py — NOT WRITTEN -> M5
 @dataclass(frozen=True)
-class Choice:                       # one branch point
-    kind: Literal["A","B","C"]; name: str; value: Any
+class Choice: kind: Literal["A","B","C"]; name: str; value: Any
 @dataclass(frozen=True)
 class ChoiceVector:
     choices: tuple[Choice, ...]
     def digest(self) -> str
     def replay(self) -> ConstructSpec
 
-# join.py
-def compatible(a: Site, b: Site, *, partner: MetalDescriptor | None = None) -> Compatibility
-    # frame-alignment feasibility + strain estimate, NOT just "both open"
-def join(a: BuildingBlock, b: BuildingBlock, sa: Site, sb: Site, *,
-         mode: BindingMode, torsion_well: int, seed: int) -> JoinResult
-    # JoinResult(block, atom_map, choice_vector, strain, qc)
+# assembly/construct.py — NOT WRITTEN -> M5
+def construct(spec, *, seed) -> ConstructResult            # deterministic; emits choice_vector
+def enumerate_constructs(spec) -> Iterator[ConstructSpec]  # Kind-B/C branch tree, live-DOF gated
 
-# construct.py
-def construct(spec: ConstructSpec, *, seed: int) -> ConstructResult     # deterministic; emits choice_vector
-def enumerate_constructs(spec: EnumSpec) -> Iterator[ConstructSpec]     # Kind-B/C branch tree, live-DOF gated
-```
-
-### `mofsbu/energy/` — backends behind one protocol
-
-```python
-class Fidelity(IntEnum): RAW = 0; FF = 1; ML = 2; XTB = 3; DFT = 4
-
-@dataclass(frozen=True)
-class MethodSpec:
-    code: str; version: str; method: str; solvent: str | None
-    charge: int; multiplicity: int; extras: dict
-
-class EnergyBackend(Protocol):
-    def single_point(self, atoms, spec: MethodSpec) -> float
-    def relax(self, atoms, spec: MethodSpec, *, fmax: float, steps: int) -> RelaxResult
-
-class XTBBackend(EnergyBackend): ...      # tblite  (port of legacy xtb_energy*.py)
-class MACEBackend(EnergyBackend): ...     # port of legacy energy_model.py / dft_predict.py
-class NullBackend(EnergyBackend): ...     # tests
-
-def high_spin_multiplicity(symbol: str, charge: int) -> int
-def reaction_balanced_energy(reg, reaction) -> float    # M7 — fixes the charged-ion reference problem
-```
-
-### `mofsbu/pathways/` — the route-design layer
-
-```python
+# geometry/placer.py — the multicentre half -> M6
 @dataclass
-class ProxyRecord:
-    concurrent_bond_changes: int; exchange_lability: str
-    coulomb_penalty: float | None; bep_estimate: float | None
-    scalar: float; fidelity: Fidelity
+class Center: element; charge; oxidation_state; spin_class; cn; local_geometry
+@dataclass
+class Join: center; block; site; mode; torsion_well
+@dataclass
+class InterCentreConstraint: centres; mm_distance; bridge      # note the British spelling
+def place_multicentre(centers, joins, ...) -> PlacementResult  # raises NotBuiltYet
+def check_intercentre(coords, constraints) -> QCResult         # not written; extends qc.py
 
+# geometry/templates.py — NOT WRITTEN.  M6's declared plan B (see §4)
+def node_template(name) -> TemplateNode          # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
+def graft(template, joins, *, seed) -> PlacementResult
+
+# pathways/ — EMPTY package -> M8
+@dataclass
+class ProxyRecord: concurrent_bond_changes; exchange_lability; coulomb_penalty; bep_estimate; ...
 def barrier_proxy(reg, reaction) -> ProxyRecord
-def score_path(reg, reaction_ids: list[int]) -> PathScore
-    # PathScore(max_barrier, cumulative_dG, rate_limiting_step, sink_flag, sink_node)
-def compare_paths(reg, paths: dict[str, list[int]]) -> PathComparison
-def enumerate_paths(reg, target_id: int, reagent_pool: list[int], *, max_steps: int = 6) -> list[list[int]]
+def score_path(reg, reaction_ids) -> PathScore   # max_barrier, cumulative_dG, sink_flag, sink_node
+def compare_paths(reg, paths) -> PathComparison
+def enumerate_paths(reg, target_id, reagent_pool, *, max_steps=6) -> list[list[int]]
 ```
-
-### `scripts/` — the thin CLI (one entry point, subcommands)
-
-`mofsbu ingest` (legacy .xyz → registry) · `build` · `enumerate` · `relax` · `sites` · `route` ·
-`report` · `export`. Scripts contain no logic — they parse args and call the package.
 
 ---
 
@@ -477,7 +555,7 @@ resolved only in your head is how the two documents drift apart.
 | Risk | Signal it's happening | Escape hatch |
 |---|---|---|
 | **M6 placer overruns** (the known headline cost) | two weeks in and the paddlewheel still won't converge to sane M–M distances | switch to `geometry/templates.py` (grafting onto stored reference nodes). Decide by a pre-set date, not by mood — write the date down when M6 starts. |
-| **Two machines disagree about identity** | a fixture hash differs laptop vs. workstation | already mitigated by §0.7 (WL primary, nauty as verifier). The golden-hash test in M2 is what catches it — do not skip it. |
+| **Two machines disagree about identity** | a fixture hash differs laptop vs. workstation | already mitigated by ground rule 10 (D16: the certificate is pure Python; no optional native package can produce a key). The golden-hash test in M2 is what catches it — do not skip it. |
 | **L3 conformer explosion** | thousands of near-identical rows per (L1, L2) | choice-vector dedup runs *before* geometric clustering; cap conformers per (L1,L2); `TORSION_FREE` sites never branch (that tag is the guard) |
 | **xTB numbers can't carry route claims** | M7 regression reproduces rankings but absolute ΔG look implausible | keep M8 claims *relative and within-metal*; the reaction-balanced reference scheme is the gate on any quantitative statement |
 | **Identity retrofit pressure** | a temptation in M5/M6 to "just add a flag" to L1 | the M2 discrimination table is the contract; changing it means a version bump and a re-hash of the corpus, which is exactly the cost that should make you think twice |

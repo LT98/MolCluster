@@ -82,6 +82,12 @@ L2 stub with final signature, L3 stub, `block_id`).
    (commit the expected hashes as a golden file).
 6. **Collision path exercised:** a synthetic WL collision resolves correctly through VF2.
 
+> *Editorial note, added later:* gates 5 and 6 are worded in the pre-D16 world, where WL was the
+> key producer. They were met — and are still met — by the **canonical certificate**; WL was
+> demoted to a bucket index during M2 itself when 1-WL proved unable to separate µ2-bridging from
+> chelating. The golden file in `tests/golden_hashes.json` holds certificate digests. Left
+> unrewritten because this is the record of what was agreed at the time; see D16.
+
 ---
 
 ### M3 — Registry v1 + the walking skeleton · **M**
