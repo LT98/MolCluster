@@ -14,6 +14,12 @@ ALGO_VERSIONS: dict[str, str] = {
     "canonical_order": "ir1",     # individualisation-refinement canonical labelling
     "l2_isomer_tag":   "0-stub",  # M5
     "l3_conformer_id": "0-stub",  # M5
+    # How a choice vector becomes a key: what is dropped (seed, a self-referential
+    # digest), how floats are quantised, how it serialises.  It prefixes the digest it
+    # produces rather than living in a column, because a choice digest is not part of an
+    # address — see `assembly.choice`.  Bump it and every later digest stops comparing
+    # equal to the ones already stored, which is the intended and only honest outcome.
+    "choice_vector":   "cv1",     # M5/S1 — the L3 label's producer (D11, D13)
     # 2: the MACE backends became a family (MP-0 / OMOL-0).  A method row now records
     #    `training_set`, and `spin_blind` alongside `charge_blind`, so a stored ML number
     #    says which foundation model made it instead of only "mace".  Old rows keep

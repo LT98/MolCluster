@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
+from mofsbu.assembly.choice import ChoiceVector
 from mofsbu.graph import BridgeClass, EdgeType, TypedGraph, canonical_order, certificate_digest
 from mofsbu.identity import block_id, hill_formula, l0_composition, l2_isomer_tag, wl_index
 from mofsbu.naming import compose_label, decompose
@@ -354,7 +355,7 @@ def put_geometry(
     energy: float | None = None,
     converged: bool | None = None,
     relaxed_from: int | None = None,
-    choice_vector: dict | None = None,
+    choice_vector: ChoiceVector | dict | None = None,
     seed: int | None = None,
     qc: dict | None = None,
 ) -> Put:
@@ -362,7 +363,19 @@ def put_geometry(
 
     Fidelity is a property of the geometry, never of the structure (D4), so one
     identity can carry a raw construct, an xTB relaxation and a DFT relaxation at once.
+
+    The choice vector is DIGESTED here rather than read out of the dict.  This used to be
+    `(choice_vector or {}).get("digest")` and nothing in the tree has ever written that
+    key, so `choice_vector_digest` was NULL on all 191 stored geometries — 99 of which
+    carried a perfectly good vector in `choice_vector_json` — and `ix_geometries_choice`
+    indexed nothing.  Reading a key the producer may or may not have set is the wrong
+    shape for this: the digest is a property OF the vector, so the writer computes it and
+    no producer can forget to.  `seed` falls back to the one inside the vector (the
+    placer puts it there) because a stored geometry without its seed is not regenerable.
     """
+    cv = ChoiceVector.coerce(choice_vector)
+    if seed is None and cv is not None:
+        seed = cv.seed
     if fidelity is Fidelity.HEURISTIC:
         # HEURISTIC means "a table said so, nothing was computed about THIS structure".
         # There is no such thing as a geometry produced that way, and letting one in
@@ -399,8 +412,8 @@ def put_geometry(
             " qc_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
-         (choice_vector or {}).get("digest"),
-         json.dumps(choice_vector) if choice_vector else None,
+         cv.digest if cv is not None else None,
+         cv.to_json() if cv is not None else None,
              seed, json.dumps(qc) if qc else None, utcnow()),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
@@ -449,6 +462,53 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
         reg.conn.execute(
             "UPDATE structures SET best_geometry_id=?, best_fidelity=? WHERE id=?",
             (row["id"], row["fidelity"], structure_id))
+
+
+def geometries_from_choice(reg: Registry, choice: ChoiceVector | dict | str,
+                           ) -> list[sqlite3.Row]:
+    """Every geometry built from one choice vector — the query the index exists for.
+
+    Returns a family, not a row, and that is the point (D11): one choice vector sampled
+    at several seeds is one L3 branch with stochastic duplicates in it, and collapsing
+    those duplicates is exactly what geometric clustering is for.  A digest string is
+    accepted so a caller holding a stored row can ask the question without rebuilding
+    the vector.
+    """
+    d = choice if isinstance(choice, str) else ChoiceVector.coerce(choice).digest
+    return list(reg.conn.execute(
+        "SELECT * FROM geometries WHERE choice_vector_digest = ? ORDER BY id", (d,)))
+
+
+def backfill_choice_digests(reg: Registry, *, dry_run: bool = False) -> int:
+    """Give stored geometries the digest their vector always implied.  Returns the count.
+
+    Strictly additive: it touches only rows where the digest is NULL and the vector is
+    present, and it does not rewrite `choice_vector_json` — a digest is a pure function
+    of the vector, so the stored text does not need to be canonicalised for the two to
+    agree.  Rows written before anything recorded a vector at all stay untouched, because
+    there is nothing to derive a key from and inventing one would be provenance fiction.
+
+    Not called by `migrate`.  Nothing about the schema is wrong, so this is a data
+    decision — M5/S0(b) — and it belongs to whoever owns the database.
+    """
+    rows = reg.conn.execute(
+        "SELECT id, choice_vector_json FROM geometries "
+        "WHERE choice_vector_digest IS NULL AND choice_vector_json IS NOT NULL").fetchall()
+    n = 0
+    for row in rows:
+        try:
+            cv = ChoiceVector.from_json(row["choice_vector_json"])
+        except (ValueError, MofsbuError):
+            continue        # a vector that cannot be parsed is reported by neither a
+            # crash nor a guess: it keeps its NULL and stays visibly un-keyed.
+        if not dry_run:
+            reg.conn.execute(
+                "UPDATE geometries SET choice_vector_digest=?, seed=COALESCE(seed, ?) "
+                "WHERE id=?", (cv.digest, cv.seed, row["id"]))
+        n += 1
+    if not dry_run:
+        reg.conn.commit()
+    return n
 
 
 # ── sites (M4) ───────────────────────────────────────────────────────────────
