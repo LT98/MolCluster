@@ -55,6 +55,7 @@ charge, spin — travels with it in a `methods` row.
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
 | `geometry/distances.py` | M–L target distance as a property of the *pair* | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
+| `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
 | **energy/** | | |
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |

@@ -22,7 +22,13 @@ from enum import Enum
 import numpy as np
 from rdkit import Chem
 
-EPS = 1e-9
+# Aliased to this module's own spellings so `site_frame` below reads unchanged.  Note
+# which rotation is imported: `rotate_vector`, the Rodrigues form, NOT the matrix.  Every
+# stored frame in the corpus was built with it, and the two forms agree in exact
+# arithmetic but not in the last bits of floating point — see `geometry/_linalg.py`.
+from mofsbu.geometry._linalg import (
+    perpendicular as _perpendicular_to, rotate_vector as _rotate, unit as _unit,
+)
 
 
 class LiveDOF(str, Enum):
@@ -124,23 +130,6 @@ class SiteFrame:
     @classmethod
     def from_dict(cls, d: dict) -> SiteFrame:
         return cls(tuple(d["origin"]), tuple(d["axis"]), tuple(d["ref"]), d["mode"])
-
-
-def _unit(v: np.ndarray) -> np.ndarray:
-    n = float(np.linalg.norm(v))
-    return v / n if n > EPS else np.array([0.0, 0.0, 1.0])
-
-
-def _perpendicular_to(v: np.ndarray) -> np.ndarray:
-    trial = np.array([1.0, 0.0, 0.0]) if abs(v[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    return _unit(np.cross(v, trial))
-
-
-def _rotate(v: np.ndarray, axis: np.ndarray, theta: float) -> np.ndarray:
-    axis = _unit(axis)
-    return (v * np.cos(theta)
-            + np.cross(axis, v) * np.sin(theta)
-            + axis * np.dot(axis, v) * (1 - np.cos(theta)))
 
 
 def site_frame(mol: Chem.Mol, donor_idx: int, donor_type: str, conf=None, *,
