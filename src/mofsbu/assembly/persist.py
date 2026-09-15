@@ -10,10 +10,15 @@ Three things it supplies that the registry cannot derive for itself:
   structure row is created *before* its geometry exists.  Only the builder is holding the
   coordinates at insert time, which is why `put_structure` has always taken `l2=` — the
   parameter was the right interface before there was anything to put in it.
-* **The sites, by inheritance.**  A product's donors are carried through the atom map, not
-  re-perceived: `sites.perception` treats a metal as an ordinary heavy neighbour, so
-  re-perceiving an assembled complex returns NO donors at all (`docs/ISSUES.md` 4).  The
-  runner's `_record_sites` perceives because it builds from a molecule; this path must not.
+* **The sites, by inheritance.**  A product's donors are carried through the atom map rather
+  than re-perceived.  That was briefly a hard requirement — perception counted a metal as an
+  ordinary heavy neighbour, so re-perceiving an assembled complex returned *no donors at all*
+  — and `3f9d60f` has since fixed it, so re-perception would now work.  Inheritance stays the
+  path anyway, for the reasons `sites/inherit.py` gives and which are not about that bug:
+  provenance (an inherited site knows which parent it descends from), stability (inheritance
+  cannot drift because it never asks the question twice), and frames (the parent's frame is
+  still correct for every atom the join did not move, and re-deriving it would put a
+  stochastic search back into the path the frame model exists to remove).
 * **The provenance.**  Which blocks went in, the atom map, the choice-vector digest, and
   the depth — D8's edge, carrying what D2 keeps off the node.
 
