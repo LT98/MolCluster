@@ -77,7 +77,8 @@ charge, spin — travels with it in a `methods` row.
 | `registry/jobs.py` | Runs/tasks queue, claim/complete/cancel/resume | ✅ |
 | `registry/verify.py` | Does every stored row still agree with its recipe? | ✅ |
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
-| `ui/` | Read-only viewer + spec builder (FastAPI + 3Dmol.js) | ✅ |
+| `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
+| `ui/static/chrome.{js,css}` | The three pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
 | `pathways/` | reaction DAG, path scoring | 🔴 **empty → M8** |
 
 ---

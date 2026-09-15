@@ -49,6 +49,39 @@ def test_index_serves_the_page(client):
     assert "3Dmol" in r.text and "mofsbu" in r.text
 
 
+@pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js"])
+def test_the_shared_chrome_is_served(client, asset):
+    """The tab strip is built by a fetched file, not by markup in each page.  If the
+    mount goes, all three pages lose their navigation and say nothing about it."""
+    r = client.get(asset)
+    assert r.status_code == 200, r.text
+    assert r.text.strip()
+
+
+@pytest.mark.parametrize("page", ["/", "/builder", "/runs"])
+def test_every_page_carries_the_tab_strip(client, page):
+    """One list of pages, three strips.  A page that forgot to ask for chrome.js would
+    render an empty <nav> and lose its only route to the other two."""
+    body = client.get(page).text
+    assert "/static/chrome.js" in body
+    assert "/static/chrome.css" in body
+    assert 'class="tabs"' in body
+
+
+def test_every_tab_leads_somewhere(client):
+    """The strip is data, so it can drift from the routes.  A tab that is not marked
+    `soon` claims to be a page that exists, and has to be one."""
+    import re
+
+    js = client.get("/static/chrome.js").text
+    entries = re.findall(r"\{href:[^}]*\}", js)
+    live = {re.search(r'href:\s*"([^"]+)"', e).group(1)
+            for e in entries if "soon" not in e}
+    assert {"/", "/builder", "/runs"} <= live
+    for href in live:
+        assert client.get(href).status_code == 200, href
+
+
 def test_list_shape(client):
     body = client.get("/api/structures", params={"limit": 5}).json()
     assert body["total"] == 40
