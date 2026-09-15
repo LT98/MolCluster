@@ -7,7 +7,7 @@ which is where they actually have to hold.
 
 **One substitution, stated rather than hidden.** The plan names the anthrarufin–Cu pair for
 gate 2. Anthrarufin is a bidentate chelator and a chelate cannot be joined yet
-(`docs/ISSUES.md` 3 / #15) — `chelate_compatible` judges the pair, `join` places one donor.
+(PLAN M5 / #15) — `chelate_compatible` judges the pair, `join` places one donor.
 So the gate is met with Pt(OH₂)₂Cl₂, which is monodentate, buildable, and a genuine cis/trans
 pair. The claim under test is unchanged: near-degenerate configurational isomers persist as
 separate records carrying different choice vectors, and geometric clustering does not merge
