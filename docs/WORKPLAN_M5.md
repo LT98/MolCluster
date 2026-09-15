@@ -33,7 +33,7 @@ through.
 | `assembly/join.py::compatible` | ✅ **landed (S2)** — plus `chelate_compatible`, the two-constraint case |
 | `assembly/join.py::join` | ✅ **landed (S3)** — frame alignment, atom maps, site inheritance, choice vector |
 | `assembly/join.py::grow` | ✅ **landed (S4)** — a thin front on `enumerate_constructions` |
-| `identity/keys.py::l2_isomer_tag` | returns `""`; `ALGO_VERSIONS["l2_isomer_tag"] == "0-stub"` |
+| `identity/keys.py::l2_isomer_tag` | ✅ **landed (S5)** — `identity/isomers.py`, version `"iso1"`; builder wiring deferred |
 | `identity/keys.py::l3_conformer_id` | returns `""`; `ALGO_VERSIONS["l3_conformer_id"] == "0-stub"` |
 | C2 — θ_geom and the energy window | open; no numbers anywhere in the tree |
 
@@ -41,12 +41,19 @@ through.
 
 ## 3. Slice 0 — two decisions, before any code · **S**
 
-**(a) L2 backfill vs. version bump.** `CODE_ARCHITECTURE.md` §6 already flags it: L2 is `""`
-on every stored row, so the moment `l2_isomer_tag` returns a real tag, structures that were
-one row become two. The corpus is small — **39 structures, 191 geometries, 123 reaction edges**
-in `data/registry.db` — which argues for re-hashing rather than carrying a compatibility
-shim forever. Either way the call gets a D-number and a changelog line before the function
-is touched, because it decides whether old `block_id`s stay valid addresses.
+**(a) L2 backfill vs. version bump.** ~~The moment `l2_isomer_tag` returns a real tag,
+structures that were one row become two.~~ **Reframed by S5, and no longer blocking.** The
+premise was wrong: `put_structure` calls `l2_isomer_tag(g)` with no coordinates — it cannot
+have any, since the structure row is created *before* its geometry — and nothing in `src/`
+passes `l2=`. So building the classifier split nothing, and the corpus is untouched.
+
+The decision survives in a smaller and later form: **when the builder is wired to pass its
+coordinates, what happens to the rows that predate it.** Measured rather than guessed — of
+the 39 stored structures (all `l2=""` at `algo_l2="0-stub"`), **18 would gain a real tag**
+and 21 would still tag `""`. Ground rule 6 says old rows are never re-labelled, so the
+default is that they stay as un-tagged ancestors distinguishable by `algo_l2`; re-tagging
+them is possible (they all have geometries) but has to be an explicit migration with a
+D-number. Decide it next to S4.1, where the wiring actually happens.
 
 **(b) The choice-vector digest seam — a live bug, found while planning.** *(Writer fixed in
 S1; the backfill decision below is still open.)*
@@ -294,15 +301,95 @@ Scope when it is picked up, sketched only so nothing is rediscovered:
 
 ---
 
-### S5 — `l2_isomer_tag` for real · **M**
+### S5 — `l2_isomer_tag` for real · **M** · ✅ **LANDED (classifier); wiring deferred**
 
-**Work** — cis/trans, fac/mer, Δ/Λ from graph + geometry. Bump `ALGO_VERSIONS["l2_isomer_tag"]`
-off `"0-stub"`, and execute whatever slice 0(a) decided.
+**What shipped** — `identity/isomers.py`: cis/trans, fac/mer and Δ/Λ from graph + geometry,
+with `keys.l2_isomer_tag` delegating. `ALGO_VERSIONS["l2_isomer_tag"]` is off `"0-stub"` at
+`"iso1"`. Tests: `tests/test_isomers.py` (11), and the structures under test are **built**
+by S4 rather than hand-written, so "cis" means two ligands that really are 90° apart.
 
-**Exit test** — the fixture pair: anthrarufin–Cu cis and trans get **different** tags and
-therefore different `block_id`s; atom-order shuffles do not move the tag (the same invariance
-test L1 already has); a structure with no stereochemical choice available still tags
-deterministically rather than returning `""` by accident.
+**No geometry, no tag — and that reframes S0(a) completely.** `put_structure` calls
+`l2_isomer_tag(g)` with no coordinates (it cannot have any: the structure row is created
+*before* its geometry), and nothing in `src/` passes `l2=` or calls `identity(g, geom=…)`.
+So building the classifier splits **nothing**: all 39 stored structures still tag `""`, and
+so does every new insert. The decision S0(a) was reserved for is not "does filling in L2
+re-hash the corpus" but "when we wire the builder to pass its coordinates, what happens to
+the rows that predate it" — and it can be made later, with the numbers below in hand.
+
+**Measured against `data/registry.db`** by recomputing the tag from each structure's best
+geometry:
+
+| | count |
+|---|---|
+| structures, all currently `l2=""` at `algo_l2="0-stub"` | 39 |
+| would gain a real tag once a builder passes geometry | **18** |
+| would still tag `""` (no arrangement to report) | 21 |
+| changed by this slice | **0** |
+
+Sample of what they would become: `Mg[Cl]4[H2O]2 → O3=trans`,
+`Mg[Cl]3[H2O]2[Cl⁻] → Cl2=mer,O3=trans`, `Mg[dtBK]2[Cl⁻]2[H2O]2 → Cl1=cis,O28=cis,O3=trans`.
+
+**The consequence worth stating: L2 is not a pure function of a structure row.** A structure
+ingested without coordinates legitimately carries `""`; one built from a placement carries a
+tag; under `UNIQUE (l0, l1, l2)` those are two rows. Same shape as the `site_catalog` seam,
+and it is why `put_structure` already takes `l2=` — the builder has coordinates at insert
+time and the registry does not. That parameter was the right interface before there was
+anything to put in it.
+
+**How donors are compared.** Grouped into classes by the certificate of the ligand fragment
+they belong to — so "the two ammines" is a fact about the ligands, not the element — then
+each fragment *instance* is reduced to one direction and the arrangement of instances is
+classified. That is what makes one rule serve MA2B2 and a bis-chelate alike. A class with
+one instance is skipped: a chelate's own bite angle is not isomerism.
+
+**A bug worth recording, because the obvious construction is wrong.** The pseudo-C3 axis of
+a tris-chelate cannot be the sum of the arm directions — the six donors of a complete
+octahedron sum to zero, so the arms do too, and every tris-chelate gets a zero vector. The
+axis is the *normal to the plane the three arms lie in*. Δ/Λ came out as `""` until that was
+fixed, which is the good failure: an unrecognisable propeller reports `AMBIGUOUS` and drops
+out of the key rather than guessing a handedness.
+
+**Δ/Λ rests on a stated convention**: IUPAC's Δ is the right-handed helix, and a right-handed
+helix turns anticlockwise about its axis as it advances. The implementation is
+orientation-independent (flipping the axis swaps which donor is "upper" *and* negates the
+axis; the sign changes cancel) and that invariance is tested, as is mirror-antisymmetry.
+Worth one check against a known crystal structure before a report leans on the absolute
+label.
+
+**Not done, deliberately:** wiring the builder to pass `l2=`. That is the step that splits
+identities, it needs the S0(a) call, and it belongs next to S4.1 where the run pipeline
+learns to drive the enumerator.
+
+**Blocked on something else entirely:** the canonical test pair is Pt(NH₃)₂Cl₂ and it
+**cannot be assembled** — `occlusion` reports every sp3 amine as sterically blocked, so
+`open_donors()` excludes ammonia, methylamine and ethylenediamine outright. Aqua and chloride
+stand in. See the note below.
+
+---
+
+### Found while building S5 — sp3 amine donors are unusable · *needs its own fix*
+
+`descriptors.ease.occlusion` counts a donor's own covalently bonded neighbours as walls. A
+bonded atom sits ~1.0 Å away, so for a ray leaving the donor at angle θ its perpendicular
+distance is `d·sin(|θ_nb − θ|)` — below vdW(H) = 1.20 Å for separations up to ~73°. A bonded
+neighbour therefore occludes a ±73° wedge *wherever it actually points*. Ammonia's hydrogens
+sit **112.8° off the lone-pair axis** and still block **86%** of the 75° cone.
+
+| donor | open | buried_vol |
+|---|---|---|
+| ammonia, methylamine | **0/1** | 0.86, 0.84 |
+| ethylenediamine | **0/2** | 0.88, 0.86 |
+| water | 1/1 | 0.41 |
+| pyridine, bipy | ok | 0.56, 0.58–0.61 |
+| acetate | 2/2 | 0.28–0.30 |
+
+With `BLOCKED_OCCLUSION = 0.80` that marks every amine `BLOCKED`, so no amine can be joined
+or enumerated — **ethylenediamine, the textbook chelator, has zero open donors.** Note also
+that the constant's own docstring claims "a bare aqua O sits near 0.0"; it measures 0.41, so
+the documented calibration no longer matches the code. Not fixed here: `buried_vol` is
+stored, feeds the ease model's steric term and decides `n_open_sites`, so changing it moves
+stored values and wants `ALGO_VERSIONS["site_state"]` bumped with a re-measured calibration —
+its own change, not a drive-by inside S5.
 
 ---
 

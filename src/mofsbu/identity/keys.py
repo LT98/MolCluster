@@ -103,10 +103,15 @@ def wl_index(g: TypedGraph) -> str:
 def l2_isomer_tag(g: TypedGraph, geom: Any | None = None) -> str:
     """Configurational isomer tag: cis/trans, fac/mer, Delta/Lambda (D10).
 
-    STUB until M5.  Signature is final: it takes the graph plus an optional geometry,
-    because the distinction L2 draws is spatial and invisible to the graph alone.
+    It takes the graph plus an optional geometry because the distinction L2 draws is
+    spatial and invisible to the graph alone — so **no geometry means no tag**, and `""`
+    is the right answer rather than a degraded one.  `identity.isomers` is the classifier;
+    read its docstring for what gets compared and why L2 is therefore not a pure function
+    of a structure row.
     """
-    return L2_UNSET
+    from mofsbu.identity.isomers import isomer_tag
+
+    return isomer_tag(g, geom)
 
 
 def l3_conformer_id(choice_vector: Any | None = None, geom: Any | None = None) -> str:

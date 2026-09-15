@@ -12,7 +12,10 @@ ALGO_VERSIONS: dict[str, str] = {
     "l1_certificate":  "cert1",   # sha256 over the IR canonical certificate — the L1 key
     "wl_index":        "wl3-nx",  # networkx WL, 3 iterations — fast bucket index only
     "canonical_order": "ir1",     # individualisation-refinement canonical labelling
-    "l2_isomer_tag":   "0-stub",  # M5
+    # What counts as an arrangement, how donors are grouped into classes, and where
+    # the cis/trans split sits.  Structures tagged under a different version are not
+    # comparable at L2 and are never re-labelled (ground rule 6).
+    "l2_isomer_tag":   "iso1",    # M5/S5 — cis/trans, fac/mer, Delta/Lambda (D10)
     "l3_conformer_id": "0-stub",  # M5
     # How a choice vector becomes a key: what is dropped (seed, a self-referential
     # digest), how floats are quantised, how it serialises.  It prefixes the digest it

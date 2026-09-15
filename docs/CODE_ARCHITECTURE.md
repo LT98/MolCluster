@@ -144,6 +144,10 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 
 ## 6. Known seams (real tensions, not bugs)
 
+> Measured defects and live risks are in **`ISSUES.md`** — this section is for tensions that
+> are working as designed. The two that have since been measured and moved there are the
+> perception-vs-metal seam and the sp3-amine occlusion failure.
+
 - ~~**`site_catalog` is not a pure function of identity.**~~ **Closed.** D15 excludes bond
   order from the hash and perception used to read it, so two routes to one acetate complex
   perceived different donor sets. `sites.perception.DELOCALISED_GROUPS` now types an
