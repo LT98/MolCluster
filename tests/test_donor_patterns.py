@@ -230,3 +230,49 @@ def test_an_esterified_oxygen_does_not_pull_its_neighbour_into_a_group(smiles, f
     """
     found = {s.donor_type for s in find_donor_sites(mol_from_smiles(smiles))}
     assert forbidden not in found, f"{smiles} was swept into a group: {sorted(found)}"
+
+
+# A donor must classify the same way before and after it binds a metal.  These pairs are
+# (name, free ligand, the same ligand donating to a metal).  Written as SMILES rather
+# than built through the placer so the claim is about perception alone.
+COORDINATION_PAIRS = [
+    ("aqua",        "O",              "[Mg+2]<-O"),
+    ("ether/THF",   "C1CCOC1",        "C1CCO(->[Mg+2])C1"),
+    ("ketone",      "CC(C)=O",        "CC(C)=O->[Mg+2]"),
+    ("pyridyl",     "c1ccncc1",       "c1ccn(->[Mg+2])cc1"),
+    ("amine",       "CN",             "CN->[Mg+2]"),
+    ("carboxylate", "CC(=O)[O-]",     "CC(=O)[O-]->[Mg+2]"),
+    ("halide",      "[Cl-]",          "[Cl-]->[Mg+2]"),
+    # the M5 exit-gate fixture: a peri-pocket is phenolate + quinone C=O, and the C=O is
+    # exactly the type that used to vanish the moment the pocket closed on a metal.
+    ("anthrarufin", "Oc1cccc2c1C(=O)c1c(O)cccc1C2=O",
+                    "[O-]1c2cccc3c2C(=O->[Cu+2]1)c1c(O)cccc1C3=O"),
+]
+
+
+@pytest.mark.parametrize("name,free,bound", COORDINATION_PAIRS,
+                         ids=[c[0] for c in COORDINATION_PAIRS])
+def test_a_donor_survives_being_coordinated(name, free, bound):
+    """Coordination is not constitution — binding a metal must not delete a donor.
+
+    `_classify_neutral` counted heavy neighbours to tell an ether from an alcohol and a
+    ketone from a carboxylate, and a metal is a heavy neighbour.  So `aqua_O`, `ether_O`
+    and `carbonyl_O` were perceived while free and not perceived once bound: the site
+    vanished from `site_catalog` at exactly the moment it became occupied, which meant
+    `refresh_state` had no row to mark `OCCUPIED` and the bond that formed was recorded
+    nowhere.  N-donors and anionic donors were never affected — they are classified by
+    aromaticity, bond order or formal charge, none of which a metal neighbour perturbs —
+    which is why the gap was uneven and easy to miss.
+
+    `_terminal_oxygens` already draws this line for the delocalised path.  This asserts
+    the valence-rule classifier draws it too.
+    """
+    def described(smiles: str) -> Counter:
+        return Counter(s.donor_type for s in find_donor_sites(mol_from_smiles(smiles)))
+
+    free_donors, bound_donors = described(free), described(bound)
+    assert free_donors, f"{name}: the free ligand perceives no donor at all — bad probe"
+    assert bound_donors == free_donors, (
+        f"{name}: coordination changed the donor set "
+        f"{dict(free_donors)} -> {dict(bound_donors)}. A coordinated donor is still a "
+        f"donor; it is OCCUPIED, which is a state, not an absence.")

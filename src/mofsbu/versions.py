@@ -37,6 +37,16 @@ ALGO_VERSIONS: dict[str, str] = {
     # as products of a different policy — the numbers are only comparable within a
     # version, because the weights ARE the model.
     "ease_model":       "floor1",  # pKa-table floor + cone occlusion (M4, C5/D18)
+    # Which atoms are donors and what type each one is.  Was an unpinned literal inside
+    # `put_sites`; pinned here because a catalog is only comparable to one written by the
+    # same recipe, and because the staleness check needs something to compare against.
+    # 2: coordination is not constitution.  `1` counted a metal as an ordinary heavy
+    #    neighbour, so `aqua_O`, `ether_O` and `carbonyl_O` were perceived while free and
+    #    NOT perceived once bound — a donor left the catalog at the moment it became
+    #    occupied, and the bond that formed had no row to be recorded against.  A `1`
+    #    catalog on a metal-bearing structure is therefore incomplete rather than merely
+    #    old, which is why `put_sites` replaces one instead of keeping it.
+    "perception":       "2",       # which atoms are donors, and of what type
     "site_state":       "1",       # status rule + buried-volume convention (M4)
     # 2: pinning a donor and its outward axis leaves two rotations undetermined — the
     #    ligand's spin about the M-L axis, and the metal's swing out of the donor's

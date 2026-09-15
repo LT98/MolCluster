@@ -1,11 +1,17 @@
 # Code architecture — the quick reference
 
-`PLAN_implementation.md` is the detail (milestones, changelog, rationale) and
-`DESIGN_registry_assembly.md` is the reasoning (decision ledger, subsystems). **This file is
-the map.** Read it first; go to the other two when you need to know *why*.
+**This file is the map.** Read it first; go elsewhere when you need to know *why*.
 
-Rule for keeping it useful: if something here needs a paragraph, it belongs in one of the
-other two documents with a pointer from here.
+| Document | Holds |
+|---|---|
+| `PLAN_implementation.md` | what is **left to build** — remaining milestones, exit gates, open decision gates |
+| `DESIGN_registry_assembly.md` | the **reasoning** — decision ledger, subsystems, open checkpoints |
+| `BUGS.md` | what is **built and behaving wrongly**. Open only |
+| `archive/` | finished milestones, resolved bugs, and the full changelogs |
+
+Rule for keeping this file useful: if something here needs a paragraph, it belongs in one of
+the others with a pointer from here. Rule for keeping the set useful: an item leaves the active
+document the moment it is done — it moves to `archive/`, it is not struck through in place.
 
 ---
 
@@ -107,7 +113,9 @@ one row with two incoming `reactions` edges — 441 such products exist today.
 6. **Pinned recipe versions.** Bump `ALGO_VERSIONS`; never silently re-label existing rows.
 7. **Fidelity is a property of a GEOMETRY**, never of a structure. Exception:
    `Fidelity.HEURISTIC = -1` is an *ease* rung and `put_geometry` refuses it.
-8. **Perceive once per structure.** `site_catalog` is written once and kept;
+8. **Perceive once per structure.** `site_catalog` is written once and kept *within a
+   perception version*; a catalog older than `ALGO_VERSIONS["perception"]` is rewritten the
+   next time anything touches the structure, and its `site_state` goes with it (D19).
    `refresh_state` never perceives (there is a test counting calls).
 9. **Absent ≠ zero.** An uncomputed ease component is omitted, `n_open_sites` is NULL not 0,
    and a missing number never renders as a low one.
@@ -122,7 +130,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 |---|---|
 | **D1** | Central object = recursive `BuildingBlock`; assembly re-exposes open sites |
 | **D2** | Identity ≠ address ≠ provenance. Identity on node, sequence on edges |
-| **D3/D16** | L1 = sha256 of a canonical **certificate**, not the WL hash (1-WL cannot separate µ2-bridging from chelating) |
+| **D3** | L1 = canonical hash of an explicit typed graph; never SMILES/InChI. *Producer superseded by D16* |
 | **D4** | Fidelity/coords live in child `geometries`; structure identity is fidelity-invariant |
 | **D5** | Sites by **canonical index**; `site_catalog` (geometry-free) + `site_state` (per-geometry); inherit via atom map |
 | **D6** | Ease = **named components** + derived scalar, tagged by fidelity |
@@ -132,10 +140,12 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D10** | L2 is in scope; discriminator is downstream **relevance**, not ΔE |
 | **D11** | L3 = provenance-primary (choice-vector), geometry-verifier |
 | **D13** | A site is **frame + live-DOF tag + binding-mode set**; torsion stored as a discrete well index |
-| **D14** | Bridging is **derived**, not an edge type |
+| **D14** | Bridging is **derived**, not an edge type (`EdgeType` is `{COVALENT, DATIVE, METAL_METAL}`) |
 | **D15** | Net charge is **graph-level**; bond order excluded from the hash (resonance/Kekulé) |
+| **D16** | L1 = sha256 of a canonical **certificate**, not the WL hash (1-WL cannot separate µ2-bridging from chelating). WL is a bucket index; nauty is unused |
 | **D17** | An energy difference needs an **isodesmic** equation, not merely a balanced one |
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
+| **D19** | Re-derive what is only an **annotation** (`site_catalog`); **version** what is an address (identity). A stored identity keeps the answer its own recipe version gave |
 
 **Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
 geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),
@@ -143,28 +153,19 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 
 ---
 
-## 6. Known seams (real tensions, not bugs)
+## 6. Known seams
 
-> Measured defects and live risks are in **`ISSUES.md`** — this section is for tensions that
-> are working as designed. The two that have since been measured and moved there are the
-> perception-vs-metal seam and the sp3-amine occlusion failure.
+Three places where the code is internally consistent and still reports something misleading.
+Full diagnosis and current measurements in `BUGS.md`; one line each here.
 
-- ~~**`site_catalog` is not a pure function of identity.**~~ **Closed.** D15 excludes bond
-  order from the hash and perception used to read it, so two routes to one acetate complex
-  perceived different donor sets. `sites.perception.DELOCALISED_GROUPS` now types an
-  oxo-acid as a whole group — all its oxygens, one donor type, one charge, no bond order
-  read. `registry.catalog_drift` stays as the guard (`put_sites` keeps the FIRST catalog,
-  so a regression here is silent otherwise); `test_no_build_route_drifts_from_the_stored_catalog`
-  is the gate.
-- **Perception counts a metal as an ordinary heavy neighbour.** A coordinated aqua oxygen
-  is therefore perceived as no donor at all, so its `SiteStatus.OCCUPIED` row is never
-  written. Separate from the resonance seam above and not fixed with it: closing it moves
-  `n_perceived_donors` for every assembled structure.
-- **L2 is `''` everywhere**, so cis and trans currently collapse into one `structures` row.
-  Filling it in retroactively **splits identities** — decide backfill-vs-version before M5
-  touches `l2_isomer_tag`.
-- **569 existing structures have no `site_state`** (built before M4's second half).
-  `n_open_sites` is NULL for them — correct, but a query that treats NULL as 0 will lie.
+| | Seam | Bites when |
+|---|---|---|
+| [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` everywhere, so cis and trans are one `structures` row | M5 fills it in and **splits identities** — decide backfill-vs-version first |
+| [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
+
+*Closed, and both worth reading before touching perception: `site_catalog` was not a pure
+function of identity, and a coordinated donor was perceived as no donor at all —
+`archive/BUGS_resolved.md`.*
 
 ---
 
@@ -177,4 +178,4 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 | energies | `energy/reference.py` docstring — it explains what it refuses and why |
 | the build pipeline | `runner.execute`, top to bottom |
 | anything stored | `registry/api.py` — it is the only writer |
-| the web UI | `docs/UI_BACKLOG.md` — the known annoyances are already diagnosed |
+| the web UI | `docs/BUGS.md` — B4/B5/B6 are the open ones, already diagnosed |

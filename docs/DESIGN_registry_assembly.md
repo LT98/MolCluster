@@ -2,9 +2,10 @@
 
 **Status:** living design doc — decisions and open checkpoints tracked at the bottom.
 **Scope:** the realignment of the EBU screening tool toward the north-star goal.
-**How to use:** edit freely. The *Decision Ledger* is the source of truth for what's
-locked; the *Open Checkpoints* are what still needs a call. Update the *Changelog* when
-you change a decision so future sessions (and collaborators) can see why.
+**How to use:** edit freely. The *Decision Ledger* (§7) is the source of truth for what's
+locked; the *Open Checkpoints* (§8) are what still needs a call. When you change a decision,
+add a revision to [`archive/DESIGN_history.md`](archive/DESIGN_history.md) saying why — a
+decision that changed without a recorded argument is one nobody can re-examine later.
 
 ---
 
@@ -115,15 +116,27 @@ tell apart. Both fail on the identity axis that matters here.
 
 ### 4.1 Canonicalizing the metal graph (the L1 hash)
 
-Build an **explicit typed graph** — nodes labeled `(element, formal_charge, oxidation_state)`,
-edges typed `covalent | dative(→M) | bridging(µ2,µ3) | metal–metal`. **Do not route through
-SMILES/InChI.** Canonicalize with, cheapest first:
+Build an **explicit typed graph** — nodes labeled `(element, formal_charge, oxidation_state,
+spin_class)`, edges typed `covalent | dative(→M) | metal–metal`. **Do not route through
+SMILES/InChI.**
 
-1. **Weisfeiler–Lehman graph hash** (`networkx.weisfeiler_lehman_graph_hash`) — fast, fixed-length,
-   near-canonical → primary stored key.
-2. **nauty/Traces canonical labeling** (`pynauty`) — true canonical form; also fixes the atom
-   ordering used as the coordinate system for site annotations (see §6).
-3. **VF2 isomorphism** (`networkx`) — collision resolver, run only when two records share an L1 hash.
+Bridging is **not** an edge type: a donor carrying dative edges to two distinct metals *is* µ2,
+and labelling it again would give one chemistry two encodings that hash differently. µ2/µ3 are
+derived on demand (`TypedGraph.bridge_class`) — that is D14.
+
+The key and its two supporting structures (D16):
+
+1. **Canonical certificate → sha256** (`graph.canon.certificate_digest`) — individualisation-
+   refinement with branch-and-bound and automorphism pruning. **This is L1**, and it also fixes
+   the atom ordering used as the coordinate system for site annotations (see §6).
+2. **Weisfeiler–Lehman hash** (`wl_hash`, surfaced as `identity.wl_index`) — a fast **bucket
+   index**, not a key. 1-WL cannot separate µ2-bridging from chelating, which is precisely the
+   distinction this project exists to draw.
+3. **VF2 isomorphism** (`networkx`) — collision resolver, run only when two records share an L1.
+
+Pure Python throughout, so both machines agree. **nauty/Traces is not used** — its canonical form
+differs from ours and would produce different keys; the original plan to use it as a verifier was
+dropped with D16.
 
 Polynuclear (M–M, µ-bridges) is handled natively by this typed graph — a key reason to prefer it
 over SMILES, which is exactly where those break.
@@ -217,8 +230,8 @@ identity, so they cannot be retrofitted):
 - **The geometry placer generalizes from "ligands on a sphere around one center" to "a set of
   coordination centers with inter-center constraints (M–M distance, bridge bite angle) + each
   center's local geometry."** `GeometryPlacer` today is single-center — **this multi-center placer
-  is the headline engineering cost of the whole plan.** Identity (nauty) and site inheritance (atom
-  map) get polynuclear for free; the placer is where the work is.
+  is the headline engineering cost of the whole plan.** Identity (the canonical certificate) and
+  site inheritance (atom map) get polynuclear for free; the placer is where the work is.
 
 ### 6.2 Geometries + fidelity ladder
 
@@ -394,8 +407,12 @@ coordinates.
 - **D1** Central object = recursive `BuildingBlock`; assembly re-exposes open sites.
 - **D2** Split identifier / address / provenance. Address = content hash; identity = composite
   L0–L3 key in a DB record; provenance = DAG edges. Identity on node, sequence on edges.
-- **D3** L1 = canonical hash of an **explicit typed graph** (WL primary, nauty canonical, VF2
-  tiebreak). Never via SMILES/InChI.
+- **D3 (producer superseded by D16)** L1 = canonical hash of an **explicit typed graph**. Never
+  via SMILES/InChI — that half stands and is the part this decision exists for. The *producer*
+  was originally specified as WL-primary with nauty canonical and VF2 tiebreak; **D16 replaces
+  it** with an individualisation-refinement certificate, after 1-WL turned out to be unable to
+  separate a µ2-bridging carboxylate from a chelating one. Of the original three, WL survives as
+  a bucket index, VF2 survives as the collision resolver, and nauty was dropped entirely.
 - **D4** Fidelity/status/coords in a child `geometries` table; structure identity is
   fidelity-invariant. `relaxed_from` chain = optimization history; keep a best-geometry pointer.
 - **D5** Sites stored against **canonical atom indices** → perceive once; split into
@@ -422,6 +439,40 @@ coordinates.
   conformer coordinate. `construct` is a deterministic function of (choice-vector, seed) and **emits
   its choice-vector**; the inference layer (CN/geometry/protonation) **branches explicitly** on
   ambiguity instead of silently defaulting.
+- **D14** **Bridging is DERIVED, not an edge type.** §4.1 originally typed `bridging(µ2,µ3)`
+  as an edge alongside `dative`, but a donor atom carrying dative edges to two distinct metals *is* µ2 —
+  labelling it again gives two encodings of one chemistry, and the two hash differently.
+  `EdgeType` is therefore `{COVALENT, DATIVE, METAL_METAL}` and `TypedGraph.bridge_class()`
+  derives µ2/µ3 on demand. Dative *direction* is derived the same way (donor is the non-metal),
+  and validated on insert.
+- **D15** **Net charge is a graph-level field, not a sum over atoms.** Writing a
+  carboxylate's −1 onto one of its two oxygens makes those oxygens inequivalent, so a
+  paddlewheel would hash differently depending on which way round four chemically identical
+  bridges happened to be written. Delocalised charge is not given a home it does not have.
+  Per-atom `formal_charge` survives for genuinely localised charge (an ammonium N) as a label
+  that enters identity but not the total. This is safe *because* hydrogens are explicit nodes:
+  protomers stay distinct through the H count, not through where the charge was written.
+  Bond order is excluded from the hash for the same reason (Kekulé forms, C=O/C–O resonance).
+- **D16** **L1 = sha256 of the canonical certificate, not the WL hash.** D3 specified WL as
+  the primary stored key. It cannot be: **1-WL does not separate a µ2-bridging carboxylate from
+  a chelating one** — an 8-membered M–O–C–O–M–O–C–O ring versus two 4-membered chelate rings
+  give every atom the same local environment, so the colours are stable from the first iteration
+  and more iterations do not help. That is a binding-mode distinction this project exists to
+  draw. WL is demoted to a fast bucket index; L1 comes from an individualisation-refinement
+  canonical certificate (pure Python, so both machines agree — pynauty is dropped rather than
+  kept as a verifier, since its canonical form differs and would produce different keys). Cost measured on the fixture
+  set: 120 ms total, worst case 37 ms for [Fe(H₂O)₆]²⁺ (|Aut| = 46080) with branch-and-bound
+  plus automorphism pruning. Demonstration lives in `tests/test_canon.py`.
+- **D17** **An energy difference requires an isodesmic equation, not merely a
+  balanced one.** Raised while implementing M7. Balance in atoms and charge is necessary
+  and demonstrably not sufficient: the archived `E(EBU) − E(M^q+) − Σ E(anion)` scheme
+  satisfies it and still reversed its own qualitative verdict once a medium was added.
+  `energy.reference` therefore refuses, by default, any equation containing a bare metal
+  ion, a metal-free species with |charge| > 1, or a net change in metal–donor bond count.
+  Reproducing a legacy number needs `strict=False`, and the resulting value carries
+  `isodesmic=False` into anything that stores it. The cost of this decision is that some
+  equations a user considers reasonable will be refused; the alternative is a table of
+  numbers that all look equally good.
 - **D12 (C4 resolved)** **Polynuclear-native from v1**; mononuclear = N=1. Per-center oxidation
   state/spin in node labels; µ-carboxylate = one node + two typed dative edges; multi-center geometry
   placer is the headline build cost.
@@ -456,51 +507,40 @@ coordinates.
   precisely why the components are the record and the scalar is only a sort key (D6).
   **C7 is untouched**: `hsab_match` still raises and `activation_ease(partner=...)` refuses
   rather than returning the partner-free number under a partner-shaped call.
+- **D19** **A stored identity is never re-derived under a new recipe version; it keeps the
+  answer its own version gave.** Forced by M5, which fills in `l2_isomer_tag` and so would
+  otherwise **split** every identity written while L2 was a stub. Backfilling is refused:
+  re-deriving L2 for the existing rows would rewrite stored identities and every `reactions`
+  edge pointing at them, which is the one thing in this registry that is not regenerable
+  (D2). So `ALGO_VERSIONS["l2_isomer_tag"]` bumps from `0-stub`, rows written under the stub
+  keep `l2_isomer_tag = ''`, and anything built from M5 onward carries a real tag.
 
-### 7.1 Proposed — pending your ratification (raised while implementing M2)
+  **What makes this honest rather than a silent fork is that the generation is already on
+  the row** — `structures.algo_l2` records which recipe produced each value, so a `''` is
+  readable as *"this predates L2"* rather than as *"this has no isomerism"*. The cost is
+  real and is accepted: the same species built before and after M5 can occupy two rows.
+  That is a visible duplicate with its cause recorded, which is strictly better than an
+  invisible one — and it follows ground rule 6, which already says a version bump marks
+  rows stale rather than re-labelling them.
 
-Each of these was forced by writing the code and is currently implemented as described,
-with a test that fails if it is reversed. None is in the locked ledger yet.
+  **The narrower case goes the other way, and the difference is the point.** `site_catalog`
+  IS re-derived on a version bump (`perception/1` → `/2`), because a catalog is a derived
+  annotation that nothing points at, so rewriting it costs only the state rows underneath
+  it. An identity is pointed at by the provenance DAG. The rule is therefore not "always
+  re-derive" or "never" but: **re-derive what is only an annotation; version what is an
+  address.**
 
-- **D14 (proposed)** **Bridging is DERIVED, not an edge type.** §4.1 lists `bridging(µ2,µ3)`
-  alongside `dative`, but a donor atom carrying dative edges to two distinct metals *is* µ2 —
-  labelling it again gives two encodings of one chemistry, and the two hash differently.
-  `EdgeType` is therefore `{COVALENT, DATIVE, METAL_METAL}` and `TypedGraph.bridge_class()`
-  derives µ2/µ3 on demand. Dative *direction* is derived the same way (donor is the non-metal),
-  and validated on insert.
-- **D15 (proposed)** **Net charge is a graph-level field, not a sum over atoms.** Writing a
-  carboxylate's −1 onto one of its two oxygens makes those oxygens inequivalent, so a
-  paddlewheel would hash differently depending on which way round four chemically identical
-  bridges happened to be written. Delocalised charge is not given a home it does not have.
-  Per-atom `formal_charge` survives for genuinely localised charge (an ammonium N) as a label
-  that enters identity but not the total. This is safe *because* hydrogens are explicit nodes:
-  protomers stay distinct through the H count, not through where the charge was written.
-  Bond order is excluded from the hash for the same reason (Kekulé forms, C=O/C–O resonance).
-- **D17 (proposed)** **An energy difference requires an isodesmic equation, not merely a
-  balanced one.** Raised while implementing M7. Balance in atoms and charge is necessary
-  and demonstrably not sufficient: the archived `E(EBU) − E(M^q+) − Σ E(anion)` scheme
-  satisfies it and still reversed its own qualitative verdict once a medium was added.
-  `energy.reference` therefore refuses, by default, any equation containing a bare metal
-  ion, a metal-free species with |charge| > 1, or a net change in metal–donor bond count.
-  Reproducing a legacy number needs `strict=False`, and the resulting value carries
-  `isodesmic=False` into anything that stores it. The cost of this decision is that some
-  equations a user considers reasonable will be refused; the alternative is a table of
-  numbers that all look equally good.
-
-- **D16 (proposed)** **L1 = sha256 of the canonical certificate, not the WL hash.** D3 makes WL
-  the primary stored key. It cannot be: **1-WL does not separate a µ2-bridging carboxylate from
-  a chelating one** — an 8-membered M–O–C–O–M–O–C–O ring versus two 4-membered chelate rings
-  give every atom the same local environment, so the colours are stable from the first iteration
-  and more iterations do not help. That is a binding-mode distinction this project exists to
-  draw. WL is demoted to a fast bucket index; L1 comes from an individualisation-refinement
-  canonical certificate (pure Python, so both machines agree — pynauty stays a verifier, since
-  its canonical form differs and would produce different keys). Cost measured on the fixture
-  set: 120 ms total, worst case 37 ms for [Fe(H₂O)₆]²⁺ (|Aut| = 46080) with branch-and-bound
-  plus automorphism pruning. Demonstration lives in `tests/test_canon.py`.
+Every entry above is locked and has a test that fails if it is reversed. Revision
+history — how each one was argued and what it cost — is in
+[`archive/DESIGN_history.md`](archive/DESIGN_history.md).
 
 ## 8. Open Checkpoints (need a call)
 
-*Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native). C5 → D18 (heuristic floor).*
+*Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native). C5 → D18 (heuristic floor).
+C8 → curated tables (`data/reference/*.tsv`, each row carrying `source` + `source_version`).*
+
+Each open checkpoint is scheduled at the milestone where code first forces the call — see
+[`PLAN_implementation.md`](PLAN_implementation.md) §3 for that placement.
 
 - **C2 — L3 thresholds (still open):** the rule is set (D11); still need the **numbers** — θ_geom
   RMSD cutoff on the rigid core + coordination sphere, and the energy window that gates a real
@@ -509,8 +549,8 @@ with a test that fails if it is reversed. None is in the locked ledger yet.
   + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only.
 - **C7 — Partner-dependence (leaning, §6.6):** confirm the factorized HSAB-match model (descriptor
   vectors combined at query time) over a stored ease matrix.
-- **C8 — descriptor-layer sourcing:** where the tabulated per-metal/per-donor descriptors come from
-  (curated table vs. pulled from a reference dataset) and how their provenance/version is pinned.
+*(C8 — descriptor-layer sourcing — was here; resolved in M1 in favour of curated tables with
+per-row `source` + `source_version`. See `archive/PLAN_completed.md` rev 19.)*
 
 ## 9. Suggested phased roadmap
 
@@ -546,7 +586,9 @@ carries M–M + µ-bridges + per-center labels from the start.
   frameworks, not arbitrary partial assemblies. (Check current maintenance state.)
 - **pymatgen** `StructureMatcher` / `MoleculeMatcher` — battle-tested structural-equivalence/dedup
   logic to borrow for the L3 comparison.
-- **pynauty** (nauty/Traces) — canonical graph labeling. **networkx** — WL hash + VF2.
+- ~~**pynauty** (nauty/Traces) — canonical graph labeling.~~ **Evaluated and rejected (D16):**
+  its canonical form differs from ours, and a key producer that is installed on only one machine
+  breaks two-machine parity. **networkx** — WL bucket index + VF2 collision resolver; both used.
 - **RDKit** — USR/USRCAT shape fingerprints; `CanonicalRankAtoms` for organic sub-parts.
 - **ASE-db** — atomistic KV store; the least-new-code registry backend given the existing stack.
 - Buried-volume / %V_bur descriptors (SambVca-style) for steric accessibility.
@@ -572,99 +614,5 @@ carries M–M + µ-bridges + per-center labels from the start.
 
 ## 12. Changelog
 
-- *(M4 follow-up)* **Perception is resonance-invariant; the `site_catalog` seam below is
-  closed.** The filed job was to stop perception reading bond order, and the shape of the
-  fix is that **a delocalised oxo-acid is one donor, not several oxygens**:
-  `sites.perception.DELOCALISED_GROUPS` matches the group's central atom, takes every
-  terminal oxygen on it — ignoring metal neighbours, since coordination is not
-  constitution — and gives all of them one donor type and one charge. No bond order is
-  read anywhere in that path, which is what makes it invariant rather than merely
-  patched. Three things worth recording:
-
-  * The bug was **wider than the acetate case that surfaced it.** A sulfonate's two S=O
-    oxygens were being typed `carbonyl_O` and only its anionic one `sulfonate_O`; nitro
-    came out as one `carbonyl_O` and one `alkoxide_O`. Those are not near-misses, and they
-    were route-dependent for the same reason acetate was.
-  * **Charge is a group property here too**, exactly as in D15. All of a group's oxygens
-    now report the same `charge_after` — anionic (−1) or not — instead of whichever one
-    the resonance form parked the minus sign on. Per-site −1 is already what
-    `LABILE_DONOR_PATTERNS` says for a diprotic acid, so this is the existing convention,
-    not a new one.
-  * The taxonomy is **deliberately coarse**: carbonate is `carboxylate_O`, sulfate is
-    `sulfonate_O`, a phosphate diester is `phosphonate_O`. A name per oxo-acid is a
-    promise to have anticipated every one of them — the same promise `Pocket` refuses to
-    make. `nitro_O` is the one genuinely new type.
-
-  `catalog_drift` stays as a guard rather than a known finding, and
-  `tests/test_sites_state.py::test_no_build_route_drifts_from_the_stored_catalog` is the
-  gate: the build routes in `tests/build_routes.py` reach one identity through every
-  resonance form of it, and the assertion is that the registry cannot tell them apart.
-
-  Still open, and NOT this job: the per-atom valence rules count a metal as an ordinary
-  heavy neighbour, so a coordinated aqua oxygen is perceived as no donor at all. That is
-  a `SiteStatus.OCCUPIED` row that never gets written, and it is a different fix with a
-  different blast radius (`n_perceived_donors` moves for every assembled structure).
-
-- *(M4 second half)* **C5 called, as D18.** The floor was ratified essentially as §6.6
-  leaned, with two things the leaning did not say. First, the rule that turned out to
-  matter most is not *what* the components are but that **an absent one stays absent**:
-  the scalar renormalises over the components present, so a geometry-free record and a
-  fully-populated one are distinguishable instead of both landing somewhere plausible.
-  Second, **MACE-OMOL-0 is what made the call safe to make now.** Deprotonation is a
-  charge change, so the ML rung was structurally unable to serve the model's primary
-  component until a charge-aware potential existed — the floor was carrying the whole
-  model with no affordable rung above it, which is a bad position from which to ratify a
-  floor. §6.4's "cheap → rigorous" column for deprotonation should now read
-  `pKa table → MACE-OMOL-0 ΔE → xTB → DFT`.
-
-  Two findings from building it, both about seams rather than bugs:
-
-  * **`site_catalog` is not a pure function of identity.** D15 excludes bond order from
-    the L1 hash so C=O/C–O⁻ resonance forms hash identically; perception reads bond order.
-    A monodentate acetate bound through either oxygen is one identity whose two build
-    routes perceive different donor sets. The first catalog stands, `catalog_drift`
-    reports the disagreement, and making perception resonance-invariant is filed as its
-    own job — it needs a fixture set, not a patch inside a registry write. *(Done — see
-    the M4 follow-up entry at the top of this changelog.)*
-  * **`put_sites` deleting before inserting cascaded into `site_state`.** Under D2,
-    re-deriving an identity the registry already has is the *expected* outcome for most of
-    an enumeration, so a structure built twice kept state only on its second geometry and
-    `n_open_sites` counted against a best geometry that no longer had any. The catalog is
-    geometry-independent (§6.3); it is now written once per structure and kept.
-
-- *(M7 implementation session)* Built the energy backends and the reference scheme. The
-  session's finding is a correction to §11's first bullet: **the archived formation-energy
-  equation is charge-balanced, and that is exactly why it went undetected.** A
-  reaction-balance check — the fix §11 proposed — would have passed it. The rule that
-  actually catches it is conservation of metal–donor bonds across the arrow, which
-  distinguishes a ligand-exchange equation (errors cancel) from a formation-from-free-ions
-  equation (they do not). See `docs/PLAN_implementation.md` rev 16. **D17 (proposed)**
-  below follows from it.
-
-
-- *(M2 implementation session)* Built the typed graph, canonicalisation and L0/L1 keys against
-  hand-written polynuclear fixtures (paddlewheel, Fe₃-µ₃-oxo in two valence patterns, a
-  bridging/chelating pair, cis/trans-Pt(NH₃)₂Cl₂, HS/LS hexaaqua). Raised **D14/D15/D16** as
-  proposals in §7.1 — all three were forced by the code, and D16 in particular contradicts D3's
-  choice of WL as the primary key. L2/L3 ship as stubs with final signatures. See
-  `docs/PLAN_implementation.md` for the milestone context.
-
-- *(this session, rev 1)* Initial spec: recursive BuildingBlock; identifier/address/provenance
-  split; layered L0–L3 identity with typed-graph canonicalization; fidelity-laddered geometries;
-  perceive-once site catalog + per-geometry state; named-component activation-ease model;
-  polynuclear + reaction/pathway route-design layer; SQLite + content-addressed store. Ledger
-  D1–D9 locked; checkpoints C1/C2/C4/C5/C6/C7 open.
-- *(this session, rev 3)* Added §6.7 **construction-as-decision-tree** (Kind A/B/C branch points;
-  conformer pairs are generated, not just detected). Revised **D11**: L3 identity is
-  provenance-primary (choice-vector), geometry-verifier. Added **D13**: site = frame + live-DOF tag
-  + binding-mode set (not a lone vector); join torsion stored as a discrete well index = conformer
-  coordinate; `construct` emits its choice-vector; inference layer branches explicitly. Updated
-  §3.1 `open_site`, §6.3 site model, roadmap steps 4–5.
-- *(this session, rev 2)* Resolved **C1 → D10**: L2 in scope, discriminator is
-  downstream-assembly-relevance + barrier (NOT energy gap); anthrarufin–Cu justifying case. Added
-  **D11**: compound L3 trigger (rigid-core RMSD OR open-site-flag flip). Resolved **C4 → D12**:
-  polynuclear-native from v1 (per-center labels; µ-carboxylate = one node + two dative edges;
-  multi-center placer = headline cost). Added §6.6 **shared descriptor layer** with leaning
-  proposals for C5 (heuristic pKa+HSAB floor), C6 (ΔG + sink + concurrent-bond-change +
-  exchange-lability proxies), C7 (factorized HSAB-match, not a matrix). Added C2 worked examples,
-  new **C8** (descriptor sourcing/provenance). Roadmap re-sequenced polynuclear-native.
+Moved to [`archive/DESIGN_history.md`](archive/DESIGN_history.md) — every revision, newest
+first. This file carries the *current* reasoning; that one carries how it got here.

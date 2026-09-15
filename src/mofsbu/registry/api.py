@@ -513,30 +513,40 @@ def backfill_choice_digests(reg: Registry, *, dry_run: bool = False) -> int:
 
 # ── sites (M4) ───────────────────────────────────────────────────────────────
 
-def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str = "perception/1",
+def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None = None,
               reperceive: bool = False) -> int:
     """Write the site catalog for a structure.  Perceive ONCE per structure (D5).
 
     Sites are keyed by CANONICAL atom index, taken from the order frozen at insert, so
     they survive recall and re-ordering.
 
-    **A structure that already has a catalog keeps it.**  This used to `DELETE` first and
-    re-insert, which is wrong twice over.  `site_catalog` is geometry-INDEPENDENT (§6.3),
-    so a second build of the same identity has nothing new to say about it — and the
-    delete cascaded into `site_state`, silently destroying the per-geometry state of every
-    geometry already stored.  Under D2, re-deriving an identity the registry already has
-    is the EXPECTED outcome for most of an enumeration, so that cascade fired constantly:
-    a structure built twice ended up with state on its second geometry only, and
-    `n_open_sites` counted against a best geometry that no longer had any.
+    **A structure that already has a catalog keeps it, unless that catalog was written by
+    a different version of perception.**  Keeping it is the D5 rule: `site_catalog` is
+    geometry-INDEPENDENT, so a second build of the same identity has nothing new to say,
+    and replacing it cascades into `site_state` and destroys the per-geometry state of
+    every geometry already stored.  Under D2, re-deriving an identity the registry already
+    has is the EXPECTED outcome for most of an enumeration, so that cascade would fire
+    constantly.
 
-    The first catalog written for an identity is the one that stands.  `catalog_drift`
-    reports whether a later perception disagreed; see its docstring for the case that is
-    known to produce one, which is real and is NOT this function's to fix.  Pass
-    `reperceive=True` to replace deliberately (and accept the loss of state rows).
+    A version mismatch is the one case where keeping it is worse.  An older catalog is not
+    a differently-worded answer to the same question — it is the answer to a question the
+    current recipe no longer asks, and ground rule 6 says a version bump marks affected
+    rows stale rather than silently re-labelling them.  So a structure whose catalog
+    predates the current `ALGO_VERSIONS["perception"]` is rewritten the next time anything
+    touches it, and the caller is expected to write fresh state for the geometry in hand
+    (`runner._record_sites` does exactly that, in that order).  State on OTHER geometries
+    is lost, which is the honest outcome: it was derived from a catalog now known to be
+    wrong, and a stale state row is worse than an absent one (ground rule 9).
+
+    `catalog_drift` reports whether a later perception disagreed at the SAME version; see
+    its docstring.  That is a different question from this one and is not this function's
+    to fix.  Pass `reperceive=True` to replace deliberately at any version.
     """
+    algo = algo or f"perception/{ALGO_VERSIONS['perception']}"
     cmap = canonical_map(reg, structure_id)
     existing = get_sites(reg, structure_id)
-    if existing and not reperceive:
+    stale = bool(existing) and any(r["algo_perception"] != algo for r in existing)
+    if existing and not reperceive and not stale:
         return len(existing)
     reg.conn.execute("DELETE FROM site_catalog WHERE structure_id=?", (structure_id,))
     n = 0

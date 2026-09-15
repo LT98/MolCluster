@@ -5,11 +5,18 @@ activate molecules at viable sites, expand structures indefinitely by joining mo
 blocks, evaluate synthesis-route viability (reagents -> product, with intermediates and
 conditions), and store everything for recall and further construction.
 
-**Architecture & decisions:** [`docs/DESIGN_registry_assembly.md`](docs/DESIGN_registry_assembly.md)
-(living design doc — decision ledger D1-D13, open checkpoints, roadmap).
+**Agent/developer workflow:** [`AGENTS.md`](AGENTS.md) is the short operational guide for
+task routing, safe search scope, environment selection, validation, and Git/data hygiene.
 
-**Implementation plan:** [`docs/PLAN_implementation.md`](docs/PLAN_implementation.md)
-(module map + API signatures, milestone spine M0-M9 with exit gates, salvage ledger, decision gates).
+**Documentation** — four active files, each holding only what is still live. Anything finished
+moves to [`docs/archive/`](docs/archive).
+
+| | |
+|---|---|
+| [`docs/CODE_ARCHITECTURE.md`](docs/CODE_ARCHITECTURE.md) | the map: module table, invariants, known seams. Start here |
+| [`docs/BUGS.md`](docs/BUGS.md) | open defects only |
+| [`docs/PLAN_implementation.md`](docs/PLAN_implementation.md) | what is left to build: API signatures, remaining milestones, open decision gates |
+| [`docs/DESIGN_registry_assembly.md`](docs/DESIGN_registry_assembly.md) | why: decision ledger D1–D18, open checkpoints |
 
 ## Layout
 
@@ -113,12 +120,10 @@ those are different claims, and `finish_run` returns `done` for a run full of re
 **The page stops asking when there is nothing to ask about.** A finished run is a document; it is
 not re-fetched or repainted, so an expanded traceback stays expanded. While a run is live the
 panel is rebuilt, and open sections are restored by task id. The steady state is one request
-every 15 s instead of three every 4 s — which is why the console no longer scrolls on its own.
-The server also defaults to `--log-level warning`; pass `--log-level info` to get access lines back.
+every 15 s. The server defaults to `--log-level warning`; pass `--log-level info` to get access
+lines back.
 
 ## Choosing hardware and database (`/builder`)
-
-Both used to be decided once on the command line, which put them behind a terminal.
 
 * **Device.** A selector lists what this machine actually has (`cpu`, plus each visible CUDA
   device by name, `mps` where applicable) and what is currently declared. It stays a
@@ -142,10 +147,10 @@ Both used to be decided once on the command line, which put them behind a termin
   bare new row.
 * **Hide** is this project's delete, and it is soft on purpose. The schema cascades hard —
   deleting a structure takes its geometries, `site_catalog`, `site_state` and its `reactions`
-  edges — and 457 of 594 structures in the working registry (77%) have more than one incoming
-  edge, so deleting "one entry" usually severs some other route's history. Everything here is
-  regenerable except provenance. So a hidden structure keeps its row, its blobs, its edges and
-  its L0/L1/L2 identity (it is still recognised under D2) and simply leaves the listing.
+  edges — and many structures in the working registry have more than one incoming edge, so
+  deleting "one entry" could sever another route's history. Everything here is regenerable
+  except provenance. So a hidden structure keeps its row, its blobs, its edges and its
+  L0/L1/L2 identity (it is still recognised under D2) and simply leaves the listing.
   Hiding a multi-route structure is refused until confirmed, and the refusal names the routes.
   "show hidden structures" in the sidebar is the way back.
 
@@ -165,8 +170,8 @@ written in. DFT has no backend wired up and asking for one raises rather than su
 something cheaper.
 
 Energies are only ever subtracted through `mofsbu.energy.reference`, which refuses equations
-it cannot justify — see `docs/PLAN_implementation.md` rev 16 for why a *balanced* equation is
-not enough. The archived Fe(III) references can be re-derived with:
+it cannot justify — see `docs/archive/PLAN_completed.md` rev 16 (and D17) for why a *balanced*
+equation is not enough. The archived Fe(III) references can be re-derived with:
 
     python scripts/regress_m7.py --refs
 
