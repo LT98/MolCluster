@@ -8,11 +8,13 @@ Each entry says what is wrong, how it was measured, what it costs today, and wha
 would move — that last part matters because most of these touch a **pinned recipe version**,
 and changing a stored quantity is never a drive-by.
 
-Ordered by what is blocking work now.
+Ordered by what is blocking work now. Each entry is filed on the tracker; the number in
+brackets is the GitHub issue, and the two are meant to stay in step — if you close one,
+strike the other.
 
 ---
 
-## 1. Every sp3 amine donor reads as sterically blocked · **blocking**
+## 1. Every sp3 amine donor reads as sterically blocked · **blocking** · [#13](https://github.com/LT98/MolCluster/issues/13)
 
 `descriptors.ease.occlusion` counts a donor's own covalently bonded neighbours as walls, so
 `sites.state.refresh_state` marks amines `BLOCKED` and `BuildingBlock.open_donors()` excludes
@@ -51,7 +53,7 @@ are what *defines* the axis and cannot be in the way of it), or damp their radiu
 
 ---
 
-## 2. `BLOCKED_OCCLUSION`'s calibration note no longer matches the code
+## 2. `BLOCKED_OCCLUSION`'s calibration note no longer matches the code · [#14](https://github.com/LT98/MolCluster/issues/14)
 
 `sites/state.py` documents the threshold as: "a bare aqua O sits near 0.0, a carboxylate O in
 an open carboxylate near 0.2-0.4, and a donor pointing into its own ring system above 0.8".
@@ -67,7 +69,7 @@ a threshold whose stated calibration is wrong is a threshold nobody can safely m
 
 ---
 
-## 3. A chelate cannot be joined — only judged
+## 3. A chelate cannot be joined — only judged · [#15](https://github.com/LT98/MolCluster/issues/15)
 
 `assembly.chelate_compatible` answers whether a donor pair can span two vertices, and
 `assembly.join` places **one** donor. There is no two-point join, so a bidentate ligand cannot
@@ -89,7 +91,7 @@ milestone.
 
 ---
 
-## 4. Re-perceiving an assembled complex loses every donor
+## 4. Re-perceiving an assembled complex loses every donor · [#16](https://github.com/LT98/MolCluster/issues/16)
 
 `sites.perception` treats a metal as an ordinary heavy neighbour, so a donor that is already
 coordinated is not perceived as a donor.
@@ -115,7 +117,7 @@ meaningless for assembled structures.
 
 ---
 
-## 5. Δ/Λ handedness rests on an unverified absolute convention
+## 5. Δ/Λ handedness rests on an unverified absolute convention · [#17](https://github.com/LT98/MolCluster/issues/17)
 
 `identity.isomers._chirality` assigns Δ to the right-handed propeller, from IUPAC's definition
 of Δ as the right-handed helix plus the geometric fact that a right-handed helix turns
@@ -132,7 +134,7 @@ as provisional, while trusting the discrimination.
 
 ---
 
-## 6. 16 of 39 stored structures have no site records
+## 6. 16 of 39 stored structures have no site records · [#18](https://github.com/LT98/MolCluster/issues/18)
 
 `data/registry.db`: 16 structures have no `site_catalog` rows and therefore `n_open_sites IS
 NULL`. They predate M4's second half.
@@ -143,7 +145,7 @@ means. Not a defect in the writer; a trap for readers.
 
 ---
 
-## 6b. The L3 energy window is unset, and the measurement for it is contaminated
+## 6b. The L3 energy window is unset, and the measurement for it is contaminated · [#19](https://github.com/LT98/MolCluster/issues/19)
 
 `identity.conformers.DEFAULT_ENERGY_WINDOW is None`. θ_geom next to it **is** calibrated
 (0.15 Å, from xTB-relaxed geometries — Kind-A max 0.0316, Kind-B min 0.6435, a 0.61 Å valley);
@@ -160,7 +162,7 @@ gating anything out (D18's rule). Re-measure after 6c is fixed.
 
 ---
 
-## 6c. The rigid-core definition treats a delocalised C–O as rotatable
+## 6c. The rigid-core definition treats a delocalised C–O as rotatable · [#20](https://github.com/LT98/MolCluster/issues/20)
 
 `identity.conformers.rotatable` reuses `sites.model`'s rule — single, acyclic, non-aromatic —
 so that "rigid" means one thing across the codebase. That rule is order-blind by design (D15
@@ -178,7 +180,7 @@ so it can fail to split two conformers and can never merge two that differ elsew
 
 ---
 
-## 7. The branch tree has more leaves than structures
+## 7. The branch tree has more leaves than structures · [#21](https://github.com/LT98/MolCluster/issues/21)
 
 The enumerator emits one leaf per branch and deliberately does not merge leaves that share an
 L1 — cis and trans share one too, and telling a symmetry duplicate from a real isomer needs L2
@@ -199,7 +201,7 @@ clustering has to do, and it grows with degree.
 
 ---
 
-## 8. `vacancy_sites` normalises by hand, differently
+## 8. `vacancy_sites` normalises by hand, differently · [#22](https://github.com/LT98/MolCluster/issues/22)
 
 `sites/model.py::vacancy_sites` divides by `max(norm, 1e-9)` where `geometry._linalg.unit`
 falls back to the z axis. Identical for any real input; different for a zero-length direction
