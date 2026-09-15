@@ -69,7 +69,7 @@ DEFAULT_THETA_GEOM = 0.15         # angstrom, rigid core + coordination sphere
 #: NOT calibrated, unlike theta_geom, and the reason is worth keeping next to it.  Over the
 #: same relaxed set the Kind-A ENERGY spread reached **16.6 kcal/mol** between samples whose
 #: cores agreed to 0.03 A — all of it motion OUTSIDE the core, because the rigid-core rule
-#: cuts a delocalised carboxylate C-O as if it were rotatable (`docs/ISSUES.md` 6c) and lets
+#: cuts a delocalised carboxylate C-O as if it were rotatable (`docs/BUGS.md` B9) and lets
 #: the whole carboxylate swing on a charged complex.  A window set from that data would bake
 #: the core-definition bug into a stored threshold.  `cluster(energy_window=...)` is built
 #: and tested; the number waits for the core fix.
@@ -87,7 +87,7 @@ def rotatable(g: TypedGraph, u: int, v: int) -> bool:
     Deliberately the same rule the pocket search uses, so "rigid" means one thing in the
     codebase.  It is order-blind (D15 keeps bond order out of identity), which means a
     delocalised carboxylate's C-O reads as rotatable when chemically it is not — see
-    `docs/ISSUES.md`. The consequence here is a core slightly smaller than it should be,
+    `docs/BUGS.md` B9. The consequence here is a core slightly smaller than it should be,
     which makes this test more permissive, never less.
     """
     import networkx as nx

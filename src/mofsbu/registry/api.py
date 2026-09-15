@@ -308,10 +308,17 @@ def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
 
     This is what makes a delete refusable with a reason rather than with a warning: the
     caller can show the other routes that would be severed.
+
+    `choice_vector_digest` and `atom_map_json` are in the projection because without them
+    two routes to one node come back looking identical apart from their id and note — and
+    "these are the same product reached two ways" is a claim a reader should be able to
+    check rather than take on trust. They are what makes the edges distinguishable, which
+    is the half of D2 that lives off the node.
     """
     out = []
     for row in reg.conn.execute(
-            "SELECT id, kind, intermediate, depth, note, created_at FROM reactions "
+            "SELECT id, kind, intermediate, depth, note, created_at, "
+            " choice_vector_digest, atom_map_json FROM reactions "
             "WHERE product_structure_id = ? ORDER BY id", (structure_id,)):
         item = dict(row)
         item["reagent_ids"] = [r[0] for r in reg.conn.execute(
