@@ -37,6 +37,7 @@ through.
 | `identity/keys.py::l3_conformer_id` | ✅ **landed (S6)** — `identity/conformers.py`; provenance-primary + clustering |
 | C2 — θ_geom | ✅ **called (S6)** — 0.15 Å, calibrated on xTB-relaxed geometries |
 | C2 — the energy window | open, deliberately: the measurement is contaminated by ISSUES 6c |
+| S7 registry wiring | ✅ **landed** — `assembly/persist.py`; all three exit gates pass |
 
 ---
 
@@ -486,17 +487,47 @@ D-number. A gate resolved only in someone's head is how the two documents drift 
 
 ---
 
-### S7 — registry wiring + the three headline validations · **M**
+### S7 — registry wiring + the three headline validations · **M** · ✅ **LANDED**
 
-The exit gates from `PLAN_implementation.md` §M5, as tests:
+**What shipped** — `assembly/persist.py` (`store_block`, `store_construction`), and
+`tests/test_m5_exit_gates.py` (8) proving the gates *after a round trip through SQLite*
+rather than in memory. Nothing in it writes to the database: every insert goes through
+`registry.api`, and this module is the orchestration that knows the order and supplies the
+three things assembly knows that the registry cannot derive.
 
-| # | Gate | Test shape |
+| # | Gate | Result |
 |---|---|---|
-| 1 | **One node, two routes** | build the same product in two orders → one `structures` row, two rows in `reactions` for it. `incoming_routes` already exists and `n_incoming_routes` is already a denormalised column, so this is an assertion, not new machinery. This is the D2 claim, tested. |
-| 2 | **cis/trans survive** | the near-degenerate anthrarufin–Cu pair stays two records through clustering, because they carry different choice vectors. The discriminator is *relevance*, not ΔE (D10/D11). |
-| 3 | **Replay** | rebuild from a stored `(choice_vector, seed)` and reproduce coordinates within tolerance. If this fails, stored conformers are frozen coordinates rather than regenerable objects, and M7's fidelity ladder has nothing to climb. |
+| 1 | **One node, two routes** | ✅ two build orders → **one** `structures` row, **two** `reactions` edges, `n_incoming_routes == 2`, two geometries under one identity |
+| 2 | **cis/trans survive** | ✅ one L1, two rows, different L2 tags; clustering keeps them apart at the calibrated θ_geom with identical energies and a wide-open window |
+| 3 | **Replay** | ✅ build → store → read the row back → rebuild from its `choice_vector_json` → coordinates match the stored `.xyz` to 1e-6, same digest |
+| — | Ambiguous spec refuses | ✅ `resolve_geometry(4)` raises and names both polyhedra |
 
-Plus the negative: `construct` on an ambiguous spec raises or branches rather than defaulting.
+**Three things `persist` supplies that the registry cannot derive.** The **L2 tag**, because
+`put_structure` has no coordinates at insert time (the structure row precedes its geometry) —
+which is why it has always taken `l2=`. The **sites, by inheritance**, because re-perceiving
+an assembled complex returns no donors at all (ISSUES 4 / #16) — the runner's `_record_sites`
+perceives because it builds from a molecule; this path must not. And the **provenance**: the
+blocks that went in, the atom map, the choice-vector digest, the depth.
+
+**A gap `incoming_routes` had.** It selected `id, kind, intermediate, depth, note,
+created_at` — so two routes to one node came back looking identical apart from their id and
+note, and "the same product reached two ways" was a claim a reader had to take on trust. It
+now projects `choice_vector_digest` and `atom_map_json` too, which is what makes the edges
+distinguishable and is the half of D2 that lives off the node.
+
+**A correction to this plan's own gate-2 wording.** The first version of the test asserted
+cis and trans survive θ_geom = 99 Å. They do not, and should not — two choice vectors whose
+geometries genuinely coincide are exactly the convergence case D11 asks clustering to
+reconcile, and 99 Å does not mean "near-degenerate", it means "every structure is one
+structure". D10's claim is about the **energy** gap: the discriminator is relevance, not ΔE.
+So the test now gives the pair identical energies and a wide-open window — if ΔE were doing
+the work that would merge them — and they stay apart because their cores are **1.9 Å**
+apart, 13× θ_geom.
+
+**One substitution, stated rather than hidden.** The plan names anthrarufin–Cu for gate 2;
+anthrarufin is bidentate and a chelate cannot be joined yet (ISSUES 3 / #15). The gate is met
+with Pt(OH₂)₂Cl₂ — monodentate, buildable, a genuine cis/trans pair — and the test says so in
+its docstring, with a note to re-run it against anthrarufin when #15 lands.
 
 ---
 
