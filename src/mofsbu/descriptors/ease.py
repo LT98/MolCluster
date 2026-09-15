@@ -45,8 +45,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from mofsbu._types import Fidelity, MethodSpec, MofsbuError
-from mofsbu.assembly.join import NotBuiltYet
+from mofsbu._types import Fidelity, MethodSpec, MofsbuError, NotBuiltYet
 from mofsbu.descriptors import tables
 from mofsbu.descriptors.tables import DonorDescriptor, MetalDescriptor
 from mofsbu.versions import ALGO_VERSIONS

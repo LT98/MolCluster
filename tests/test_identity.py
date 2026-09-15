@@ -53,7 +53,11 @@ def test_l1_does_not_separate_cis_from_trans():
     """
     a, b = fx.pt_ammine_dichloride("a"), fx.pt_ammine_dichloride("b")
     assert l1_graph_hash(a) == l1_graph_hash(b)
-    assert l2_isomer_tag(a) == l2_isomer_tag(b) == ""      # stub until M5
+    # Still `""` after M5/S5 built the tag, and now for a stated reason rather than an
+    # unwritten one: these fixtures are graphs with no coordinates, and the distinction L2
+    # draws is spatial.  `tests/test_isomers.py` builds the same pair WITH geometry and
+    # shows it splitting there.
+    assert l2_isomer_tag(a) == l2_isomer_tag(b) == ""
 
 
 # -- gate 4: per-centre labels (D12) -------------------------------------------

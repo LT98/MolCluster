@@ -42,6 +42,13 @@ from rdkit import Chem
 from mofsbu.geometry.distances import (
     BASE_MO, DEFAULT_BASE_MO, Distance, donor_elements, metal_donor_distance,
 )
+# Aliased to the spellings this module has always used, so the arithmetic below reads
+# exactly as it did when it was written and reviewed.  The definitions moved to
+# `_linalg`; nothing about what they compute did.
+from mofsbu.geometry._linalg import (
+    angle_between as _angle_between, axis_rotation as _axis_rotation, kabsch as _kabsch,
+    perpendicular as _perpendicular, rotation_between as _rotation_between, unit as _unit,
+)
 from mofsbu.geometry.embed import coordinates
 from mofsbu.geometry.qc import QCReport, clash_limit, qc
 from mofsbu.sites.frames import BindingMode, SiteFrame, site_frame, torsion_wells
@@ -101,62 +108,11 @@ def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray:
     return scale[:, None] * vecs
 
 
-def _unit(v: np.ndarray) -> np.ndarray:
-    n = float(np.linalg.norm(v))
-    return v / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
-
-
-def _perpendicular(v: np.ndarray) -> np.ndarray:
-    trial = np.array([1.0, 0.0, 0.0]) if abs(v[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    return _unit(np.cross(v, trial))
-
-
-def _rotation_between(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Rotation matrix taking unit vector `a` onto unit vector `b`."""
-    a, b = _unit(a), _unit(b)
-    v = np.cross(a, b)
-    c = float(np.dot(a, b))
-    if float(np.linalg.norm(v)) < 1e-9:
-        if c > 0:
-            return np.eye(3)
-        trial = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-        axis = _unit(np.cross(a, trial))
-        return _axis_rotation(axis, np.pi)
-    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-    return np.eye(3) + vx + vx @ vx * (1 / (1 + c))
-
-
-def _axis_rotation(axis: np.ndarray, theta: float) -> np.ndarray:
-    axis = _unit(axis)
-    x, y, z = axis
-    c, s = np.cos(theta), np.sin(theta)
-    return np.array([
-        [c + x * x * (1 - c), x * y * (1 - c) - z * s, x * z * (1 - c) + y * s],
-        [y * x * (1 - c) + z * s, c + y * y * (1 - c), y * z * (1 - c) - x * s],
-        [z * x * (1 - c) - y * s, z * y * (1 - c) + x * s, c + z * z * (1 - c)],
-    ])
-
-
-def _kabsch(p: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Rotation + translation least-squares fitting point set `p` onto `q`."""
-    cp, cq = p.mean(axis=0), q.mean(axis=0)
-    h = (p - cp).T @ (q - cq)
-    u, _s, vt = np.linalg.svd(h)
-    d = np.sign(np.linalg.det(vt.T @ u.T))
-    rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
-    return rot, cq - rot @ cp
-
-
 # A five-membered chelate ring (M-D-C-C-D) subtends roughly this at the metal.  A
 # polydentate ligand handed two trans vertices cannot close its ring and folds into
 # itself, which is a placement bug that shows up only as a pile of clashes downstream.
 IDEAL_BITE_ANGLE = 82.0
 BITE_ANGLE_RANGE = (55.0, 115.0)
-
-
-def _angle_between(a: np.ndarray, b: np.ndarray) -> float:
-    cos = float(np.dot(_unit(a), _unit(b)))
-    return float(np.degrees(np.arccos(max(-1.0, min(1.0, cos)))))
 
 
 # The orientation grids.  These numbers are part of the stored recipe: an index only

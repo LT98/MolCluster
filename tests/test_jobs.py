@@ -126,17 +126,19 @@ def test_degree_above_one_refuses_rather_than_doing_something_smaller(reg):
         plan(reg, catechol_spec(degree=2))
 
 
-def test_the_assembly_interfaces_exist_and_all_raise():
-    """Signatures are settled so callers can be written; bodies are scheduled work."""
-    from mofsbu.assembly.join import NotBuiltYet, compatible, grow, join
+def test_the_assembly_interfaces_that_are_still_stubs_all_raise():
+    """Signatures are settled so callers can be written; bodies are scheduled work.
+
+    The list shortened as M5 landed — `compatible` left at S2, `join` at S3, `grow` at S4,
+    each covered by its own file (`test_compatible.py`, `test_join.py`,
+    `test_construct.py`). `place_multicentre` is what is left, and the point of the test is
+    unchanged: a scheduled body raises rather than returning a plausible-looking value.
+    """
+    from mofsbu._types import NotBuiltYet
     from mofsbu.geometry.placer import place_multicentre
 
-    for call in (lambda: compatible(None, None),
-                 lambda: join(None, None, None, None),
-                 lambda: grow(None, (), degree=2),
-                 lambda: place_multicentre([1, 2], [], [])):
-        with pytest.raises(NotBuiltYet):
-            call()
+    with pytest.raises(NotBuiltYet):
+        place_multicentre([1, 2], [], [])
 
 
 # ── end to end ───────────────────────────────────────────────────────────────

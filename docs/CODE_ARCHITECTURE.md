@@ -42,8 +42,8 @@ charge, spin — travels with it in a `methods` row.
 | `graph/from_mol.py` | RDKit mol → typed graph. The molecular input path | ✅ |
 | **identity/** | | |
 | `identity/keys.py` | L0 composition, L1 certificate hash, `block_id` | ✅ |
-| ↳ `l2_isomer_tag` | cis/trans, fac/mer, Δ/Λ | 🔴 **stub → M5** |
-| ↳ `l3_conformer_id` | choice-vector label + geometric verifier | 🔴 **stub → M5** |
+| ↳ `l2_isomer_tag` | cis/trans, fac/mer, Δ/Λ | ✅ *(`identity/isomers.py`; needs a geometry, so `""` without one)* |
+| ↳ `l3_conformer_id` | choice-vector label + geometric verifier | ✅ *(`identity/conformers.py`; θ_geom = 0.15 Å calibrated, energy window open)* |
 | **sites/** | | |
 | `sites/perception.py` | Which atoms can bind a metal, and what type of donor they are | ✅ |
 | `sites/frames.py` | **A site is a FRAME, not a vector** (D13). `live_dof`, `binding_modes`, `torsion_wells` | ✅ |
@@ -61,14 +61,15 @@ charge, spin — travels with it in a `methods` row.
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
 | `geometry/distances.py` | M–L target distance as a property of the *pair* | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
+| `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
 | **energy/** | | |
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
 | **assembly/** | | |
-| `assembly/join.py` | `BuildingBlock` + `open_sites` ✅; `compatible`/`join`/`grow` | 🔴 **→ M5/M6** |
-| `assembly/choice.py` | `ChoiceVector`, digest, replay | 🔴 **not written → M5** |
-| `assembly/construct.py` | deterministic construct + branch-tree enumerator | 🔴 **not written → M5** |
+| `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `grow` | ✅ *(chelate JOIN still missing — ISSUES 3)* |
+| `assembly/choice.py` | `ChoiceVector`, canonical form, `cv1:` digest, JSON round trip | ✅ |
+| `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
 | **registry/** | | |
 | `registry/api.py` | **The only write surface** (ground rule 1) | ✅ |
 | `registry/db.py` | Connection + additive migration (schema file is not a migration) | ✅ |
@@ -146,7 +147,8 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
 | **D19** | Re-derive what is only an **annotation** (`site_catalog`); **version** what is an address (identity). A stored identity keeps the answer its own recipe version gave |
 
-**Open checkpoints:** C2 (θ_geom + energy window — M5), C6 (barrier proxy — M8),
+**Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
+geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),
 C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→curated tables.*
 
 ---
