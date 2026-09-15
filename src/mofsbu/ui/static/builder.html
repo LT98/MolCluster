@@ -1,19 +1,20 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>mofsbu — build spec</title>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
 <style>
+  /* --accent-soft is what the shared tab strip fills an active or hovered tab with;
+     the other two pages already define it. */
   :root{--bg:#fbfbfa;--panel:#fff;--ink:#1c1b19;--muted:#6b6862;--line:#e2e0dc;
-        --accent:#3a6ea5;--warn:#8a5a00;--warnbg:#fff6e0;--ok:#2f6b3a;--bad:#a33}
+        --accent:#3a6ea5;--accent-soft:#e9f0f7;--warn:#8a5a00;--warnbg:#fff6e0;
+        --ok:#2f6b3a;--bad:#a33}
   @media (prefers-color-scheme:dark){:root{--bg:#16181c;--panel:#1d2025;--ink:#e6e4e1;
-        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--warn:#e0b062;--warnbg:#2b2313;
-        --ok:#7fc48d;--bad:#e08080}}
+        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--accent-soft:#243444;
+        --warn:#e0b062;--warnbg:#2b2313;--ok:#7fc48d;--bad:#e08080}}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
-         align-items:baseline;gap:14px}
-  header h1{font-size:15px;margin:0;font-weight:600}
-  header a{color:var(--accent);font-size:12px}
   .wrap{display:grid;grid-template-columns:minmax(340px,1fr) minmax(320px,1fr) minmax(300px,0.9fr);
         gap:16px;padding:16px;align-items:start}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -51,11 +52,12 @@
   legend{font-size:11px;color:var(--muted);padding:0 4px}
 </style>
 
-<header>
-  <h1>mofsbu · build spec</h1>
-  <span class="muted">writes a spec and queues a run — it never writes structures</span>
-  <a href="/runs" style="margin-left:auto">run inspector →</a>
-  <a href="/">registry viewer →</a>
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right">
+    <h1>build spec — writes a spec and queues a run; it never writes structures</h1>
+  </div>
 </header>
 
 <div class="wrap">
@@ -197,8 +199,7 @@ share a coordination sphere.">
 
 <script>
 const $ = s => document.querySelector(s);
-const state = {molecules: [], metals: [], caps: null, current: null,
-               compute: null, databases: []};
+const state = {molecules: [], metals: [], caps: null, current: null, compute: null};
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -276,47 +277,23 @@ async function applyCompute() {
 }
 
 // ── which database a run writes to ──────────────────────────────────────────
-async function loadDatabases() {
-  let body;
-  try { body = await api('/api/databases'); }
-  catch (e) { $('#dbNote').textContent = 'could not list databases'; return; }
-  state.databases = body.databases;
-  // Two folders can hold a `registry.db`, and the launch one may sit outside the data
-  // root entirely, so the option VALUE is the full path and the label disambiguates
-  // only when it has to. A dropdown with two identical entries is not a choice.
-  const counts = {};
-  body.databases.forEach(d => counts[d.name] = (counts[d.name] || 0) + 1);
-  $('#database').innerHTML = body.databases.map(d => {
-    const size = d.error ? 'unreadable'
-      : d.exists ? `${d.n_structures} structures · ${d.n_runs} runs`
-      : 'empty (not created yet)';
-    const where = counts[d.name] > 1 ? ` [${d.folder}]` : '';
-    return `<option value="${d.path}" title="${d.path}" ${d.active ? 'selected' : ''}>`
-         + `${d.name}${where} — ${size}</option>`;
-  }).join('');
-  const active = body.databases.find(d => d.active) || {};
-  $('#dbNote').textContent = `runs write to ${active.path || '—'} · the viewer reads the `
-    + `same one (read-only) · new ones are created in ${body.data_root}`;
-  $('#database').onchange = async () => {
-    try {
-      await api('/api/database/select', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({path: $('#database').value})});
-      const to = $('#database').value;
-      await loadDatabases();
-      pollRuns();
-      $('#submitMsg').textContent = `switched to ${to}`;
-    } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
-  };
+// The listing, the labelling and the switch itself live in static/chrome.js, because
+// the registry viewer offers the same choice and the two must not drift apart.
+function loadDatabases() {
+  return mofsbuDb.mount({
+    select: $('#database'), note: $('#dbNote'),
+    noteText: (active, body) => `runs write to ${active.path || '—'} · the viewer reads `
+      + `the same one (read-only) · new ones are created in ${body.data_root}`,
+    onSwitch: (to) => { pollRuns(); $('#submitMsg').textContent = `switched to ${to}`; },
+    onError: (e) => { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; },
+  });
 }
 
 $('#newDb').onclick = async () => {
   const name = prompt('Name for the new registry (letters, digits, - and _):');
   if (!name) return;
   try {
-    const r = await api('/api/databases', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name})});
+    const r = await mofsbuDb.create(name);
     await loadDatabases();
     pollRuns();
     $('#submitMsg').textContent = r.note;
