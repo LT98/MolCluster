@@ -184,6 +184,25 @@ def _frame_of(site: Site) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
             _unit(np.asarray(frame.get("ref", [0.0, 0.0, 1.0]), dtype=float)))
 
 
+def _triad(axis: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """An orthonormal frame as a matrix whose COLUMNS are its axes.
+
+    `ref` is re-orthogonalised against `axis` rather than trusted: a stored frame is
+    perpendicular by construction, but it has been through a transform and a JSON round
+    trip, and a `ref` that has drifted a degree off would tilt every join by a degree.
+    """
+    a = _unit(axis)
+    r = ref - np.dot(ref, a) * a
+    if float(np.linalg.norm(r)) < 1e-9:
+        r = np.cross(a, [1.0, 0.0, 0.0] if abs(a[0]) < 0.9 else [0.0, 1.0, 0.0])
+    r = _unit(r)
+    return np.column_stack([a, r, np.cross(a, r)])
+
+
+def _rotate_about(v: np.ndarray, axis: np.ndarray, theta: float) -> np.ndarray:
+    return _axis_rotation(axis, theta) @ v
+
+
 def _metal_symbol(partner: Any | None) -> str | None:
     """The partner a join bonds to, as an element symbol, however it was handed over."""
     if partner is None:
@@ -584,9 +603,18 @@ def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_sit
             f"stored frames (D13) and applied to real coordinates; pass "
             f"with_geometry=False to build the graph-level product instead.")
 
-    o_d, ax_d, _ = donor_frame
-    o_v, ax_v, _ = vacancy_frame
-    rot = _axis_rotation(ax_v, math.radians(well_deg)) @ _rotation_between(ax_d, -ax_v)
+    o_d, ax_d, ref_d = donor_frame
+    o_v, ax_v, ref_v = vacancy_frame
+    # FRAME onto frame, not axis onto axis.  Matching axes alone leaves the roll about the
+    # new bond undetermined, and `rotation_between` then settles it with its minimal
+    # rotation — which depends on how the ligand happened to be oriented in its own
+    # coordinates.  Re-embedding a ligand rotates it rigidly, so the SAME choice vector
+    # produced products whose rings sat at different azimuths: measured at 2.3 A per ring
+    # atom, 1.56 A core RMSD, for a ligand whose own geometry was bit-identical between
+    # the two runs.  That is precisely what D13 says a lone outward vector cannot do and a
+    # frame can, and this function was using the vector half of the frame it was handed.
+    rot = _triad(-ax_v, _rotate_about(ref_v, ax_v, math.radians(well_deg))) @ _triad(
+        ax_d, ref_d).T
     target = o_v + d_ml * ax_v
     moved = (rot @ (coords - o_d).T).T + target
     sites = tuple(replace(s, frame=_transform_frame(s.frame, rot, o_d, target))

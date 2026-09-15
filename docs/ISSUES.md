@@ -143,7 +143,43 @@ means. Not a defect in the writer; a trap for readers.
 
 ---
 
-## 7. L3 clustering has nothing to collapse duplicates with yet
+## 6b. θ_geom is a placeholder, not a calibration
+
+`identity.conformers.DEFAULT_THETA_GEOM = 0.25 Å` is an unset number wearing a default. C2
+could not be called against the M5 fixture set because the Kind-A (stochastic duplicate)
+population has **identically zero** spread there — a join is a deterministic function of its
+choice vector and absorbs the ligand's embedding noise entirely, so there is no peak for a
+threshold to sit above. Measured: Kind A n=105, max 0.0000 Å; Kind B n=756, median 0.7952 Å,
+in four discrete spikes rather than a distribution.
+
+Mitigated rather than hidden: `cluster` takes `theta_geom` as an argument, no test depends on
+the default, and the docstring says what it is. The fixture set that can set it is M7's
+relaxed one, where two samples of one choice vector walk to *almost* the same minimum.
+
+The energy window is in the same position — it gates "a bad geometry mistaken for a real
+minimum" and every RAW construct is a non-minimum. Mechanism built and tested; number absent.
+
+---
+
+## 6c. The rigid-core definition treats a delocalised C–O as rotatable
+
+`identity.conformers.rotatable` reuses `sites.model`'s rule — single, acyclic, non-aromatic —
+so that "rigid" means one thing across the codebase. That rule is order-blind by design (D15
+keeps bond order out of identity), so it cannot tell a carboxylate's delocalised C–O from an
+ether's genuinely rotatable one, and cuts both.
+
+Consequence: the rigid core of an acetate complex stops at the coordinating oxygen and
+excludes the carboxylate carbon, so an acetate torsion registers as **exactly zero** core
+RMSD. That happens to agree with §4.2's worked examples (a non-coordinating carboxyl torsion
+is explicitly a *trivial* conformer that should not spawn L3), so the answer is right — but
+it is right by accident, and the same cut would hide a real motion in an amide or an ester.
+
+The error direction is safe: a smaller core makes the comparison more permissive, never less,
+so it can fail to split two conformers and can never merge two that differ elsewhere.
+
+---
+
+## 7. The branch tree has more leaves than structures
 
 The enumerator emits one leaf per branch and deliberately does not merge leaves that share an
 L1 — cis and trans share one too, and telling a symmetry duplicate from a real isomer needs L2

@@ -393,10 +393,61 @@ its own change, not a drive-by inside S5.
 
 ---
 
-### S6 — C2, then `l3_conformer_id` · **L** — *the decision gate*
+### S6 — C2, then `l3_conformer_id` · **L** · ⚠️ **L3 LANDED; C2 NOT CALLED — and that is the result**
 
-C2 is called here and nowhere earlier, because this is the first milestone that manufactures
-conformers. **Calibrate, do not guess** — the plan is explicit about the procedure:
+**What shipped** — `identity/conformers.py`: `l3_conformer_id` (provenance-primary),
+`core_atoms` / `core_rmsd` (rigid core + coordination sphere), and `cluster`, which does the
+three jobs D11 assigns geometry — collapse Kind-A duplicates, reconcile divergence, reconcile
+convergence — and never names anything. Tests: `tests/test_conformers.py` (16).
+
+**C2 is not called, and the reason is the finding.** The plan said to put θ_geom in the
+valley between the stochastic-duplicate peak and the real-branch peak, and to say so if there
+is no valley. There is no valley, because after S3's alignment was fixed **there is no
+stochastic-duplicate peak at all**:
+
+| population | n | min | median | max |
+|---|---|---|---|---|
+| Kind A — same choice vector, different embedding seed | 105 | 0.0000 | **0.0000** | **0.0000** |
+| Kind B — different choice vector | 756 | 0.0000 | 0.7952 | 1.1646 |
+
+A join is a deterministic function of its choice vector and absorbs the ligand's embedding
+noise completely, so at RAW fidelity Kind-A spread is **identically zero** (6e-06 Å of the
+ligand's own MMFF convergence, five orders of magnitude below anything else). A θ_geom
+calibrated against that distribution would be calibrated against no noise. Kind B is not a
+peak either — it is four discrete spikes at 0.00 / 0.71 / 0.80 / 1.16 Å, because a RAW
+construct only ever places ligands on idealised polyhedron vertices.
+
+**So the constant ships as a named placeholder wearing its provenance.**
+`DEFAULT_THETA_GEOM = 0.25` is used only when a caller supplies nothing, and `cluster` takes
+the value as an argument so the calibration can arrive without the module changing. No test
+depends on the default. The fixture set that *can* set it is M7's relaxed one — relaxation is
+what re-introduces Kind-A noise, by letting two samples of one choice vector walk to almost
+the same minimum.
+
+**The energy window is not set either, for a related reason:** it gates clustering against
+"a bad geometry mistaken for a real minimum", and *every* RAW construct is a non-minimum. The
+mechanism is built and tested (`energy_window=` on `cluster`, with a missing energy never
+gating anything out — D18's rule); the number belongs with θ_geom.
+
+---
+
+**The calibration paid for itself by finding a defect in S3 instead.** The first run put
+Kind A at a **median of 1.20 Å and a max of 1.57 Å** — wider than most of Kind B, which would
+have made the whole exercise meaningless. Diagnosis: for one product pair the pyridine ring
+carbons sat **2.3 Å apart** while its coordinating N moved 0.15 Å, and the free ligand's own
+geometry was bit-identical between the two runs. The ligand was bound in the right place and
+rotated about the M–N axis.
+
+Cause: `_place_donor_block` computed `rotation_between(donor_axis, -vacancy_axis)` and
+**discarded the frames' `ref` vectors**. Matching axes leaves the roll undetermined, and
+`rotation_between` settles it with its minimal rotation — which depends on how the ligand
+happened to be oriented in its own coordinate file. Re-embedding rotates a ligand rigidly, so
+the same choice vector gave different rolls. That is exactly what `sites/frames.py` opens by
+saying a lone outward vector cannot do, and the join was using the vector half of the frame
+it was handed. Now it maps frame onto frame through an orthonormal triad, with the torsion
+well applied to the vacancy's own `ref`. Kind-A spread: **1.56 Å → 0.0000 Å**.
+
+The original procedure, for the record:
 
 1. Build the M5 fixture set (S3/S4 produce it as a by-product).
 2. Plot the pairwise RMSD distribution over **rigid core + coordination sphere only** — not
