@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"mofsbu  db={db}  ({why})")
     if others:
         print("  also available: " + ", ".join(o.name for o in others)
-              + "   — choose one on /builder, or pass --db")
+              + "   — choose one on the viewer or the builder, or pass --db")
     if not db.exists():
         print("  this file does not exist yet; open /builder and submit a run to create it")
     print(f"  store={store}")

@@ -67,8 +67,9 @@ give you one. The environment is found by trying the name in `environment.yml`, 
 so an environment created under a different name still works. Override it directly if you
 prefer: `MOFSBU_PYTHON=/path/to/envs/NAME/bin/python ./launch/mofsbu.sh`.
 
-Device and database are also changeable **inside the page** (`/builder`), so neither one
-needs a restart or a flag. See "Choosing hardware and database" below.
+Device and database are also changeable **inside the page** — the device on `/builder`, the
+database on either `/builder` or the viewer — so neither one needs a restart or a flag. See
+"Choosing hardware and database" below.
 
 ## Running things (development)
 
@@ -123,19 +124,21 @@ panel is rebuilt, and open sections are restored by task id. The steady state is
 every 15 s. The server defaults to `--log-level warning`; pass `--log-level info` to get access
 lines back.
 
-## Choosing hardware and database (`/builder`)
+## Choosing hardware and database
 
-* **Device.** A selector lists what this machine actually has (`cpu`, plus each visible CUDA
+* **Device** (`/builder`). A selector lists what this machine actually has (`cpu`, plus each visible CUDA
   device by name, `mps` where applicable) and what is currently declared. It stays a
   *declaration*: enumerating the GPUs and letting a person choose is not detection, and nothing
   ever selects CUDA because a card is present. The chosen device is written into the run row,
   so a stored run still says which hardware produced it. It applies process-wide, so two runs
   going at once share one declaration.
-* **Database.** A dropdown lists every registry under the data root **with its row count** —
-  "which one is my real one" is the actual question, and two plausible filenames do not answer
-  it. "new…" creates an empty one. Switching moves the viewer, the builder and the run inspector
-  together. The viewer stays read-only across a switch; only paths the server already listed can
-  be selected.
+* **Database** (the viewer, or `/builder`). A dropdown lists every registry under the data root
+  **with its row count** — "which one is my real one" is the actual question, and two plausible
+  filenames do not answer it. Both pages offer the same choice because the registry belongs to
+  the server, not to a page; "new…" creates an empty one and is on `/builder` only. Switching
+  moves the viewer, the builder and the run inspector together, and the viewer reloads in place
+  rather than needing a refresh. The viewer stays read-only across a switch; only paths the
+  server already listed can be selected.
 
 ## Re-running and hiding one entry
 
