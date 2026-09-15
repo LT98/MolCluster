@@ -34,8 +34,9 @@ through.
 | `assembly/join.py::join` | ✅ **landed (S3)** — frame alignment, atom maps, site inheritance, choice vector |
 | `assembly/join.py::grow` | ✅ **landed (S4)** — a thin front on `enumerate_constructions` |
 | `identity/keys.py::l2_isomer_tag` | ✅ **landed (S5)** — `identity/isomers.py`, version `"iso1"`; builder wiring deferred |
-| `identity/keys.py::l3_conformer_id` | returns `""`; `ALGO_VERSIONS["l3_conformer_id"] == "0-stub"` |
-| C2 — θ_geom and the energy window | open; no numbers anywhere in the tree |
+| `identity/keys.py::l3_conformer_id` | ✅ **landed (S6)** — `identity/conformers.py`; provenance-primary + clustering |
+| C2 — θ_geom | ✅ **called (S6)** — 0.15 Å, calibrated on xTB-relaxed geometries |
+| C2 — the energy window | open, deliberately: the measurement is contaminated by ISSUES 6c |
 
 ---
 
@@ -393,41 +394,56 @@ its own change, not a drive-by inside S5.
 
 ---
 
-### S6 — C2, then `l3_conformer_id` · **L** · ⚠️ **L3 LANDED; C2 NOT CALLED — and that is the result**
+### S6 — C2, then `l3_conformer_id` · **L** · ✅ **LANDED — C2 called on θ_geom, energy window deliberately open**
 
 **What shipped** — `identity/conformers.py`: `l3_conformer_id` (provenance-primary),
 `core_atoms` / `core_rmsd` (rigid core + coordination sphere), and `cluster`, which does the
 three jobs D11 assigns geometry — collapse Kind-A duplicates, reconcile divergence, reconcile
 convergence — and never names anything. Tests: `tests/test_conformers.py` (16).
 
-**C2 is not called, and the reason is the finding.** The plan said to put θ_geom in the
-valley between the stochastic-duplicate peak and the real-branch peak, and to say so if there
-is no valley. There is no valley, because after S3's alignment was fixed **there is no
+**RAW constructs could not set θ_geom, and that is itself the first result.** The plan said
+to put the threshold in the valley between the stochastic-duplicate peak and the real-branch
+peak, and to say so if there is no valley. At RAW there is no valley because **there is no
 stochastic-duplicate peak at all**:
 
-| population | n | min | median | max |
+| population (RAW) | n | min | median | max |
 |---|---|---|---|---|
 | Kind A — same choice vector, different embedding seed | 105 | 0.0000 | **0.0000** | **0.0000** |
 | Kind B — different choice vector | 756 | 0.0000 | 0.7952 | 1.1646 |
 
 A join is a deterministic function of its choice vector and absorbs the ligand's embedding
-noise completely, so at RAW fidelity Kind-A spread is **identically zero** (6e-06 Å of the
-ligand's own MMFF convergence, five orders of magnitude below anything else). A θ_geom
-calibrated against that distribution would be calibrated against no noise. Kind B is not a
-peak either — it is four discrete spikes at 0.00 / 0.71 / 0.80 / 1.16 Å, because a RAW
-construct only ever places ligands on idealised polyhedron vertices.
+noise completely, so Kind-A spread is identically zero (6e-06 Å of the ligand's own MMFF
+convergence). A threshold calibrated against that is calibrated against no noise. Kind B is
+not a peak either — four discrete spikes, because a RAW construct only ever places ligands
+on idealised polyhedron vertices.
 
-**So the constant ships as a named placeholder wearing its provenance.**
-`DEFAULT_THETA_GEOM = 0.25` is used only when a caller supplies nothing, and `cluster` takes
-the value as an argument so the calibration can arrive without the module changing. No test
-depends on the default. The fixture set that *can* set it is M7's relaxed one — relaxation is
-what re-introduces Kind-A noise, by letting two samples of one choice vector walk to almost
-the same minimum.
+**Relaxation re-introduces the noise, and then the valley is enormous.** 12 structures over
+4 choice vectors × 3 embedding seeds, GFN2-xTB, all converged:
 
-**The energy window is not set either, for a related reason:** it gates clustering against
-"a bad geometry mistaken for a real minimum", and *every* RAW construct is a non-minimum. The
-mechanism is built and tested (`energy_window=` on `cluster`, with a missing energy never
-gating anything out — D18's rule); the number belongs with θ_geom.
+| population (xTB-relaxed) | n | min | median | max |
+|---|---|---|---|---|
+| Kind A | 12 | 0.0000 | 0.0000 | **0.0316** |
+| Kind B | 54 | **0.6435** | 0.8320 | 1.1871 |
+
+**Gap: 0.61 Å**, with nothing whatsoever in between — 9 of the 12 Kind-A pairs are at exactly
+zero, and the Kind-B floor is 20× the Kind-A ceiling.
+
+**C2, half called: θ_geom = 0.15 Å.** Placed at the geometric mean of the two bounds, which
+puts the same multiplicative margin on each side — **4.7× above** the widest duplicate,
+**4.3× below** the closest real branch. Geometric rather than arithmetic because these are
+ratios of distances; an arithmetic midpoint would sit 20× above one population and 1.5× below
+the other. Both bounds ship as named constants beside it (`CALIBRATION_KIND_A_MAX`,
+`CALIBRATION_KIND_B_MIN`) and a test asserts the threshold stays between them with margin on
+both sides, so the number cannot drift away from the data that set it.
+
+**The energy window is deliberately NOT set, and the reason is a second finding.** Over the
+same relaxed set the Kind-A *energy* spread reached **16.6 kcal/mol** between samples whose
+cores agreed to 0.03 Å. All of that motion is outside the core — because the rigid-core rule
+cuts a delocalised carboxylate C–O as if it were rotatable (ISSUES 6c), letting the whole
+carboxylate swing on a charged complex. A window set from that data would bake the
+core-definition defect into a stored threshold. `DEFAULT_ENERGY_WINDOW is None`, the
+mechanism is built and tested (a missing energy never gates anything out — D18's rule), and
+the number waits for the core fix.
 
 ---
 

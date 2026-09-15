@@ -5,9 +5,8 @@ decides identity, and geometry is allowed to collapse duplicates and reconcile
 divergence/convergence — never to name anything. A clustering pass that ran first could
 merge two branches a builder deliberately made, which is the mistake D11 exists to prevent.
 
-`theta_geom` is passed explicitly everywhere below. It is NOT calibrated (see the work
-plan), so no test here depends on its default value — they set the number they need and say
-what it is separating.
+`theta_geom` is passed explicitly in every clustering test below, so none of them depends on
+the default. The default's own calibration is guarded separately, at the bottom.
 """
 from __future__ import annotations
 
@@ -19,7 +18,8 @@ from mofsbu.assembly.join import join
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph.from_mol import mol_from_smiles
 from mofsbu.identity.conformers import (
-    Conformer, cluster, core_atoms, core_rmsd, l3_conformer_id)
+    CALIBRATION_KIND_A_MAX, CALIBRATION_KIND_B_MIN, DEFAULT_ENERGY_WINDOW,
+    DEFAULT_THETA_GEOM, Conformer, cluster, core_atoms, core_rmsd, l3_conformer_id)
 from mofsbu.identity.keys import l1_graph_hash
 from mofsbu.identity.keys import l3_conformer_id as key_l3
 
@@ -193,3 +193,30 @@ def test_candidates_without_geometry_are_grouped_by_provenance_alone(built):
     clusters = cluster(group, theta_geom=0.1)
     assert sorted(c.size for c in clusters) == [1, 2]
     assert all(c.merged_by == "choice-vector" for c in clusters)
+
+
+# ── C2: the threshold's calibration, guarded ─────────────────────────────────
+
+def test_theta_geom_sits_in_the_valley_it_was_calibrated_from():
+    """The C2 call, pinned so it cannot drift away from the data that set it.
+
+    Not a re-measurement — that needs 12 xTB relaxations and lives in the work plan. This
+    asserts the number stays consistent with the populations it was placed between, so
+    editing it without revisiting the calibration fails here rather than silently changing
+    what "the same conformer" means.
+    """
+    assert CALIBRATION_KIND_A_MAX < DEFAULT_THETA_GEOM < CALIBRATION_KIND_B_MIN
+    above = DEFAULT_THETA_GEOM / CALIBRATION_KIND_A_MAX
+    below = CALIBRATION_KIND_B_MIN / DEFAULT_THETA_GEOM
+    assert above > 3.0 and below > 3.0            # margin on BOTH sides, not just one
+    assert abs(above - below) < 1.0               # ...and roughly balanced: a geometric mean
+
+
+def test_the_energy_window_is_deliberately_unset():
+    """Half of C2 is called and half is not, and the code says which is which.
+
+    A default of 0.0 would silently reject every candidate; a plausible-looking number would
+    bake in the rigid-core defect that produced the 16.6 kcal/mol Kind-A spread it would
+    have been calibrated from.
+    """
+    assert DEFAULT_ENERGY_WINDOW is None

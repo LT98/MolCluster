@@ -143,21 +143,20 @@ means. Not a defect in the writer; a trap for readers.
 
 ---
 
-## 6b. θ_geom is a placeholder, not a calibration
+## 6b. The L3 energy window is unset, and the measurement for it is contaminated
 
-`identity.conformers.DEFAULT_THETA_GEOM = 0.25 Å` is an unset number wearing a default. C2
-could not be called against the M5 fixture set because the Kind-A (stochastic duplicate)
-population has **identically zero** spread there — a join is a deterministic function of its
-choice vector and absorbs the ligand's embedding noise entirely, so there is no peak for a
-threshold to sit above. Measured: Kind A n=105, max 0.0000 Å; Kind B n=756, median 0.7952 Å,
-in four discrete spikes rather than a distribution.
+`identity.conformers.DEFAULT_ENERGY_WINDOW is None`. θ_geom next to it **is** calibrated
+(0.15 Å, from xTB-relaxed geometries — Kind-A max 0.0316, Kind-B min 0.6435, a 0.61 Å valley);
+the window is not, and the reason is issue 6c below rather than missing data.
 
-Mitigated rather than hidden: `cluster` takes `theta_geom` as an argument, no test depends on
-the default, and the docstring says what it is. The fixture set that can set it is M7's
-relaxed one, where two samples of one choice vector walk to *almost* the same minimum.
+Over the same 12 relaxed structures the Kind-A *energy* spread reached **16.6 kcal/mol**
+between samples whose rigid cores agreed to 0.03 Å. All of that motion is outside the core,
+because the rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable and
+lets the whole carboxylate swing on a charged complex. A window set from those numbers would
+bake the core-definition defect into a stored threshold.
 
-The energy window is in the same position — it gates "a bad geometry mistaken for a real
-minimum" and every RAW construct is a non-minimum. Mechanism built and tested; number absent.
+The mechanism is built and tested — `cluster(energy_window=...)`, with a missing energy never
+gating anything out (D18's rule). Re-measure after 6c is fixed.
 
 ---
 

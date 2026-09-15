@@ -17,15 +17,13 @@ clustering only ever looks at what survives it.  Running the clustering first wo
 threshold decide identity, which is the mistake D11 was written to prevent, and it is also
 the declared escape hatch for the conformer-explosion risk.
 
-**On theta_geom.**  The threshold is a named constant here and its value is NOT yet
-calibrated — see `docs/WORKPLAN_M5.md` for the measurement and why.  The short version:
-over the M5 fixture set at RAW fidelity the Kind-A population has *exactly zero* spread,
-because a join is a deterministic function of its choice vector and absorbs the ligand's
-embedding noise entirely.  There is no stochastic-duplicate peak to put a threshold above,
-so a number chosen now would be calibrated against a distribution with no noise in it.
-`DEFAULT_THETA_GEOM` is therefore a placeholder wearing its provenance: it is used only
-where a caller asks for clustering and does not supply one, and `cluster` takes the value
-as an argument precisely so the calibration can arrive without this module changing.
+**On theta_geom (C2).**  Calibrated, and the calibration is recorded next to the constant
+rather than in someone's head.  It could not be done on RAW constructs: a join is a
+deterministic function of its choice vector, so their Kind-A spread is *identically zero*
+and there is no peak for a threshold to sit above.  Relaxed geometries have one, and the
+two populations come out 0.61 A apart — a valley wide enough that the threshold is not
+delicately placed.  The energy window is a different story and is deliberately still unset;
+see `DEFAULT_ENERGY_WINDOW`.
 """
 from __future__ import annotations
 
@@ -39,12 +37,43 @@ from mofsbu.graph._types import EdgeType, TypedGraph
 from mofsbu.graph.canon import canonical_index_map
 from mofsbu.geometry._linalg import kabsch
 
-#: Placeholder, not a calibration.  Two geometries closer than this over the rigid core are
-#: the same conformer.  See the module docstring: the M5 fixture set cannot set this number
-#: because its Kind-A spread is identically zero, and the fixture set that can is M7's
-#: relaxed one.  Passed explicitly wherever it matters so the eventual value lands in one
-#: place and nothing has to be rewritten to accept it.
-DEFAULT_THETA_GEOM = 0.25        # angstrom, rigid core + coordination sphere
+# ── C2, called ───────────────────────────────────────────────────────────────
+#
+# Measured, not chosen: 12 xTB-relaxed structures over 4 choice vectors x 3 embedding
+# seeds, pairwise core-RMSD, `docs/WORKPLAN_M5.md` S6 for the full table.  RAW constructs
+# could not set this number — a join is deterministic, so their Kind-A spread is
+# identically zero and there is no peak to sit above.  Relaxation is what re-introduces
+# it: two samples of one choice vector walk to almost, not exactly, one minimum.
+
+#: Widest separation between two RELAXED samples of ONE choice vector.  These are the
+#: stochastic duplicates theta_geom has to be above.
+CALIBRATION_KIND_A_MAX = 0.0316   # angstrom (n=12; 9 of them at exactly 0)
+
+#: Closest approach between two DIFFERENT choice vectors.  These are the real branches
+#: theta_geom has to stay below.
+CALIBRATION_KIND_B_MIN = 0.6435   # angstrom (n=54)
+
+#: Two geometries closer than this over the rigid core are the same conformer.
+#:
+#: The valley between the two populations is **0.61 A wide**, so the threshold is not
+#: delicately placed; it sits at their geometric mean, which puts the same multiplicative
+#: margin on each side — **4.7x above** the widest duplicate and **4.3x below** the closest
+#: real branch.  A geometric mean rather than an arithmetic one because these are ratios of
+#: distances, and an arithmetic midpoint would sit 20x above one population and 1.5x below
+#: the other.
+#:
+#: `cluster` takes the value as an argument, so a re-calibration on a wider fixture set
+#: changes one number here and nothing else.
+DEFAULT_THETA_GEOM = 0.15         # angstrom, rigid core + coordination sphere
+
+#: NOT calibrated, unlike theta_geom, and the reason is worth keeping next to it.  Over the
+#: same relaxed set the Kind-A ENERGY spread reached **16.6 kcal/mol** between samples whose
+#: cores agreed to 0.03 A — all of it motion OUTSIDE the core, because the rigid-core rule
+#: cuts a delocalised carboxylate C-O as if it were rotatable (`docs/ISSUES.md` 6c) and lets
+#: the whole carboxylate swing on a charged complex.  A window set from that data would bake
+#: the core-definition bug into a stored threshold.  `cluster(energy_window=...)` is built
+#: and tested; the number waits for the core fix.
+DEFAULT_ENERGY_WINDOW = None      # kcal/mol — deliberately unset, see above
 
 #: Exact-match tolerance.  Distinct from theta_geom and not a weaker version of it: this
 #: one asks "did these two come out of the same arithmetic", which is a question about

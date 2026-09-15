@@ -37,7 +37,7 @@ charge, spin — travels with it in a `methods` row.
 | **identity/** | | |
 | `identity/keys.py` | L0 composition, L1 certificate hash, `block_id` | ✅ |
 | ↳ `l2_isomer_tag` | cis/trans, fac/mer, Δ/Λ | ✅ *(`identity/isomers.py`; needs a geometry, so `""` without one)* |
-| ↳ `l3_conformer_id` | choice-vector label + geometric verifier | ✅ *(`identity/conformers.py`; **θ_geom uncalibrated** — see ISSUES 6b)* |
+| ↳ `l3_conformer_id` | choice-vector label + geometric verifier | ✅ *(`identity/conformers.py`; θ_geom = 0.15 Å calibrated, energy window open)* |
 | **sites/** | | |
 | `sites/perception.py` | Which atoms can bind a metal, and what type of donor they are | ✅ |
 | `sites/frames.py` | **A site is a FRAME, not a vector** (D13). `live_dof`, `binding_modes`, `torsion_wells` | ✅ |
@@ -137,8 +137,8 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D17** | An energy difference needs an **isodesmic** equation, not merely a balanced one |
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
 
-**Open checkpoints:** C2 (θ_geom + energy window — **could not be called at M5**: the RAW
-fixture set has no Kind-A spread to calibrate against, so it moves to M7's relaxed set), C6 (barrier proxy — M8),
+**Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
+geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),
 C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→curated tables.*
 
 ---
