@@ -70,6 +70,7 @@ charge, spin — travels with it in a `methods` row.
 | `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `grow` | ✅ *(chelate JOIN still missing — ISSUES 3)* |
 | `assembly/choice.py` | `ChoiceVector`, canonical form, `cv1:` digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
+| `assembly/persist.py` | Stores an assembled block: L2 from its geometry, sites by inheritance, provenance. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
 | **registry/** | | |
 | `registry/api.py` | **The only write surface** (ground rule 1) | ✅ |
 | `registry/db.py` | Connection + additive migration (schema file is not a migration) | ✅ |
