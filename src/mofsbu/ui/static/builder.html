@@ -328,13 +328,21 @@ function showMixedNote() {
   // leaving it to be discovered when the queue is full.  A "kind" is one
   // (molecule, protomer, donor set, binding mode) — two protomers of one molecule are
   // two kinds, which is why a single molecule can still be mixed at 2+.
+  //
+  // At 1 the note names the ACTIVATION STATE, not just the molecule.  "Homoleptic" with
+  // one molecule loaded reads as "well, yes, there is only one molecule" — and the thing
+  // it is actually saying is that a metal carrying two ligands carries two copies of one
+  // protomer and one pocket, never a -2H next to a -3H. That is the sentence somebody
+  // needs BEFORE the run, not after looking at the products and finding them symmetric.
   const n = +$('#mixed').value || 1;
   const mols = state.molecules.length;
   $('#mixedNote').textContent = n <= 1
-    ? 'homoleptic: one ligand kind per metal' + (mols > 1
-        ? ` — your ${mols} molecules are enumerated separately, never together` : '')
-    : `up to ${n} kinds share a metal (mixed ligands, and mixed protomers of one `
-      + 'molecule). Runs get substantially larger.';
+    ? 'homoleptic: every ligand on a metal is the same kind — same activation state, '
+      + 'same pocket. Different ones are enumerated as separate structures, never '
+      + 'combined on one centre'
+    : `up to ${n} kinds share a metal: different molecules, and different activation `
+      + 'states or pockets of one molecule. Runs get substantially larger'
+      + (mols ? '' : ' — add a molecule to see by how much');
 }
 
 function showMlNote() {
