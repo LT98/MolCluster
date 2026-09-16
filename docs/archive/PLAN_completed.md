@@ -249,6 +249,48 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 25)* **A sweep is one question: ranges, an estimate, and the ladder's own edges.**
+  Three asks from the builder page, and the third one turned out to need the chelate join
+  that M5 carried out unbuilt.
+
+  * **Counts accept ranges** (`"1~3"`, `4~6`, also `-` and `..`), expanded in
+    `BuildSpec.__post_init__` so the constructor, `from_dict` and `replace` all read them
+    identically and the stored spec always holds the integers a run enumerated. A range that
+    counts down, spans past 64, or is not a count refuses — a typo that would queue 500
+    coordination numbers is the case the ceiling exists for.
+  * **`runner.enumerate_plan` / `estimate`.** Planning was enumeration and writing in one
+    function, so "how big is this run" was answerable only by submitting it. Split: the page
+    asks the *same* enumeration with no registry, which is the only way the number it shows
+    can be trusted to be the number it gets.
+  * **`spec.pathways`** plans the rung below each product and joins the step between them.
+    The parent is the coordinatively *unsaturated* intermediate and not the co-ligand-filled
+    complex, because only the former is reachable by addition — and that distinction is the
+    whole feature: with the vertices filled, getting from one rung to the next is a
+    substitution, which a join cannot express and which is refused with the reason.
+  * **`join_chelate` — the two-point join M5 carried out.** Three things the building turned
+    up, none of them predicted by "the arithmetic already exists":
+    - **The trans case has no bisector.** Two collinear vertices have their midpoint *at* the
+      metal, so the "slide out along the bisector" step divided by zero and put a donor 0.1 Å
+      from the centre. A trans-spanning chelate is real, so the fix is a direction that
+      exists in both cases, not a refusal.
+    - **`chelate_compatible` is the wrong gate for a placement.** It compares the direction
+      the pocket's *frames* converge on with the vertex separation; a stored frame is one
+      torsion well, and an ortho diolate's two wells can point apart, so it reported "spans
+      trans" about donors sitting 3 Å apart. `chelate_reach` asks the distance-geometry
+      question a rigid move actually has to satisfy — donors a fixed distance apart, each at
+      its own bond length — and the two agree wherever the frames do converge.
+    - **The same frames got the roll wrong**, which is worse than getting it refused: summing
+      two antiparallel axes points *into* the ring, so the ligand was rolled around the metal
+      and every product came back a wall of clashes. The direction away from each donor's own
+      substituents does not depend on a well and gets the side right by construction; with it
+      every buildable step in the Ni/THQ ladder comes back clash-free.
+  * **Found in passing:** `put_sites` treated a catalog written by a *different recipe*
+    (`inherited/…` vs `perception/…`) as stale, so the assembly path and the runner path took
+    turns deleting each other's catalog and each geometry's state with it. Staleness is now
+    a comparison within one recipe; D5 decides the other case. Also `run()`'s parallel branch
+    called `spec.to_json(None)` on a keyword-only parameter — every multi-worker run would
+    have died at the fork, which is only invisible because the laptop default is one worker.
+
 - *(rev 23)* **M4's second half: `site_state` is populated, and C5 is called (D18).**
   The perception half shipped in M3 and has been load-bearing since; the state half sat
   behind an open decision gate, which is why `n_open_sites` was NULL, `BuildingBlock.

@@ -447,6 +447,19 @@ def create_app(db_path: Path, store_root: Path,
             "reserved_inactive": inactive,
         }
 
+    @app.get("/api/build")
+    def build() -> dict[str, Any]:
+        """Which code is serving this page — version, branch, commit, checkout.
+
+        Served from the app rather than baked into the HTML: the pages are static files,
+        so a stamp written into them would say whatever it said when they were written.
+        On the app it is a property of the running server, which is what the question
+        means.  No database is touched, so it answers before a registry exists.
+        """
+        from mofsbu.versions import build_info, build_line
+
+        return {**build_info(), "line": build_line()}
+
     @app.get("/api/meta")
     def meta(con: sqlite3.Connection = Con) -> dict[str, Any]:
         return {
