@@ -172,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
     active = ActiveDatabase(db)
     state = compute_state()
 
+    from mofsbu.versions import build_line
+
+    # Which code, before which data: two servers from two checkouts are otherwise told
+    # apart only by their port, and the page shows the same line in its appbar.
+    print(build_line())
     print(f"mofsbu  db={db}  ({why})")
     if others:
         print("  also available: " + ", ".join(o.name for o in others)

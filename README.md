@@ -92,6 +92,23 @@ Both find the registry themselves: the real one if it exists, otherwise the demo
 `--db` is resolved against the working directory, then `MOFSBU_DATA`, then the repo root, so the
 command behaves the same wherever it is run from.
 
+**Running a branch next to `main`.** A checkout serves the branch that is checked out in it, so
+running a branch is running the viewer *from that directory* on a port of its own:
+
+    cd /path/to/the/branch/checkout
+    python scripts/viewer.py --port 8001 --db data/scratch.db
+
+Each page carries a **build stamp** in the top-right — `v0.0.1 · some-branch @ 4c69320*` —
+which is the version, the branch, the commit and a `*` for uncommitted changes; the tooltip
+adds the checkout path and the commit date. The same line is printed at start-up and served
+from `/api/build`. It is read once, when the process starts, because what a running server is
+running is what it imported: a stamp that tracked the working tree would report a commit whose
+code is not the code answering. Restart to move it.
+
+Give each server its own `--db` as well as its own port. Two checkouts pointed at one registry
+is one registry with structures from two versions of the recipe in it, and only
+`algo_versions` would say so afterwards.
+
 ## Reading a run (`/runs`)
 
 The console shows a progress line, not a diagnosis. `/runs` is the inspector: what the run

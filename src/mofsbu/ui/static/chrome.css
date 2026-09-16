@@ -18,6 +18,12 @@
 /* A page whose heading belongs in the bar rather than above the content: still an
    h1 for anything reading the document outline, sized like the note it sits next to. */
 .appbar-right h1{font:inherit;font-weight:400;margin:0}
+/* The build stamp is the last thing in the bar and the one thing in it that must not
+   shrink: a page's own status can ellipsis away, but a half-printed commit is worse
+   than none.  Monospace so two builds are comparable at a glance. */
+.build{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+       font-size:11px;color:var(--muted);opacity:.85;padding-left:8px;
+       border-left:1px solid var(--line);cursor:help}
 
 /* A tab is a box, not a word.  Plain links in the accent colour sat on the dark
    background with nothing to aim at; these carry their own surface, a hover state
