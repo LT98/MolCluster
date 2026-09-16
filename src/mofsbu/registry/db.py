@@ -303,3 +303,24 @@ class Registry:
 
     def __repr__(self) -> str:      # pragma: no cover
         return f"Registry({self.db_path}, {self.count('structures')} structures)"
+
+
+def ensure_registry(path: str | Path, note: str = "") -> Path:
+    """Guarantee a migrated registry at `path`, creating the tree if it is not there.
+
+    A checkout with no `data/` is the normal starting state — the folder is git-ignored,
+    so a fresh clone has none — and a data root whose registry was deleted is the same
+    case. Both must open rather than fail: `migrate()` builds the whole schema from
+    nothing, which is how every registry in this project has ever been made.
+
+    Idempotent, and it does not touch a database that already exists: an existing file
+    is left to the caller's own `migrate()`, so a startup path can call this without
+    re-running a migration every time.
+    """
+    path = Path(path)
+    if path.exists():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with Registry(path) as reg:           # also creates the sibling blob store
+        reg.migrate(note or "created empty: no registry was present")
+    return path

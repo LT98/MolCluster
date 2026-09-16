@@ -368,6 +368,67 @@ def test_endpoints_answer_under_concurrent_requests(client):
         assert {f.result().status_code for f in futures} == {200}
 
 
+# ── cold start ───────────────────────────────────────────────────────────────
+
+def test_cold_start_creates_the_data_root_and_an_empty_registry(tmp_path, monkeypatch):
+    root = tmp_path / "never_created"
+    monkeypatch.setenv("MOFSBU_DATA", str(root))
+    assert not root.exists()
+
+    from mofsbu.config import data_root, registry_path, store_root
+
+    assert data_root() == root and root.is_dir()
+
+    db = registry_path()
+    c = TestClient(create_app(db, store_root()))
+
+    assert db.exists(), "the viewer must create the registry it was pointed at"
+    assert store_root().is_dir()
+
+    r = c.get("/api/structures")
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 0
+
+    assert c.get("/").status_code == 200
+    assert c.get("/api/filters").status_code == 200
+
+
+def test_cold_start_registry_carries_the_full_schema(tmp_path):
+    """Created empty is not the same as created half-built: it must be migrated."""
+    from mofsbu.registry.db import SCHEMA_VERSION, ensure_registry
+
+    db = ensure_registry(tmp_path / "sub" / "dir" / "fresh.db")
+
+    assert db.exists()
+    con = sqlite3.connect(db)
+    try:
+        tables = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"structures", "geometries", "runs", "tasks", "migrations"} <= tables
+        assert con.execute("SELECT COUNT(*) FROM structures").fetchone()[0] == 0
+        assert con.execute("SELECT 1 FROM migrations WHERE version = ?",
+                           (SCHEMA_VERSION,)).fetchone() is not None
+    finally:
+        con.close()
+
+
+def test_ensure_registry_leaves_an_existing_database_alone(tmp_path):
+    from mofsbu.registry.db import ensure_registry
+
+    db = ensure_registry(tmp_path / "keep.db")
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO runs (spec_digest, spec_json, status, created_at) "
+                "VALUES ('d', '{}', 'done', '2026-01-01T00:00:00+00:00')")
+    con.commit()
+    con.close()
+
+    ensure_registry(db)          # second call must not wipe or re-seed it
+
+    con = sqlite3.connect(db)
+    try:
+        assert con.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+    finally:
+        con.close()
 # ── which build is answering ─────────────────────────────────────────────────
 
 def test_the_build_stamp_says_what_code_is_serving(client):

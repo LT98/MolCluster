@@ -202,10 +202,16 @@ def create_app(db_path: Path, store_root: Path,
     `active` is the switchable registry reference shared with the builder.  It defaults
     to a fresh one wrapping `db_path`, so the two-argument call every test and script
     already makes keeps working and simply cannot switch.
+
+    An absent registry is created here, empty, rather than left to 503 every read: every
+    launch path goes through this function, and a fresh checkout has no `data/` at all.
+    The 503 below stays for the case it actually describes — a database that goes missing
+    while the server is running.
     """
+    from mofsbu.registry.db import ensure_registry
     from mofsbu.ui.active import ActiveDatabase
 
-    db_path = Path(db_path)
+    db_path = ensure_registry(Path(db_path), "created empty at viewer startup")
     active = active or ActiveDatabase(db_path)
     store = BlobStore(store_root)
 
