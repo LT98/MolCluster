@@ -12,6 +12,7 @@ cover the parts of that move where being wrong would be expensive:
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -310,3 +311,63 @@ def test_capabilities_carries_the_hardware_and_the_database(client):
     caps = client.get("/api/capabilities").json()
     assert caps["compute"]["devices"][0]["id"] == "cpu"
     assert caps["database"].endswith(".db")
+
+
+# ── how big is this run, before it is one ────────────────────────────────────
+# "How many structures will this build?" was answerable only by submitting and reading
+# the task count back, which is a decision made after the thing it decides.
+
+THQ = "OC1=C(O)C(=O)C(O)=C(O)C1=O"
+
+
+def spec_payload(**over) -> dict:
+    spec = {
+        "spec_version": 7,
+        "molecules": [{"name": "THQ", "smiles": THQ, "max_deprotonations": 1}],
+        "metals": [{"symbol": "Ni", "oxidation_state": 2, "spin_class": "hs"}],
+        "coordination": "4~6", "ligands_per_metal": "1~2", "binding": ["chelate"],
+        "co_ligand": "O", "run_mode": "construct",
+    }
+    spec.update(over)
+    return spec
+
+
+def test_the_estimate_answers_and_writes_nothing(client):
+    before = len(client.get("/api/runs").json()["runs"])
+    body = client.post("/api/estimate", json={"spec": spec_payload()}).json()
+    assert body["ok"] and body["tasks"] > 0
+    assert body["by_kind"]["place"] > 0
+    assert len(client.get("/api/runs").json()["runs"]) == before
+
+
+def test_a_wider_range_is_visibly_a_bigger_run(client):
+    """The number is what the control is for: `1~3` should look more expensive than `1`."""
+    def tasks(**over):
+        return client.post("/api/estimate", json={"spec": spec_payload(**over)}
+                           ).json()["tasks"]
+
+    assert tasks(ligands_per_metal="1~3") > tasks(ligands_per_metal="1")
+    assert tasks(pathways=True) > tasks(pathways=False)
+
+
+def test_a_range_typed_on_the_page_is_stored_expanded(client, tmp_path):
+    """The page sends what was typed; the spec file carries the integers it means."""
+    saved = client.post("/api/spec", json={"spec": spec_payload(), "filename": "range.json"})
+    assert saved.status_code == 200
+    spec = json.loads(Path(saved.json()["path"]).read_text())
+    assert spec["coordination"] == [4, 5, 6] and spec["ligands_per_metal"] == [1, 2]
+
+
+def test_an_unfinished_spec_gets_a_reason_rather_than_a_500(client):
+    """The page asks at every edit, so a spec mid-typing is the normal input."""
+    body = client.post("/api/estimate", json={"spec": spec_payload(molecules=[])}).json()
+    assert body["ok"] is False and "molecule" in body["reason"]
+    bad = client.post("/api/estimate", json={"spec": spec_payload(coordination="3~1")}).json()
+    assert bad["ok"] is False and "counts down" in bad["reason"]
+
+
+def test_the_page_says_what_the_notation_and_the_ladder_mean(client):
+    """Both are rendered from capabilities, so the page cannot describe them wrongly."""
+    caps = client.get("/api/capabilities").json()
+    assert "1~3" in caps["range_note"]
+    assert "join" in caps["pathways_note"]

@@ -32,8 +32,10 @@ charge, spin — travels with it in a `methods` row.
 | Path | Purpose | State |
 |---|---|---|
 | `_types.py` | `Fidelity` ladder, `MethodSpec`, exception hierarchy | ✅ |
-| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v5) | ✅ |
-| `runner.py` | `plan` writes tasks, `work` executes them. The two never assume one process | ✅ |
+| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v7). Counts accept ranges (`"1~3"`), expanded at construction | ✅ |
+| `runner.py` | `enumerate_plan` enumerates, `plan` writes tasks, `work` executes them. The two never assume one process | ✅ |
+| ↳ `estimate` | the same enumeration with no registry — what the builder page shows before you submit | ✅ |
+| ↳ `grow` tasks | `spec.pathways`: the rung below each product, and the `join` between them | ✅ |
 | `config.py` | Data root, machine profile, device, ML model — all **declared, never detected** | ✅ |
 | `versions.py` | `ALGO_VERSIONS` — pinned recipe versions (ground rule 6) | ✅ |
 | **graph/** | | |
@@ -67,7 +69,7 @@ charge, spin — travels with it in a `methods` row.
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
 | **assembly/** | | |
-| `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `grow` | ✅ *(chelate JOIN still missing — ISSUES 3)* |
+| `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow` | ✅ |
 | `assembly/choice.py` | `ChoiceVector`, canonical form, `cv1:` digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
 | `assembly/persist.py` | Stores an assembled block: L2 from its geometry, sites by inheritance, provenance. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
@@ -80,7 +82,7 @@ charge, spin — travels with it in a `methods` row.
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
 | `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
 | `ui/static/chrome.{js,css}` | The three pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
-| `pathways/` | reaction DAG, path scoring | 🔴 **empty → M8** |
+| `pathways/` | reaction DAG, path scoring | 🔴 **empty → M8** *(the DAG's edges are written now — `spec.pathways` — but nothing scores them)* |
 
 ---
 

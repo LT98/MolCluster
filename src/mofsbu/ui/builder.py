@@ -24,7 +24,7 @@ from mofsbu import library
 from mofsbu.config import data_root
 from mofsbu.energy.relax import ml_model_status, mode_status
 from mofsbu.geometry.placer import GEOMETRIES
-from mofsbu.spec import RUN_MODES, BuildSpec
+from mofsbu.spec import MAX_RANGE_SPAN, RUN_MODES, BuildSpec
 from mofsbu._types import MofsbuError
 
 STATIC = Path(__file__).parent / "static"
@@ -126,6 +126,17 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                             "degree 2+ = polynuclear / extended growth — not implemented, "
                             "needs M5 (assembly.join) and M6 (multi-centre placer)."),
             "geometries": sorted(GEOMETRIES),
+            # Both count fields take a RANGE, and the page says so rather than leaving it
+            # to be discovered: sweeping one to three ligand copies is one experiment.
+            "range_note": ("coordination numbers and ligand copies accept ranges: "
+                           "`1~3` is 1, 2 and 3, and `1~3, 6` adds 6. A spec stores the "
+                           f"expanded list; one range may span {MAX_RANGE_SPAN} values"),
+            "pathways_note": ("record how the rungs of a ligand-count sweep reach each "
+                              "other: the intermediate below each product is built and "
+                              "the step between them is performed with assembly.join, so "
+                              "the registry holds the route and not just the endpoints. "
+                              "It adds the coordinatively unsaturated intermediates to "
+                              "the run"),
             "metals_optional": True,
             "metals_note": ("metal centres are optional: a purely molecular construction "
                             "(COF, organic cage) is a first-class case. Joining molecule "
@@ -438,6 +449,27 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             raise HTTPException(400, "filename must not contain a path")
         path = spec.save(spec_dir / name)
         return {"path": str(path), "digest": spec.digest}
+
+    @router.post("/api/estimate")
+    def estimate_run(payload: dict = Body(...)) -> dict[str, Any]:
+        """How much work this spec would be, before any of it is queued.
+
+        The page asks this while the spec is still being edited, so a spec that is not
+        finished yet is an expected input and comes back as `ok: false` with the reason —
+        an editor that throws a 400 at every keystroke teaches people to ignore it.
+
+        It writes nothing.  `runner.estimate` runs the planner's own enumeration without a
+        registry, which is what makes the number the page shows the number you get.
+        """
+        from mofsbu.runner import estimate
+
+        try:
+            spec = BuildSpec.from_dict(payload.get("spec") or {})
+            return estimate(spec)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "reason": str(exc), "refusal": "incomplete"}
+        except MofsbuError as exc:
+            return {"ok": False, "reason": str(exc), "refusal": type(exc).__name__}
 
     @router.post("/api/runs")
     def submit_run(payload: dict = Body(...)) -> JSONResponse:

@@ -11,7 +11,8 @@ import pytest
 
 from mofsbu._types import AmbiguousSpecError, NotBuiltYet
 from mofsbu.assembly.choice import ChoiceVector
-from mofsbu.assembly.join import BuildingBlock, IncompatibleJoin, join
+from mofsbu.assembly.join import (
+    BuildingBlock, IncompatibleJoin, join, join_chelate)
 from mofsbu.geometry.embed import coordinates, embed_molecule
 from mofsbu.geometry.placer import site_vectors
 from mofsbu.graph._types import EdgeType, TypedGraph
@@ -243,3 +244,105 @@ def test_a_geometry_in_the_wrong_shape_is_refused(aqua):
                            geometry=np.zeros((2, 3)), state=aqua.state)
     with pytest.raises(ValueError, match="graph has 3 atoms"):
         first_join(broken, metal)
+
+
+# ── two points at once: the chelate join ─────────────────────────────────────
+# `chelate_compatible` has judged pairs since S2 and `join` placed one donor, so every
+# enumeration was monodentate and a bidentate ligand could be scored but never built.
+# These cover the second contact: what it fixes, what it consumes, and what it refuses.
+
+@pytest.fixture(scope="module")
+def catecholate():
+    """A chelator — both phenolate oxygens, converging on one centre."""
+    from mofsbu.sites.perception import deprotonate
+    from mofsbu.sites.protomers import labile_sites
+
+    mol = mol_from_smiles("Oc1ccccc1O")
+    base, _ = deprotonate(mol, labile_sites(mol))
+    embedded = embed_molecule(base)
+    graph = from_rdkit(embedded, charge=-2, multiplicity=1, name="catecholate")
+    return _block(graph, perceive(embedded), coordinates(embedded))
+
+
+def pocket(block: BuildingBlock):
+    return [s for s in block.open_donors() if s.donor_type == "phenolate_O"][:2]
+
+
+def vertex_pair(metal: BuildingBlock, *, trans: bool):
+    """Two vertices that are opposite each other, or two that are not."""
+    vacancies = metal.open_vacancies()
+    first = vacancies[0]
+    axis = np.asarray(first.frame["axis"], dtype=float)
+    for other in vacancies[1:]:
+        cosine = float(np.dot(axis, np.asarray(other.frame["axis"], dtype=float)))
+        if (cosine < -0.95) is trans:
+            return [first, other]
+    raise AssertionError("no such pair on this polyhedron")
+
+
+def test_a_chelate_puts_both_donors_at_their_own_pair_distance(catecholate):
+    """The bite mismatch goes into the ANGLE, not into the bond lengths."""
+    from mofsbu.geometry.distances import metal_donor_distance
+
+    metal = metal_block(cn=6)
+    result = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
+                          pocket(catecholate))
+    graph, coords = result.block.graph, np.asarray(result.block.geometry)
+    centre = graph.metals()[0]
+    bonded = [j for i, j, et in graph.edges() if i == centre and et is EdgeType.DATIVE]
+    bonded += [i for i, j, et in graph.edges() if j == centre and et is EdgeType.DATIVE]
+    assert len(bonded) == 2
+    target = metal_donor_distance("Zn", "O").value
+    for donor in bonded:
+        assert float(np.linalg.norm(coords[donor] - coords[centre])) == pytest.approx(
+            target, abs=1e-6)
+
+
+def test_both_vertices_are_consumed_and_the_donors_read_as_occupied(catecholate):
+    metal = metal_block(cn=6)
+    product = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
+                           pocket(catecholate)).block
+    assert len(product.open_vacancies()) == len(metal.open_vacancies()) - 2
+    bound = [s for s in product.sites if s.donor_type == "phenolate_O"]
+    assert len(bound) == 2
+    assert all(product.state[BuildingBlock.state_key(s)].status is SiteStatus.OCCUPIED
+               for s in bound)
+
+
+def test_a_chelate_that_cannot_reach_a_trans_pair_says_so(catecholate):
+    """D10's case from the assembly side: a pocket that spans cis cannot span trans."""
+    metal = metal_block(cn=6)
+    with pytest.raises(IncompatibleJoin) as exc:
+        join_chelate(metal, catecholate, vertex_pair(metal, trans=True),
+                     pocket(catecholate))
+    assert "cannot reach" in str(exc.value)
+    assert exc.value.verdict.strain > 1.0
+
+
+def test_the_choice_vector_records_both_ends_and_no_torsion_well(catecholate):
+    """The roll is DETERMINED by the second contact, so there is no well to record."""
+    metal = metal_block(cn=6)
+    cv = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
+                      pocket(catecholate)).choice_vector
+    assert cv["mode"] == "chelate" and "torsion_well" not in cv
+    assert [d["atom"] for d in cv["donors"]] == [s.atom_idx for s in pocket(catecholate)]
+    assert len(cv["vacancies"]) == 2 and len(cv["d_ml"]) == 2
+
+
+def test_a_chelate_join_needs_two_donors_and_two_vertices(catecholate):
+    metal = metal_block(cn=6)
+    with pytest.raises(IncompatibleJoin, match="two donors from one block"):
+        join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
+                     [pocket(catecholate)[0], metal.open_vacancies()[0]])
+    with pytest.raises(ValueError, match="two sites on each block"):
+        join_chelate(metal, catecholate, metal.open_vacancies()[:3], pocket(catecholate))
+
+
+def test_either_donor_order_reaches_one_node(catecholate):
+    """Which donor took which vertex is a route, not an identity (D2)."""
+    metal = metal_block(cn=6)
+    pair = vertex_pair(metal, trans=False)
+    donors = pocket(catecholate)
+    forward = join_chelate(metal, catecholate, pair, donors).block
+    backward = join_chelate(metal, catecholate, pair, donors[::-1]).block
+    assert l1_graph_hash(forward.graph) == l1_graph_hash(backward.graph)

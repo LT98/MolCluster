@@ -123,6 +123,28 @@ panel is rebuilt, and open sections are restored by task id. The steady state is
 every 15 s. The server defaults to `--log-level warning`; pass `--log-level info` to get access
 lines back.
 
+## Asking for a sweep, and seeing what it costs (`/builder`)
+
+* **Ranges.** Coordination numbers and ligand copies take `4~6` and `1~3` as well as `4,6`
+  and `1,2,3` — a sweep from one to three copies is one experiment, and writing it out is
+  the notation getting in the way of the question. `-` and `..` work too. The **spec file
+  stores the expanded integers**: it is the reproducibility record, so it carries what a run
+  enumerated rather than how the request was phrased.
+* **The estimate.** A line above the submit button says how many tasks the current spec would
+  queue, broken into activation states, coordination spheres and pathway steps, and updates
+  about half a second after you stop typing. It comes from the planner's own enumeration
+  (`runner.estimate`) with no registry involved, so the number is the number you get — and a
+  spec that cannot run yet says why there instead of failing at submit.
+* **Pathways.** A ligand-count sweep builds a ladder — M(L), M(L)₂, M(L)₃ — and with this set
+  the run also builds the rung *below* each product and performs the step between them with
+  `assembly.join`. What that adds is the **edge**: the registry then says M(L)₂ is M(L) plus a
+  ligand, with the reagents and the choice vector that regenerates the move, rather than
+  leaving a reader to infer it from two formulas. The step usually lands on the identity the
+  direct construction already built — one node, two routes (D2) — and the run inspector
+  reports that as the confirmation it is. Where the rung below is coordinatively saturated,
+  reaching the next one is a *substitution* rather than an addition; that is refused with the
+  measurement rather than faked.
+
 ## Choosing hardware and database (`/builder`)
 
 * **Device.** A selector lists what this machine actually has (`cpu`, plus each visible CUDA
