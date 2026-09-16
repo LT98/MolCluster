@@ -6,12 +6,12 @@ showed each of these in memory; this file shows them after a round trip through 
 which is where they actually have to hold.
 
 **One substitution, stated rather than hidden.** The plan names the anthrarufin–Cu pair for
-gate 2. Anthrarufin is a bidentate chelator and a chelate cannot be joined yet
-(PLAN M5 / #15) — `chelate_compatible` judges the pair, `join` places one donor.
-So the gate is met with Pt(OH₂)₂Cl₂, which is monodentate, buildable, and a genuine cis/trans
-pair. The claim under test is unchanged: near-degenerate configurational isomers persist as
-separate records carrying different choice vectors, and geometric clustering does not merge
-them. Re-run this against anthrarufin when #15 lands.
+gate 2, and this file meets it with Pt(OH₂)₂Cl₂ — monodentate, buildable, and a genuine
+cis/trans pair. The claim under test is unchanged: near-degenerate configurational isomers
+persist as separate records carrying different choice vectors, and geometric clustering does
+not merge them. The substitution is no longer *forced* — `join_chelate` places a two-point
+ligand now (`tests/test_join.py`) — so re-deriving this gate on anthrarufin is available work
+rather than blocked work.
 """
 from __future__ import annotations
 

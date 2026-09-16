@@ -81,7 +81,8 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
                 reagent_ids: Iterable[int] = (), depth: int | None = None,
                 note: str = "", tags: Sequence[str] = (), seed: int | None = None,
                 fidelity: Fidelity = Fidelity.RAW, method: MethodSpec = CONSTRUCT,
-                energy: float | None = None) -> Stored:
+                energy: float | None = None, qc: dict | None = None,
+                l2: str | None = None) -> Stored:
     """Persist one assembled `BuildingBlock`: identity, geometry, sites, provenance.
 
     The order is not arbitrary.  The structure row has to exist before a geometry can hang
@@ -90,10 +91,20 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
     it runs last.  Getting this wrong does not fail loudly — it writes state against the
     wrong geometry — which is why it is written down once here instead of at each call
     site.
+
+    `l2` overrides the tag derived from the coordinates.  It exists for a caller that is
+    storing a product ANOTHER path also builds and that has to land on the same identity
+    row: the run pipeline does not tag isomers yet, so a route that tagged its own product
+    would file it separately from the node every other route reached (B2).  Deriving it is
+    still the default, because a caller who does not raise that question wants the tag.
+
+    `qc` travels onto the geometry row.  A construct whose report is missing looks exactly
+    like one that passed, which is the distinction ground rule 9 is about.
     """
     graph, coords = block.graph, block.geometry
     cv = ChoiceVector.coerce(choice_vector)
-    tag = l2_isomer_tag(graph, coords) if coords is not None else ""
+    tag = l2 if l2 is not None else (l2_isomer_tag(graph, coords) if coords is not None
+                                     else "")
 
     prov = Provenance(kind="assembly", reagent_ids=tuple(reagent_ids), note=note,
                       choice_vector_digest=cv.digest if cv else None, depth=depth)
@@ -109,7 +120,7 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
 
     geom = put_geometry(reg, put.id, to_xyz(graph, coords, note or graph.name),
                         fidelity=fidelity, method=method, energy=energy,
-                        choice_vector=cv.data if cv else None,
+                        choice_vector=cv.data if cv else None, qc=qc,
                         seed=seed if seed is not None else (cv.seed if cv else None))
 
     # Sites are INHERITED, never re-perceived here — see the module docstring.

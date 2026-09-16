@@ -552,7 +552,17 @@ def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None
     algo = algo or f"perception/{ALGO_VERSIONS['perception']}"
     cmap = canonical_map(reg, structure_id)
     existing = get_sites(reg, structure_id)
-    stale = bool(existing) and any(r["algo_perception"] != algo for r in existing)
+    # Stale means OLDER, which is a comparison within one recipe — `perception/1` against
+    # `perception/2`.  A catalog from a different recipe entirely (`inherited/…`, written
+    # when an assembly step carried sites through an atom map) is not an out-of-date
+    # answer to this question, and treating it as one made the two paths take turns
+    # deleting each other's catalog, and each geometry's state with it.  D5's rule
+    # decides that case instead: the first catalog stands, and `catalog_drift` reports a
+    # disagreement rather than repairing it.
+    family = algo.split("/", 1)[0]
+    stale = bool(existing) and any(
+        r["algo_perception"] != algo and str(r["algo_perception"]).split("/", 1)[0] == family
+        for r in existing)
     if existing and not reperceive and not stale:
         return len(existing)
     reg.conn.execute("DELETE FROM site_catalog WHERE structure_id=?", (structure_id,))

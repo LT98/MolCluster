@@ -36,6 +36,33 @@ const mofsbuChrome = {
            + `${current ? ' aria-current="page"' : ""}>${this.esc(p.label)}</a>`;
     }).join("");
   },
+
+  /** Stamp every page with the code that is serving it.
+
+      Three pages and a branch under test look identical otherwise, and "which build am
+      I looking at" is a question that gets asked after the answer would have been
+      useful.  It goes in the appbar's right slot, last and non-shrinking, so a page's
+      own status keeps the space it had and the stamp stays legible.
+
+      Fetched rather than templated: the pages are static files, so anything written
+      into them would report when they were WRITTEN. `*` marks a working tree with
+      uncommitted changes at the time the server started — the full detail, including
+      the checkout path, is in the tooltip. */
+  async mountBuild(host){
+    let b;
+    try { b = await (await fetch("/api/build")).json(); }
+    catch(e){ return; }                 // a stamp is not worth an error on the page
+    const short = b.branch && b.branch.length > 28
+      ? b.branch.slice(0, 27) + "…" : b.branch;
+    const where = b.commit ? `${short} @ ${b.short}${b.dirty ? "*" : ""}` : b.source;
+    const el = document.createElement("span");
+    el.className = "build";
+    el.textContent = `v${b.version} · ${where}`;
+    el.title = [b.line, `checkout ${b.checkout}`,
+                b.dirty ? "* uncommitted changes when the server started" : ""]
+      .filter(Boolean).join("\n");
+    host.appendChild(el);
+  },
 };
 
 /* ── the active registry ──────────────────────────────────────────────────────
@@ -115,4 +142,5 @@ const mofsbuDb = {
 
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("nav.tabs").forEach(n => mofsbuChrome.mountTabs(n));
+  document.querySelectorAll(".appbar-right").forEach(n => mofsbuChrome.mountBuild(n));
 });

@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 6
+SPEC_VERSION = 7
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -31,6 +31,96 @@ RUN_MODES = ("construct", "ml_go", "xtb_go", "dft_go")
 # resolved model is written into the `methods` row of every number, so a stored energy
 # never loses the name of the model that produced it.
 ML_MODELS = ("mace-mp-0", "mace-omol-0")
+
+
+#: Separators a range may be written with.  `~` is the one the builder page offers;
+#: `-` and `..` are accepted because people type them and both are unambiguous here —
+#: every quantity this parser reads (a coordination number, a count of ligand copies) is
+#: a positive integer, so a leading `-` can only ever be a range separator.
+_RANGE_SEPARATORS = ("~", "..", "-")
+
+#: How many values one range may expand to.  A guard rail, not a policy: `1~3` is the
+#: point of the notation and `1~500` is a typo that would otherwise fill a queue before
+#: anyone noticed.  It refuses rather than truncating, so nothing is silently dropped.
+MAX_RANGE_SPAN = 64
+
+
+def int_series(value: Any, *, what: str = "value") -> tuple[int, ...]:
+    """Expand a list of positive integers written as numbers, ranges, or both.
+
+    `[4, 6]`, `"4,6"`, `"1~3"` and `"1~3, 6"` are all read; the last two are why this
+    exists — a run that sweeps one to three ligand copies is one experiment, and writing
+    it as a range is how it gets asked for rather than typed out.
+
+    The EXPANDED tuple is what a spec stores.  A spec is the reproducibility record, so it
+    carries the integers a run actually enumerated; keeping `"1~3"` in the file would make
+    the digest depend on how the request was phrased and would leave every reader of the
+    JSON re-implementing this parser.
+
+    Duplicates collapse (first occurrence wins) and order is otherwise preserved: the
+    order decides which combination is queued first, and re-sorting a hand-written spec
+    would quietly reorder its run.
+    """
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        items: list[Any] = [value]
+    else:
+        try:
+            items = list(value)
+        except TypeError:
+            raise ValueError(f"{what}: expected numbers or a range, got {value!r}") from None
+
+    out: list[int] = []
+    for item in items:
+        for n in _expand_token(item, what):
+            if n not in out:
+                out.append(n)
+    return tuple(out)
+
+
+def _expand_token(item: Any, what: str) -> list[int]:
+    if isinstance(item, bool):                       # bool is an int; it is not a count
+        raise ValueError(f"{what}: {item!r} is not a number")
+    if isinstance(item, int):
+        return [_positive(item, what)]
+    if not isinstance(item, str):
+        raise ValueError(f"{what}: expected a number or a range, got {item!r}")
+    out: list[int] = []
+    for token in item.replace(",", " ").split():
+        lo_hi = _split_range(token, what)
+        if lo_hi is None:
+            out.append(_positive(_int(token, what), what))
+            continue
+        lo, hi = lo_hi
+        if hi < lo:
+            raise ValueError(
+                f"{what}: range {token!r} counts down ({lo} to {hi}); write it low to high")
+        if hi - lo + 1 > MAX_RANGE_SPAN:
+            raise ValueError(
+                f"{what}: range {token!r} is {hi - lo + 1} values, past the {MAX_RANGE_SPAN} "
+                f"a single range may expand to. List the ones you mean.")
+        out.extend(range(lo, hi + 1))
+    return out
+
+
+def _split_range(token: str, what: str) -> tuple[int, int] | None:
+    for sep in _RANGE_SEPARATORS:
+        head, found, tail = token.partition(sep)
+        if found and head and tail:
+            return _positive(_int(head, what), what), _positive(_int(tail, what), what)
+    return None
+
+
+def _int(text: str, what: str) -> int:
+    try:
+        return int(text.strip())
+    except ValueError:
+        raise ValueError(f"{what}: {text.strip()!r} is not a whole number") from None
+
+
+def _positive(n: int, what: str) -> int:
+    if n < 1:
+        raise ValueError(f"{what}: {n} is not a count; these start at 1")
+    return n
 
 
 @dataclass(frozen=True)
@@ -105,6 +195,18 @@ class BuildSpec:
     # this is the knob that decides how large a run is, and it is set deliberately rather
     # than discovered when the queue has 40,000 tasks in it.
     max_distinct_ligands: int = 1
+    # Record how the products of this run reach each other, not just that they exist.
+    #
+    # A run that sweeps a RANGE of ligand copies builds a ladder — M(L), M(L)2, M(L)3 —
+    # whose rungs differ by one addition, and that relationship is chemistry the registry
+    # can hold (a `reactions` edge, D8) rather than something a reader has to infer from
+    # two formulas.  Setting this plans the intermediate each rung is reached FROM and
+    # builds the step with `assembly.join`, so the edge is a construction that was
+    # actually performed rather than an assertion about two rows.
+    #
+    # Off by default: it adds the coordinatively unsaturated intermediates to the run, and
+    # a spec written before this field existed did not ask for them.
+    pathways: bool = False
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     # Which ML potential `ml_go` means.  None = the machine's declared default.
     ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | None
@@ -119,6 +221,17 @@ class BuildSpec:
             raise ValueError(
                 f"max_distinct_ligands must be at least 1, got {self.max_distinct_ligands}; "
                 f"1 means homoleptic (one ligand kind per centre)")
+        # Ranges are expanded at CONSTRUCTION, so every way of making a spec — this
+        # constructor, `from_dict`, `dataclasses.replace` — reads `"1~3"` identically and
+        # the object always holds the integers a run enumerated.  Normalising in one of
+        # those paths only is how a spec built in a notebook would mean something
+        # different from the same spec typed into the page.
+        for name in ("coordination", "ligands_per_metal"):
+            object.__setattr__(self, name, int_series(getattr(self, name), what=name))
+        if not self.coordination:
+            raise ValueError("coordination is empty; a metal run needs at least one CN")
+        if not self.ligands_per_metal:
+            raise ValueError("ligands_per_metal is empty; say how many copies to place")
         if self.ml_model is not None:
             from mofsbu.config import resolve_ml_backend
 
@@ -169,6 +282,11 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 6:
+            # v6 -> v7 adds `pathways`.  False is what every earlier spec did — the rungs
+            # of a ligand-count sweep were built independently and nothing recorded that
+            # one is the other plus a ligand — so an old spec re-run plans the same tasks.
+            d.setdefault("pathways", False)
         if version <= 5:
             # v5 -> v6 adds `max_distinct_ligands`.  It defaults to 1, which is exactly
             # what every earlier spec did — one molecule per coordination sphere — so an
@@ -201,9 +319,12 @@ class BuildSpec:
             molecules=tuple(MoleculeSpec(**m) for m in d.pop("molecules", ())),
             metals=tuple(MetalSpec(**m) for m in d.pop("metals", ())),
             pocket=PocketPredicate(**(d.pop("pocket", None) or {})),
-            coordination=tuple(d.pop("coordination", (4, 6))),
+            # Passed through as written — a list, a range, or both.  `__post_init__`
+            # expands it, so a hand-written `"1~3"` and the page's list become the same
+            # spec through one parser rather than one per entry point.
+            coordination=d.pop("coordination", (4, 6)),
             geometries=tuple(g) if (g := d.pop("geometries", None)) else None,
-            ligands_per_metal=tuple(d.pop("ligands_per_metal", (1,))),
+            ligands_per_metal=d.pop("ligands_per_metal", (1,)),
             binding=tuple(d.pop("binding", ("chelate", "mono"))),
             **d,
         )

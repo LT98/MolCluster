@@ -366,3 +366,32 @@ def test_endpoints_answer_under_concurrent_requests(client):
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(client.get, urls[i % len(urls)]) for i in range(32)]
         assert {f.result().status_code for f in futures} == {200}
+
+
+# ── which build is answering ─────────────────────────────────────────────────
+
+def test_the_build_stamp_says_what_code_is_serving(client):
+    """Three pages and a branch under test look identical; the stamp is how you tell."""
+    body = client.get("/api/build").json()
+    assert body["version"] and body["line"].startswith("mofsbu ")
+    # A checkout reports its branch and commit; an installed wheel has neither and says
+    # so rather than reporting an empty branch as though it were one.
+    if body["commit"]:
+        assert body["short"] == body["commit"][:7] and body["branch"]
+    else:
+        assert "no checkout" in body["source"]
+
+
+def test_the_stamp_needs_no_registry(tmp_path):
+    """It answers before a database exists — which is exactly when you are least sure
+    what you are running."""
+    from mofsbu.ui.app import create_app
+
+    app = create_app(tmp_path / "absent.db", tmp_path / "store")
+    assert TestClient(app).get("/api/build").json()["version"]
+
+
+@pytest.mark.parametrize("page", ["/", "/builder", "/runs"])
+def test_every_page_has_a_slot_for_the_stamp(client, page):
+    """`chrome.js` appends it to `.appbar-right`; a page without one shows no version."""
+    assert 'class="appbar-right"' in client.get(page).text
