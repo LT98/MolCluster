@@ -15,7 +15,11 @@ Where the milestone stands:
   between two open sites, and the same question `sites.model.chelate_pockets` answers
   within one molecule, generalised to two blocks.
 * `join()` — align, bond, recompute the product's open sites by inheriting through the
-  atom map, and emit the choice-vector that regenerates it.  **S3.**
+  atom map, and emit the choice-vector that regenerates it.  DONE (S3).
+* `join_chelate()` / `chelate_reach()` — the two-point version: one ligand across two
+  vertices of one centre.  DONE.  The verdict it places under is distance geometry (can a
+  rigid ligand reach both vertices at their own bond lengths) rather than the pocket's
+  frame-implied bite, and the difference matters — see `chelate_reach`.
 * `geometry.placer.place_multicentre` — inter-centre constraints (M-M distance, bridge
   bite angle).  The plan's declared headline cost (M6).
 """
@@ -46,7 +50,8 @@ from mofsbu.sites.state import refresh_state
 #: it from here.  Every existing `from mofsbu.assembly.join import NotBuiltYet` still
 #: works, and none of them has to care that the definition moved.
 __all__ = ["BuildingBlock", "Compatibility", "IncompatibleJoin", "JoinResult",
-           "NotBuiltYet", "chelate_compatible", "compatible", "grow", "join"]
+           "NotBuiltYet", "chelate_compatible", "chelate_reach", "compatible", "grow",
+           "join", "join_chelate"]
 
 
 @dataclass(frozen=True)
@@ -620,6 +625,296 @@ def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_sit
     sites = tuple(replace(s, frame=_transform_frame(s.frame, rot, o_d, target))
                   for s in donor_block.sites)
     return moved, sites
+
+
+def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+                 sites_b: Sequence[Site], *, seed: int = 0,
+                 with_geometry: bool = True) -> JoinResult:
+    """Join two blocks at TWO points at once — one ligand across two vertices of one metal.
+
+    The same operation as `join` and a different geometry problem.  A single-point join has
+    a free rigid move and therefore no residual strain (`compatible` says so and why); two
+    points at once must satisfy both constraints with one rigid move, so the bite angle the
+    ligand offers and the separation of the vertices it is asked to span have to agree.
+    `chelate_compatible` is the verdict and it is asked first; this places what it passed.
+
+    **How the mismatch is absorbed.**  The pose is fixed by three things, in this order:
+    the donor-donor line onto the vertex-vertex line, the roll about that line set by
+    requiring the ligand's own donor axes to point back at the metal, and then a push
+    along the bisector so that BOTH donors sit at their metal-donor distance.  The residual
+    goes into the bite angle, which is the quantity `chelate_compatible` already bounded,
+    rather than into the M-D bond lengths, which `geometry.qc` checks and which an
+    optimiser cannot be asked to repair (`QCReport.marginal` excludes bad bonds for exactly
+    this reason).
+
+    Both vertices are consumed; both donors are inherited and become `OCCUPIED` off the
+    product's dative bonds — the same split `join` documents, for the same reason.
+    """
+    if len(sites_a) != 2 or len(sites_b) != 2:
+        raise ValueError(
+            f"a chelate join takes two sites on each block; got {len(sites_a)} and "
+            f"{len(sites_b)}. One donor onto one vertex is `join`; one donor across two "
+            f"METALS is a mu2 bridge and is M6.")
+    # Each side has to be entirely one role: two donors here, two vertices there.  A
+    # mixed pair is refused as a pairing rather than caught later as an atom-map error,
+    # because "one of these four is on the wrong side" is the thing the caller got wrong.
+    a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
+    if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
+        return _refuse_chelate(sites_a, sites_b, "this pairing is not two donors on one "
+                                                 "block and two vertices on the other")
+    donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
+    donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
+    for pair, block, which in ((donors, donor_block, "donor"),
+                               (vacancies, metal_block, "vacancy")):
+        for site in pair:
+            if site not in block.sites:
+                raise ValueError(
+                    f"a {which} site is not on the block it was passed with. "
+                    f"`join_chelate(a, b, sites_a, sites_b)` reads sites_a off a and "
+                    f"sites_b off b; swapping them builds an atom map onto the wrong "
+                    f"parent, which nothing downstream can detect.")
+
+    metal_element = metal_block.graph.label(vacancies[0].atom_idx).element
+    donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
+    verdict = chelate_reach(donors, vacancies, partner=metal_element,
+                            donor_elements=donor_elements)
+    if not verdict.feasible:
+        raise IncompatibleJoin(verdict)
+
+    product, map_a, map_b = _merged_graph(
+        a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
+    map_donor = map_a if donor_block is a else map_b
+    map_metal = map_b if donor_block is a else map_a
+    for donor in donors:
+        product.add_bond(map_donor[donor.atom_idx], map_metal[vacancies[0].atom_idx],
+                         EdgeType.DATIVE)
+
+    product.charge = a.graph.net_charge() + b.graph.net_charge()
+    if a.graph.multiplicity is None or b.graph.multiplicity is None:
+        raise AmbiguousSpecError(
+            "a parent has no multiplicity, so the product's is not derivable. Unpaired "
+            "electrons add (energy.backends.combined_multiplicity) and there is no "
+            "default that is not a guess about spin state.")
+    product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+
+    distances = [metal_donor_distance(metal_element, el).value for el in donor_elements]
+    choice_vector = {
+        "op": "join", "mode": BindingMode.CHELATE.value,
+        # No torsion index: the roll about the new bonds is DETERMINED by the second
+        # contact, so there is no well to choose.  What replaces it as the discrete
+        # choice is which donor went to which vertex, and that is recorded in order.
+        "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
+                    "block": donor_block.structure_id}
+                   for s, el in zip(donors, donor_elements)],
+        "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": metal_element,
+                       "block": metal_block.structure_id} for s in vacancies],
+        "d_ml": [round(float(x), 6) for x in distances],
+        "order": "donor-block-first" if donor_block is a else "metal-block-first",
+        "seed": int(seed),
+    }
+
+    donor_sites = donor_block.sites
+    coords = None
+    n_metals = len(product.metals())
+    if with_geometry:
+        if n_metals > 1:
+            raise NotBuiltYet(
+                f"this join makes a {n_metals}-centre product, and positioning one needs "
+                f"geometry.placer.place_multicentre (M6). Pass with_geometry=False to take "
+                f"the graph, the atom maps, the inherited sites and the choice vector.")
+        coords, donor_sites = _place_chelating_block(donor_block, donors, vacancies,
+                                                     distances=distances)
+
+    sites = merge_inherited(
+        inherit_sites(donor_sites, map_donor),
+        inherit_sites(metal_block.sites, map_metal,
+                      consumed=[(v.atom_idx, v.slot) for v in vacancies]),
+    )
+
+    geometry, state = None, None
+    if coords is not None:
+        metal_coords = _coords_of(metal_block, "the metal block")
+        if metal_coords is not None:
+            geometry = (np.vstack([coords, metal_coords]) if donor_block is a
+                        else np.vstack([metal_coords, coords]))
+            symbols = [product.label(i).element for i in product.nodes()]
+            states = refresh_state(sites, geometry, graph=product, symbols=symbols)
+            state = {(s.atom_idx, s.slot): s for s in states}
+
+    return JoinResult(
+        block=BuildingBlock(graph=product, sites=tuple(sites), geometry=geometry,
+                            state=state),
+        atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
+        partner_atom_map=map_b, compatibility=verdict)
+
+
+def chelate_reach(donors: Sequence[Site], vacancies: Sequence[Site], *,
+                  partner: Any | None = None,
+                  donor_elements: Sequence[str] | None = None,
+                  tolerance_deg: float = MAX_BITE_MISMATCH_DEG) -> Compatibility:
+    """Can a RIGID ligand reach both vertices with both bonds at their own length?
+
+    A different question from `chelate_compatible`'s, and the one a PLACEMENT has to
+    answer.  That function compares the direction the pocket's frames converge on with
+    the separation of the two vertices — the pocket's intent — and reports, without
+    judging, how far apart the two frames put the metal.  When those frames diverge (a
+    real case: `sites.model.chelate_pockets` establishes convergence by searching torsion
+    wells, and a stored frame is one well, not the converging one) that angle says
+    "trans" about a pair of donors sitting 3 A apart, which no rigid move can stretch
+    across an octahedron.
+
+    So the verdict here is distance geometry, computed from the same three numbers the
+    placement uses: the donors are a fixed distance apart, each has to sit at its own
+    metal-donor distance, and those two facts fix the angle the pair actually subtends at
+    the centre.  Comparing THAT with the vertex separation is what decides cis from trans
+    for a rigid placement — and it agrees with `chelate_compatible` for every pocket
+    whose frames do converge.  The pocket verdict travels in the reason, because "these
+    frames say something different" is worth seeing.
+
+    This is the gate `join_chelate` uses, and the one a caller should rank candidate
+    vertex pairs by — ranking on one criterion and placing under another is how a step
+    picks the pair it then cannot build.
+    """
+    metal = _metal_symbol(partner)
+    pocket = chelate_compatible(donors, vacancies, partner=partner,
+                                donor_elements=donor_elements)
+    if not pocket.feasible and math.isinf(pocket.strain):
+        # Structural, not geometric: one atom chelating itself, two vertices on two
+        # different metals, a donor that does not chelate at all.  None of those is a
+        # placement that could be improved by moving anything.
+        return pocket
+    if metal is None or not donor_elements or len(donor_elements) != 2:
+        # Without the pair's elements there is no bond length to place the donors at, so
+        # the pocket's own verdict is the only one available.
+        return pocket
+    frames = [_frame_of(s) for s in (*donors, *vacancies)]
+    if any(f is None for f in frames):
+        raise ValueError(
+            "a chelate placement is computed FROM the frames and at least one site has "
+            "none. Perceive with a geometry before joining; a missing frame is an "
+            "unknown answer, not a negative one.")
+    (p_1, _, _), (p_2, _, _), (_, v_1, _), (_, v_2, _) = frames
+    d_mean = sum(metal_donor_distance(metal, el).value for el in donor_elements) / 2.0
+    half = float(np.linalg.norm(p_2 - p_1)) / 2.0
+    subtended = 2.0 * math.degrees(math.asin(min(half / d_mean, 1.0)))
+    separation = _angle_deg(v_1, v_2)
+    mismatch = abs(subtended - separation)
+    feasible = mismatch <= tolerance_deg
+    reason = (
+        f"the two donors sit {2 * half:.2f} A apart, so at {d_mean:.2f} A bonds they "
+        f"subtend {subtended:.1f} deg at the centre, and the vertices sit "
+        f"{separation:.1f} deg apart: the ligand {'reaches' if feasible else 'cannot reach'} "
+        f"both (mismatch {mismatch:.1f} deg against a {tolerance_deg:.0f} deg tolerance)")
+    if pocket.feasible != feasible:
+        reason += f" — note the pocket's own frames disagree: {pocket.reason}"
+    return Compatibility(feasible, mismatch / tolerance_deg, reason,
+                         mode=BindingMode.CHELATE.value, wells=pocket.wells,
+                         d_ml=pocket.d_ml)
+
+
+def _refuse_chelate(sites_a: Sequence[Site], sites_b: Sequence[Site],
+                    what: str) -> JoinResult:
+    roles = [("vacancy" if s.is_vacancy else "donor") for s in (*sites_a, *sites_b)]
+    raise IncompatibleJoin(Compatibility(
+        False, float("inf"),
+        f"{what} (got {', '.join(roles)}): a chelate join puts two donors from one block "
+        f"on two vertices of one metal on the other",
+        mode=BindingMode.CHELATE.value))
+
+
+def _place_chelating_block(donor_block: BuildingBlock, donors: Sequence[Site],
+                           vacancies: Sequence[Site], *, distances: Sequence[float],
+                           ) -> tuple[np.ndarray | None, tuple[Site, ...]]:
+    """Rigidly move a chelating block onto two vacant vertices.  The N=2 alignment."""
+    coords = _coords_of(donor_block, "the donor block")
+    frames = [_frame_of(s) for s in (*donors, *vacancies)]
+    if coords is None or any(f is None for f in frames):
+        raise ValueError(
+            "cannot align this chelate join: coordinates or a frame are absent. The pose "
+            "is computed from the stored frames (D13) and applied to real coordinates; "
+            "pass with_geometry=False to build the graph-level product instead.")
+    (p_1, ax_1, _), (p_2, ax_2, _), (metal, v_1, _), (_, v_2, _) = frames
+    pocket_out = _pocket_outward(donor_block, coords, donors, (ax_1, ax_2))
+
+    t_1 = metal + distances[0] * v_1
+    t_2 = metal + distances[1] * v_2
+    span, target_span = _unit(p_2 - p_1), _unit(t_2 - t_1)
+    rot = _rotation_between(span, target_span)
+
+    # The roll about the new span: the ligand's own donor axes point at where it expects
+    # the metal, so turn them onto where the metal actually is.  Everything here is
+    # measured PERPENDICULAR to the span, which is the only direction the roll can move.
+    ligand_view = _perpendicular(rot @ pocket_out, target_span)
+    metal_view = _perpendicular(metal - (t_1 + t_2) / 2.0, target_span)
+    if ligand_view is not None and metal_view is not None:
+        theta = math.atan2(float(np.dot(np.cross(ligand_view, metal_view), target_span)),
+                           float(np.dot(ligand_view, metal_view)))
+        rot = _axis_rotation(target_span, theta) @ rot
+
+    # Then slide along the perpendicular until both donors sit at their M-D distance.
+    # The bite mismatch has to go somewhere and this is the choice: it goes into the
+    # ANGLE, which `chelate_compatible` has already bounded, rather than into the bond
+    # lengths, which QC checks and which no optimiser can be asked to undo.
+    #
+    # `metal_view` is the direction from the donors' midpoint to the metal, and it is
+    # undefined for a TRANS pair — the two vertices are collinear through the centre, so
+    # their midpoint IS the centre and points nowhere.  That is not a degenerate request:
+    # a ligand with a wide enough bite really does span trans (D10's cis/trans question
+    # from the other side), and the midpoint of its donors then sits on the metal.  The
+    # ligand's own view of where the metal goes is what orients it in that case, and it
+    # is the same direction in every case the two are both defined.
+    half = float(np.linalg.norm(p_2 - p_1)) / 2.0
+    d_mean = (distances[0] + distances[1]) / 2.0
+    toward = metal_view if metal_view is not None else ligand_view
+    if toward is None:
+        toward = _perpendicular(np.array([1.0, 0.0, 0.0]), target_span)
+        if toward is None:
+            toward = _perpendicular(np.array([0.0, 1.0, 0.0]), target_span)
+    # Offset zero means the donors straddle the centre, which is what a bite wider than
+    # the bond length asks for; it is reported by QC rather than fudged to a minimum.
+    offset = math.sqrt(max(d_mean ** 2 - half ** 2, 0.0))
+    target = metal - offset * toward
+    moved = (rot @ (coords - (p_1 + p_2) / 2.0).T).T + target
+    sites = tuple(replace(s, frame=_transform_frame(s.frame, rot, (p_1 + p_2) / 2.0, target))
+                  for s in donor_block.sites)
+    return moved, sites
+
+
+def _pocket_outward(block: BuildingBlock, coords: np.ndarray, donors: Sequence[Site],
+                    axes: Sequence[np.ndarray]) -> np.ndarray:
+    """Which way out of the ligand the metal lies — the pocket's own convergence direction.
+
+    Taken from each donor's BONDING (the direction away from what it is attached to),
+    summed over the pair, rather than from the stored frame axes.  The frames are one
+    torsion well of a possible several, and for an sp2 donor with a single neighbour the
+    two in-plane lobes point to opposite sides: an ortho diolate's two stored axes can
+    come out nearly antiparallel, whose sum then points INTO the ring.  Rolling the
+    ligand onto that vector puts the metal underneath the ring rather than in the pocket,
+    which is a ligand wrapped around the centre and a wall of clashes.
+
+    `sites.model.chelate_pockets` answers the same question by searching all four well
+    combinations; this is the cheap local form of that answer, and it needs no search
+    because the direction away from a donor's substituents does not depend on a well.
+    A donor with no bonded neighbour (a bare halide) has no such direction and keeps its
+    frame axis.
+    """
+    rows = {node: i for i, node in enumerate(block.graph.nodes())}
+    out = np.zeros(3)
+    for site, axis in zip(donors, axes):
+        neighbours = [rows[n] for n in block.graph.neighbors(site.atom_idx) if n in rows]
+        direction = axis
+        if neighbours:
+            away = coords[rows[site.atom_idx]] - coords[neighbours].mean(axis=0)
+            if float(np.linalg.norm(away)) > 1e-9:
+                direction = _unit(away)
+        out = out + direction
+    return _unit(out) if float(np.linalg.norm(out)) > 1e-9 else _unit(axes[0])
+
+
+def _perpendicular(v: np.ndarray, axis: np.ndarray) -> np.ndarray | None:
+    """`v` with its component along `axis` removed, or None if nothing is left of it."""
+    out = np.asarray(v, dtype=float) - float(np.dot(v, axis)) * axis
+    return None if float(np.linalg.norm(out)) < 1e-9 else _unit(out)
 
 
 def grow(seed_block: BuildingBlock, partners: tuple[BuildingBlock, ...], *,

@@ -366,3 +366,93 @@ def test_endpoints_answer_under_concurrent_requests(client):
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(client.get, urls[i % len(urls)]) for i in range(32)]
         assert {f.result().status_code for f in futures} == {200}
+
+
+# ── cold start ───────────────────────────────────────────────────────────────
+
+def test_cold_start_creates_the_data_root_and_an_empty_registry(tmp_path, monkeypatch):
+    root = tmp_path / "never_created"
+    monkeypatch.setenv("MOFSBU_DATA", str(root))
+    assert not root.exists()
+
+    from mofsbu.config import data_root, registry_path, store_root
+
+    assert data_root() == root and root.is_dir()
+
+    db = registry_path()
+    c = TestClient(create_app(db, store_root()))
+
+    assert db.exists(), "the viewer must create the registry it was pointed at"
+    assert store_root().is_dir()
+
+    r = c.get("/api/structures")
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 0
+
+    assert c.get("/").status_code == 200
+    assert c.get("/api/filters").status_code == 200
+
+
+def test_cold_start_registry_carries_the_full_schema(tmp_path):
+    """Created empty is not the same as created half-built: it must be migrated."""
+    from mofsbu.registry.db import SCHEMA_VERSION, ensure_registry
+
+    db = ensure_registry(tmp_path / "sub" / "dir" / "fresh.db")
+
+    assert db.exists()
+    con = sqlite3.connect(db)
+    try:
+        tables = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"structures", "geometries", "runs", "tasks", "migrations"} <= tables
+        assert con.execute("SELECT COUNT(*) FROM structures").fetchone()[0] == 0
+        assert con.execute("SELECT 1 FROM migrations WHERE version = ?",
+                           (SCHEMA_VERSION,)).fetchone() is not None
+    finally:
+        con.close()
+
+
+def test_ensure_registry_leaves_an_existing_database_alone(tmp_path):
+    from mofsbu.registry.db import ensure_registry
+
+    db = ensure_registry(tmp_path / "keep.db")
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO runs (spec_digest, spec_json, status, created_at) "
+                "VALUES ('d', '{}', 'done', '2026-01-01T00:00:00+00:00')")
+    con.commit()
+    con.close()
+
+    ensure_registry(db)          # second call must not wipe or re-seed it
+
+    con = sqlite3.connect(db)
+    try:
+        assert con.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+    finally:
+        con.close()
+# ── which build is answering ─────────────────────────────────────────────────
+
+def test_the_build_stamp_says_what_code_is_serving(client):
+    """Three pages and a branch under test look identical; the stamp is how you tell."""
+    body = client.get("/api/build").json()
+    assert body["version"] and body["line"].startswith("mofsbu ")
+    # A checkout reports its branch and commit; an installed wheel has neither and says
+    # so rather than reporting an empty branch as though it were one.
+    if body["commit"]:
+        assert body["short"] == body["commit"][:7] and body["branch"]
+    else:
+        assert "no checkout" in body["source"]
+
+
+def test_the_stamp_needs_no_registry(tmp_path):
+    """It answers before a database exists — which is exactly when you are least sure
+    what you are running."""
+    from mofsbu.ui.app import create_app
+
+    app = create_app(tmp_path / "absent.db", tmp_path / "store")
+    assert TestClient(app).get("/api/build").json()["version"]
+
+
+@pytest.mark.parametrize("page", ["/", "/builder", "/runs"])
+def test_every_page_has_a_slot_for_the_stamp(client, page):
+    """`chrome.js` appends it to `.appbar-right`; a page without one shows no version."""
+    assert 'class="appbar-right"' in client.get(page).text

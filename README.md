@@ -92,6 +92,23 @@ Both find the registry themselves: the real one if it exists, otherwise the demo
 `--db` is resolved against the working directory, then `MOFSBU_DATA`, then the repo root, so the
 command behaves the same wherever it is run from.
 
+**Running a branch next to `main`.** A checkout serves the branch that is checked out in it, so
+running a branch is running the viewer *from that directory* on a port of its own:
+
+    cd /path/to/the/branch/checkout
+    python scripts/viewer.py --port 8001 --db data/scratch.db
+
+Each page carries a **build stamp** in the top-right — `v0.0.1 · some-branch @ 4c69320*` —
+which is the version, the branch, the commit and a `*` for uncommitted changes; the tooltip
+adds the checkout path and the commit date. The same line is printed at start-up and served
+from `/api/build`. It is read once, when the process starts, because what a running server is
+running is what it imported: a stamp that tracked the working tree would report a commit whose
+code is not the code answering. Restart to move it.
+
+Give each server its own `--db` as well as its own port. Two checkouts pointed at one registry
+is one registry with structures from two versions of the recipe in it, and only
+`algo_versions` would say so afterwards.
+
 ## Reading a run (`/runs`)
 
 The console shows a progress line, not a diagnosis. `/runs` is the inspector: what the run
@@ -122,6 +139,28 @@ not re-fetched or repainted, so an expanded traceback stays expanded. While a ru
 panel is rebuilt, and open sections are restored by task id. The steady state is one request
 every 15 s. The server defaults to `--log-level warning`; pass `--log-level info` to get access
 lines back.
+
+## Asking for a sweep, and seeing what it costs (`/builder`)
+
+* **Ranges.** Coordination numbers and ligand copies take `4~6` and `1~3` as well as `4,6`
+  and `1,2,3` — a sweep from one to three copies is one experiment, and writing it out is
+  the notation getting in the way of the question. `-` and `..` work too. The **spec file
+  stores the expanded integers**: it is the reproducibility record, so it carries what a run
+  enumerated rather than how the request was phrased.
+* **The estimate.** A line above the submit button says how many tasks the current spec would
+  queue, broken into activation states, coordination spheres and pathway steps, and updates
+  about half a second after you stop typing. It comes from the planner's own enumeration
+  (`runner.estimate`) with no registry involved, so the number is the number you get — and a
+  spec that cannot run yet says why there instead of failing at submit.
+* **Pathways.** A ligand-count sweep builds a ladder — M(L), M(L)₂, M(L)₃ — and with this set
+  the run also builds the rung *below* each product and performs the step between them with
+  `assembly.join`. What that adds is the **edge**: the registry then says M(L)₂ is M(L) plus a
+  ligand, with the reagents and the choice vector that regenerates the move, rather than
+  leaving a reader to infer it from two formulas. The step usually lands on the identity the
+  direct construction already built — one node, two routes (D2) — and the run inspector
+  reports that as the confirmation it is. Where the rung below is coordinatively saturated,
+  reaching the next one is a *substitution* rather than an addition; that is refused with the
+  measurement rather than faked.
 
 ## Choosing hardware and database (`/builder`)
 

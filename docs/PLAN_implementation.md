@@ -466,19 +466,21 @@ owns it. What is genuinely still unfinished is the carry-over list below.
 
 **Carried out of M5 — unbuilt, so not bugs (see `BUGS.md`'s scope note):**
 
-* **A chelate cannot be joined, only judged.** `chelate_compatible` answers whether a donor pair
-  can span two vertices; `join` places one donor. There is no two-point join, so every enumeration
-  is monodentate and the anthrarufin–Cu pair named in exit gate 2 is unbuildable —
-  `tests/test_m5_exit_gates.py` substitutes Pt(OH₂)₂Cl₂ and says so. **Not M6**: M6 is
-  inter-*centre* geometry; this is two points on one centre and the arithmetic already exists.
 * **The L3 energy window is unset.** Half of C2. Blocked on `BUGS.md` B9 rather than on missing
   data — the measurement available today is contaminated by the rigid-core defect.
 * **Symmetry collapse in the enumerator.** 405 leaves over 5 distinct L1 at CN 6 degree 2. The
   enumerator deliberately does not merge leaves sharing an L1 (cis and trans share one too); now
   that L2 and θ_geom both exist, the collapse they were waiting for is buildable.
-* **Driving the enumerator from the run pipeline and the builder UI** (S4.1). `runner.plan` still
-  refuses `degree > 1`, now because the pipeline does not drive the tree rather than because the
-  tree does not exist.
+* **Driving the enumerator from the run pipeline** for `degree > 1` (S4.1). `runner.plan` still
+  refuses it, now because the pipeline does not drive the *tree* rather than because the tree
+  does not exist. The **ladder** is driven: `spec.pathways` plans the rung below each product
+  and joins the step between them, which is S4.1 for the one shape a mononuclear sweep makes.
+* **Which vertices an intermediate leaves empty is not chosen.** `place_mononuclear` fills
+  vertices in its own order, so a CN-6 centre carrying four co-ligands comes back with its two
+  empty vertices **trans** — and a chelating ligand that subtends ~90° cannot reach them, so
+  that rung's step is refused (`chelate_cannot_span`) with the measurement in the task row. The
+  ladder therefore connects the unsaturated series but not the co-ligand-saturated one. The fix
+  is for the placer to take the vertices to reserve, which is placer work, not pathway work.
 
 ---
 

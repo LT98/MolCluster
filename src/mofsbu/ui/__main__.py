@@ -61,7 +61,7 @@ def resolve_database(given: Path | None) -> tuple[Path, list[Path], str]:
         return preferred, [p for p in discovered if p != preferred], "the default registry"
     if discovered:
         return discovered[0], discovered[1:], "newest in the data folder"
-    return preferred, [], "nothing found yet — will be created on first write"
+    return preferred, [], "nothing found yet — an empty one is created at startup"
 
 
 def confirm_compute_settings() -> None:
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         found = discover_databases()
         print(f"data folder: {data_root()}")
         if not found:
-            print("  no databases yet — one is created when you submit a run at /builder")
+            print("  no databases yet — an empty one is created when the viewer starts")
         for path in found:
             size = path.stat().st_size / 1e6
             print(f"  {path.name:28s} {size:8.2f} MB   {path}")
@@ -167,17 +167,28 @@ def main(argv: list[str] | None = None) -> int:
     db, others, why = resolve_database(a.db)
     store = a.store or store_root()
 
+    # Whether it existed is worth one line of output, so ask before `create_app` makes it.
+    from mofsbu.registry.db import ensure_registry
+
+    created = not db.exists()
+    ensure_registry(db, "created empty at viewer startup")
+
     from mofsbu.ui.active import ActiveDatabase, compute_state
 
     active = ActiveDatabase(db)
     state = compute_state()
 
+    from mofsbu.versions import build_line
+
+    # Which code, before which data: two servers from two checkouts are otherwise told
+    # apart only by their port, and the page shows the same line in its appbar.
+    print(build_line())
     print(f"mofsbu  db={db}  ({why})")
     if others:
         print("  also available: " + ", ".join(o.name for o in others)
               + "   — choose one on /builder, or pass --db")
-    if not db.exists():
-        print("  this file does not exist yet; open /builder and submit a run to create it")
+    if created:
+        print("  no registry was there — created an empty one, ready for a run at /builder")
     print(f"  store={store}")
     print(f"  device={state['device']}  workers={state['workers']}"
           f"  ({len(state['devices'])} device(s) visible — change on /builder)")
