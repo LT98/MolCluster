@@ -49,6 +49,7 @@ build A, declare victory on the paddlewheel, and discover B when it reaches the 
 | `site_vectors` / `GEOMETRIES` | `geometry/placer.py` | local geometries — and they are generic over *which atom* sits at the centre, which is mechanism B (§4) |
 | `vacancy_sites(idx, origin, directions)` | `sites/model.py` | already takes a bare index, so a **ligand** atom can carry vertices |
 | the denticity-2 branch of `place_mononuclear` | `geometry/placer.py:526` | law-of-cosines two-point alignment, for donors at two different distances |
+| **`join_chelate` / `chelate_reach`** | `assembly/join.py` | **the two-point join already exists** — one ligand across two vertices of *one* metal, with the mismatch absorbed into the bite angle rather than the M–D bonds. M6's µ2 bridge is this operation with the two vertices on *different* metals, and the function says so itself: *"one donor across two METALS is a mu2 bridge and is M6."* |
 | `chelate_compatible`'s verdict shape | `assembly/join.py` | strain = mismatch / tolerance, `feasible ⇔ strain ≤ 1`, one policy number in one named constant |
 | `Distance` with `source` / `estimated` | `geometry/distances.py` | a number that carries where it came from — the pattern M–M distances must follow |
 | `BranchTree.refusals` | `assembly/construct.py` | how a failed route says why, instead of being silently absent |
@@ -168,7 +169,9 @@ non-carboxylate, symmetric and mixed-valence.
 | `sites/frames.py::torsion_wells` | no `BRIDGE_MU2` branch; falls through to the monodentate `(0.0, 180.0)` |
 | `sites/model.py::vacancy_sites` | a vacancy offers `mono` only, so `compatible` refuses `mu2` on the metal side |
 | `assembly/join.py::chelate_compatible` | refuses the two-different-metals case **by name** — that refusal is the new `bridge_compatible` |
-| `assembly/join.py::join` | raises for `n_metals > 1`; single-pair signature cannot express a two-point join |
+| `assembly/join.py::join_chelate` | hardcodes `vacancies[0].atom_idx` for both bonds, i.e. one metal. The µ2 bridge is the same body with two |
+| `assembly/join.py::join` | raises for `n_metals > 1` |
+| `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
 | `geometry/placer.py::place_multicentre` | stub; `Center` and `Join` are named in its signature and **do not exist** |
 | `geometry/placer.py::GEOMETRIES` | no bent CN-2 |
@@ -238,12 +241,22 @@ The lone-pair well becomes a Kind-B branch carried on the site or the verdict, f
 `TORSION_LIVE` donor in a bridging mode, following `_convergence`'s existing 4-way precedent.
 `torsion_wells(_, BRIDGE_MU2)` gets its own entry instead of falling through to the monodentate
 pair. `chelate_compatible`'s named refusal becomes `bridge_compatible`, keeping the verdict
-shape. Placement is the Kabsch two-point fit of §3. `join` gains a two-point form — and the
-signature is the design decision (ground rule 8), so settle it before the body.
+shape.
+
+**The two-point join is not invented here, it is generalised.** `join_chelate` already places
+one ligand across two vertices with one rigid move, absorbing the residual into the bite angle
+rather than the M–D bonds; it merely binds both donors to `vacancies[0].atom_idx`. A µ2 bridge
+is the same body with the two vertices on different metals. So the slice is: relax that
+assumption, and decide what the verdict compares when the two vertices no longer share an
+origin — for a chelate it is the bite against the vertex separation *angle*; for a bridge the
+vertices have no common centre, so it is the donor–donor **distance** against the
+vertex-to-vertex distance.
 
 *Exit:* the three bridging modes are separately enumerable and reproduce 2.67 / 5.15 / 5.52 Å;
 the paddlewheel and its benzoate analogue build QC-clean; a bite that cannot span the vertices
-refuses **by name**; replay from the emitted vector is bit-identical.
+refuses **by name**; replay from the emitted vector is bit-identical; `join_chelate`'s own
+tests still pass unchanged, because a chelate is the case where the two vertices happen to
+share a metal.
 
 ### S2 — mechanism B: the bridging atom as a centre · **M**
 
@@ -265,7 +278,9 @@ reconciliation is explicit policy — which determinant wins, and the residual r
 *Exit:* Fe₃-oxo and Zn₄O build with the residual reported at the measured ~0.5 Å; the
 paddlewheel path never calls this; an under-determined constraint set refuses.
 
-### S4 — the declared nucleus · **M**
+### S4 — the declared nucleus, and reserved vertices · **M**
+
+Two halves of one idea: **the caller says what the starting geometry leaves open.**
 
 Vacancy↔vacancy becomes a `METAL_METAL` join instead of a refusal. Its placement needs an M–M
 distance, which is a legitimate **input** here because a nucleus is being declared:
@@ -273,9 +288,17 @@ distance, which is a legitimate **input** here because a nucleus is being declar
 `metal_donor_distance` exactly — curated table, covalent-radii fallback that marks itself
 `estimated` and says so in `source`.
 
+And `place_mononuclear` learns to take **which vertices to reserve**. It currently fills them in
+its own order, so a CN-6 centre carrying four co-ligands comes back with its two vacancies
+*trans* and a ~90° chelate cannot reach them — the pathway ladder hit exactly this and refused
+the step with `chelate_cannot_span`, correctly naming it placer work. A bridge needs the same
+thing for the same reason: the next bridge wants a *cis* pair, and the vertex that faces the
+partner metal is not available to anything else.
+
 *Exit:* a Cu₂ block reports its remaining vacancies with frames in the dimer's own coordinate
-system, and `enumerate_constructions` grows ligands onto it. Prove this rather than assume it:
-B8's occlusion rule is exactly what could mark a dimer's vertices `BLOCKED`.
+system, and `enumerate_constructions` grows ligands onto it — prove this rather than assume it,
+since B8's occlusion rule is exactly what could mark a dimer's vertices `BLOCKED`. A centre
+asked to reserve a cis pair returns one, and the ladder's co-ligand-saturated series connects.
 
 ### S5 — lift the `n_metals` guard, and discriminate the routes · **S**
 
