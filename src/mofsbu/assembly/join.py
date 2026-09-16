@@ -434,6 +434,13 @@ def _transform_frame(frame: dict | None, rot: np.ndarray, origin: np.ndarray,
     for key in ("axis", "ref"):
         if key in frame:
             out[key] = [float(x) for x in rot @ np.asarray(frame[key], dtype=float)]
+    # The other lone-pair lobes are frames too, and a lobe left behind by the move would
+    # point at where the metal used to be — so a second bridge onto an already-moved block
+    # would be judged against a stale direction.  Recursing is the whole implementation:
+    # a lobe has no lobes of its own, so this bottoms out immediately.
+    if frame.get("lone_pairs"):
+        out["lone_pairs"] = [_transform_frame(lobe, rot, origin, target)
+                             for lobe in frame["lone_pairs"]]
     return out
 
 

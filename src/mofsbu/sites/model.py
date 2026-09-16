@@ -8,7 +8,9 @@ import numpy as np
 
 from rdkit import Chem
 
-from mofsbu.sites.frames import BindingMode, LiveDOF, binding_modes, live_dof, site_frame
+from mofsbu.sites.frames import (
+    BindingMode, LiveDOF, binding_modes, live_dof, lone_pair_frames, site_frame,
+)
 from mofsbu.sites.perception import DonorSite, find_donor_sites
 
 
@@ -79,13 +81,42 @@ def vacancy_sites(metal_idx: int, origin, directions) -> list[Site]:
     return out
 
 
+def frame_lobes(frame: dict | None) -> list[dict]:
+    """Every lone-pair frame a stored frame carries, `frame` itself being the first.
+
+    One reader for both shapes, so nothing has to know whether a frame predates the lobe
+    record.  A frame with no `lone_pairs` key has exactly one lobe — which is the right
+    answer for a donor whose direction its bonding determines, and the right answer for
+    anything stored before this existed.
+    """
+    if not frame:
+        return []
+    lobes = frame.get("lone_pairs")
+    return [dict(x) for x in lobes] if lobes else [frame]
+
+
 def perceive(mol: Chem.Mol, *, with_frames: bool = True) -> list[Site]:
-    """Donor perception plus the frame model (D13), for one molecule."""
+    """Donor perception plus the frame model (D13), for one molecule.
+
+    **Both lone pairs are recorded, not just the first.**  `site_frame`'s own comment says
+    an sp2 donor has two in-plane lobes and that "BOTH are real" — but this function used
+    to call it at the default well and keep one, so every stored site pointed its metal at
+    the syn lobe and the anti lobe existed nowhere. That is what made bridging unreachable:
+    which lobe binds is the difference between a syn-syn bridge and an anti-anti one, and
+    for formate on Cu that is the difference between 2.673 A and 5.516 A.
+
+    `frame` is still lobe 0, byte for byte, so nothing that reads it moves. The rest live
+    under `frame["lone_pairs"]`, which travels through `frame_json` with no schema change.
+    """
     conf = mol.GetConformer() if (with_frames and mol.GetNumConformers()) else None
     out: list[Site] = []
     for donor in find_donor_sites(mol):
-        frame = (site_frame(mol, donor.idx, donor.donor_type, conf).to_dict()
-                 if conf is not None else None)
+        frame = None
+        if conf is not None:
+            lobes = lone_pair_frames(mol, donor.idx, donor.donor_type, conf)
+            frame = lobes[0].to_dict()
+            if len(lobes) > 1:
+                frame["lone_pairs"] = [f.to_dict() for f in lobes]
         out.append(Site(
             atom_idx=donor.idx,
             donor_type=donor.donor_type,

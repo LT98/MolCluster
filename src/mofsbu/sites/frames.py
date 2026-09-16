@@ -98,17 +98,56 @@ def binding_modes(donor_type: str) -> tuple[BindingMode, ...]:
     return _BINDING_MODES.get(donor_type, (BindingMode.MONODENTATE,))
 
 
+#: The modes whose pose is fixed by satisfying two constraints at once, so the roll about
+#: the forming bond is an OUTPUT of the fit rather than a coordinate to branch over.
+#: `join_chelate` states the rule for a chelate — donor-donor line onto vertex-vertex line,
+#: then the roll set by requiring the donor axes to point back at the metal — and a bridge
+#: is the same fit with the two vertices on different metals.  A mode listed here that
+#: branched anyway would emit siblings whose coordinates are identical.
+_TWO_POINT_MODES = (BindingMode.CHELATE, BindingMode.BRIDGE_MU2, BindingMode.BRIDGE_MU3)
+
+
 def torsion_wells(donor_type: str, mode: BindingMode = BindingMode.MONODENTATE) -> tuple[float, ...]:
     """Discrete torsion minima, in degrees.  The conformer-generating coordinate (D11).
 
     A live torsion on a planar donor has two wells 180 degrees apart (syn / anti); a
-    don't-care torsion has one, so it never branches.
+    don't-care torsion has one, so it never branches.  A two-point mode has one because
+    the fit determines the roll — see `_TWO_POINT_MODES`.
     """
     if live_dof(donor_type) is LiveDOF.TORSION_FREE:
         return (0.0,)
-    if mode is BindingMode.CHELATE:
-        return (0.0,)                       # the chelate ring fixes it
+    if mode in _TWO_POINT_MODES:
+        return (0.0,)
     return (0.0, 180.0)
+
+
+def lone_pair_frames(mol: Chem.Mol, donor_idx: int, donor_type: str, conf=None, *,
+                     heavy_only: bool = False) -> tuple[SiteFrame, ...]:
+    """Every in-plane frame this donor offers — one lobe per entry, in well order.
+
+    `site_frame` takes a `well` and answers for one lobe.  This answers for all of them,
+    which is the question a bridge asks: an sp2 donor's two lone pairs point in genuinely
+    different directions, and **which one binds is what distinguishes a syn-syn bridge
+    from an anti-anti one**.  Measured on formate against Cu, the two lobes of the two
+    oxygens give implied Cu...Cu separations of 2.673 A (syn-syn, the paddlewheel),
+    5.148 A (syn-anti) and 5.516 A (anti-anti) — the three textbook carboxylate bridging
+    modes, and they differ by more than a bond length.
+
+    A donor whose direction is determined by its bonding has exactly one lobe, and that
+    is not a degenerate case to paper over: it is why a bridging aqua cannot point at two
+    metals and why `sites.model.perceive` was right to store a single frame for it.  The
+    tuple length IS the answer to "can this atom bridge on its own".
+    """
+    n = len(torsion_wells(donor_type, BindingMode.MONODENTATE))
+    frames = tuple(site_frame(mol, donor_idx, donor_type, conf, heavy_only=heavy_only, well=w)
+                   for w in range(n))
+    # `well` only splits the single-neighbour branch; everywhere else it is ignored, so
+    # asking for two lobes on a determined donor returns the same frame twice.  Collapse
+    # by what came back rather than by re-deriving which branch ran — one place decides
+    # how many lobes there are, and it is `site_frame`.
+    if len(frames) > 1 and all(f.axis_hat == frames[0].axis_hat for f in frames[1:]):
+        return frames[:1]
+    return frames
 
 
 @dataclass(frozen=True)
