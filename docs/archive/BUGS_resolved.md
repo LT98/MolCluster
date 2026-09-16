@@ -25,7 +25,9 @@ Covered by `tests/test_ui_controls.py` (25 tests) plus the existing viewer suite
 browser's default scroll was the only thing that happened. The feature was never written.
 
 **Built** A `keydown` handler: `ArrowUp`/`ArrowDown` by one row, `PageUp`/`PageDown` by a
-screenful, `Home`/`End` to the ends. The table has `tabindex="0"` and a focus ring, and a
+screenful, `Home`/`End` to the ends. (`PageUp`/`PageDown` were later rebound to flip
+between pages of results — the prev/next buttons from the keyboard — because a screenful
+of a page you can already see was the less useful of the two readings.) The table has `tabindex="0"` and a focus ring, and a
 click on a row focuses it so the arrows work immediately afterwards rather than needing a
 Tab press nobody would guess at.
 
