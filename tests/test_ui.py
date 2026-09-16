@@ -369,10 +369,6 @@ def test_endpoints_answer_under_concurrent_requests(client):
 
 
 # ── cold start ───────────────────────────────────────────────────────────────
-# `data/` is git-ignored, so a fresh clone has none and neither does a data root that
-# has just been cleared.  Starting from nothing must produce an empty registry, not a
-# 503 on every read.
-
 
 def test_cold_start_creates_the_data_root_and_an_empty_registry(tmp_path, monkeypatch):
     root = tmp_path / "never_created"
