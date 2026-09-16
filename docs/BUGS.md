@@ -24,6 +24,9 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B9](#b9) | correctness | `identity/conformers.py` | The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable |
 | [B10](#b10) | undecided | `identity/isomers.py` | Δ/Λ is self-consistent but its absolute assignment is unverified |
 | [B11](#b11) | cosmetic | `sites/model.py` | `vacancy_sites` normalises by hand, differently from `_linalg.unit` |
+| [B12](#b12) | correctness | `assembly/construct.py` | `metal_block` gives a metal a formal charge nothing else does, so one species gets two L1 hashes |
+| [B13](#b13) | correctness | `sites/perception.py` | A bare hydroxide perceives **zero** donors, so µ2-OH cannot be built |
+| [B14](#b14) | correctness | `sites/perception.py` | Pyrazolate's two equivalent N type differently, and one of them cannot bridge |
 
 ---
 
@@ -263,4 +266,89 @@ degenerate case, not a de-duplication. Worth deciding which answer is wanted rat
 leaving two.
 
 Tracked as [#22](https://github.com/LT98/MolCluster/issues/22).
+
+---
+
+## B12
+
+**`metal_block` gives a metal a formal charge nothing else does, so one species gets two L1
+hashes.** `correctness` · `assembly/construct.py`
+
+`graph.from_mol.from_rdkit` sets a metal's `formal_charge` to **0** — D15 puts charge on the
+graph, not on the atom — and `examples.py` writes its metals the same way.
+`assembly.construct.metal_block` writes `formal_charge=oxidation_state`.
+
+That string is not decoration: `NodeLabel.key()` emits `element/formal_charge/oxidation_state/
+spin_class` for a metal, and `graph.canon._cert_entries` hashes it. Measured 2026-09-16 on a
+two-Cu fragment identical but for that field:
+
+| metal label | L1 |
+|---|---|
+| `Cu/+0/+2/hs` | `ef2229b65dcd3f97…` |
+| `Cu/+2/+2/hs` | `b63727cfed06a87a…` |
+
+So the same species reached through the runner (placer → `to_rdkit` → `from_rdkit`) and through
+the enumerator (`metal_block`) lands on two different nodes. **That is D2's central claim — one
+node, two routes — broken at the producer.** It has not bitten yet only because nothing has
+built the same species both ways.
+
+**Fix is to make `metal_block` write 0**, matching D15 and both other producers; the oxidation
+state is already carried in its own field, so nothing is lost and the charge stops being counted
+twice (atom, *and* `TypedGraph.charge`).
+
+**It moves identities, and the cost is the one already accepted for [B2](#b2).** Rows written
+under the current behaviour keep their stored hash and are never re-derived (ground rule 6 /
+D19), so the same species can occupy two rows across the change.
+
+Forced by M6, whose exit gate compares placer output against fixtures written the other way —
+see [`WORKPLAN_M6.md`](WORKPLAN_M6.md) §8(f).
+
+---
+
+## B13
+
+**A bare hydroxide perceives zero donors, so µ2-OH cannot be built.** `correctness` ·
+`sites/perception.py`
+
+Measured 2026-09-16:
+
+| molecule | donors perceived |
+|---|---|
+| `[OH-]` | **none** |
+| `C[O-]` methoxide | `alkoxide_O` |
+| `CO` methanol | `alkoxide_O` |
+
+Methoxide and methanol perceive normally, so the rule is dropping `[OH-]` specifically — it has
+no heavy neighbour. A hydroxide bridge is one of the commonest motifs in polynuclear chemistry
+and the M6 battery needs it, so this is not a curiosity.
+
+Note the neighbouring limitation, which is *not* this bug and is M6 scope rather than a defect:
+a donor with two neighbours (a bridging aqua) gets a single determined axis from `site_frame`,
+so both torsion wells return the same direction and its implied M···M is **0.000 Å**. One atom
+pointing at two metals needs the bridging atom treated as a centre in its own right —
+[`WORKPLAN_M6.md`](WORKPLAN_M6.md) §4.
+
+---
+
+## B14
+
+**Pyrazolate's two equivalent nitrogens type differently, and one of them cannot bridge.**
+`correctness` · `sites/perception.py`
+
+Measured 2026-09-16:
+
+| molecule | donors |
+|---|---|
+| pyrazole `c1cc[nH]n1` | `azolate_N`, `pyridyl_N` |
+| pyrazolate `c1cc[n-]n1` | **`amide_N`**, **`pyridyl_N`** |
+
+The pyrazolate anion's two nitrogens are equivalent by resonance — the charge is delocalised
+around the ring — so typing them as two different donor types is the same defect `cff47a8`
+fixed for oxo-acids under the heading *perception is resonance-invariant, an oxo-acid is one
+donor group*. Azolates were not covered by that change.
+
+**What it costs:** `pyridyl_N` declares `mono` only, so a pyrazolate N,N bridge is refused on
+one end whatever the other end offers. Pyrazolate-bridged dimers are the standard
+non-carboxylate test of a bridging model, so M6 has no way to check that mechanism A generalises
+beyond carboxylates until this is fixed.
 
