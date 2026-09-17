@@ -7,17 +7,26 @@ an MPI launcher or a GPU worker) all be the same code.
 
 Ground rule 8: `work` runs IN-PROCESS unless the machine is declared a workstation.  It
 will not spawn anything on an unconfigured laptop.
+
+A run holds two kinds of work and they do not want the same hardware.  Construction
+(`BUILD_KINDS`) is CPU work that scales with cores; `relax` is the optimiser, which on a
+declared accelerator is one device's worth of work however many processes ask for it.
+`execute_run` therefore divides the declared workers between the two queues rather than
+letting one pool claim either — see `plan_workers`.
 """
 from __future__ import annotations
 
 import itertools
 import json
+import time
 import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from mofsbu.config import compute_device, device_note, max_workers, parallel_enabled
+from mofsbu.config import (
+    compute_device, device_note, max_workers, parallel_enabled, relax_workers,
+)
 from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
@@ -32,7 +41,7 @@ from mofsbu.registry import (
 from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
-    outcome_summary, set_diagnostics, task_counts,
+    outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -1180,16 +1189,38 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     }, priority=RELAX_PRIORITY)
 
 
-def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = None) -> int:
-    """Claim and execute tasks until none remain.  In-process."""
+#: The two halves of a run, and the reason a worker pool is not homogeneous.  Everything
+#: in `BUILD_KINDS` is CPU work — embed, perceive, place, hash — and scales with cores.
+#: `relax` is the optimiser, which on a declared accelerator is one device's worth of work
+#: however many processes ask for it.
+BUILD_KINDS = ("ligand", "place", "grow")
+RELAX_KINDS = ("relax",)
+
+
+def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = None,
+         kinds: Sequence[str] | None = None,
+         exclude_kinds: Sequence[str] | None = None,
+         wait_while: Any = None, poll: float = 0.25) -> int:
+    """Claim and execute tasks until none remain.  In-process.
+
+    `kinds` / `exclude_kinds` restrict this worker to part of the queue (see
+    `BUILD_KINDS`).  `wait_while` is a zero-argument predicate: when the queue hands back
+    nothing and it returns True, the worker sleeps `poll` seconds and asks again instead
+    of exiting.  That is what a relax worker needs and a build worker does not — relax
+    tasks are queued BY the build tasks as they finish, so an empty relax queue early in
+    a run means "not yet", while an empty build queue means "never again".
+    """
     done = 0
     while limit is None or done < limit:
         if cancel_requested(reg, run_id):
             # Cooperative: the task in hand has already finished, and nothing new is
             # claimed.  Everything computed so far is in the registry.
             break
-        task = claim_task(reg, run_id)
+        task = claim_task(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds)
         if task is None:
+            if wait_while is not None and wait_while():
+                time.sleep(poll)
+                continue
             break
         try:
             out = execute(reg, task, spec)
@@ -1209,45 +1240,178 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
                       code=type(exc).__name__,
                       detail={"traceback": traceback.format_exc()[-4000:],
                               "task_kind": task.kind, "payload": task.payload})
+        # After the task, not only at the claim: a worker part-way through a long queue
+        # is the case a heartbeat exists to distinguish from one that died at the first.
+        touch_run(reg, run_id)
         done += 1
     return done
 
 
-def _worker_process(db_path: str, store_path: str, spec_json: str, run_id: int) -> None:
+def _worker_process(db_path: str, store_path: str, spec_json: str, run_id: int,
+                    kinds: Sequence[str] | None = None,
+                    exclude_kinds: Sequence[str] | None = None,
+                    more_coming: Any = None) -> None:
+    """One worker, in its own process.  Arguments only — nothing is inherited.
+
+    `more_coming` is an `mp.Event` the parent sets once the build workers have all
+    exited: while it is clear, an empty relax queue means the builders have not caught up
+    yet, and the relax worker waits rather than finishing a run that is not over.
+    """
     from mofsbu.registry import BlobStore
 
     with Registry(Path(db_path), BlobStore(Path(store_path))) as reg:
-        work(reg, BuildSpec.from_json(spec_json), run_id)
+        work(reg, BuildSpec.from_json(spec_json), run_id, kinds=kinds,
+             exclude_kinds=exclude_kinds,
+             wait_while=(None if more_coming is None else
+                         lambda: not more_coming.is_set()))
+
+
+@dataclass(frozen=True)
+class WorkerPlan:
+    """How a run's declared worker count is divided between the two queues.
+
+    Separated from the spawning so the page and the CLI can state the division before a
+    run starts, and so it is testable without starting a process.
+    """
+
+    total: int = 1
+    build: int = 1
+    relax: int = 0
+
+    @property
+    def split(self) -> bool:
+        return self.relax > 0
+
+    def describe(self) -> str:
+        if self.total <= 1:
+            return "1 worker, in-process"
+        if not self.split:
+            return f"{self.total} workers, any task"
+        return f"{self.build} building + {self.relax} relaxing"
+
+
+def plan_workers(workers: int | None = None, *, relaxes: bool = True) -> WorkerPlan:
+    """Divide the declared workers between construction and relaxation.
+
+    An explicit `workers` is a declaration in its own right (a `--workers` flag, the
+    number typed on the builder page), so it is honoured as given; `None` means "whatever
+    this machine declares", which on an unconfigured laptop is one in-process worker and
+    no subprocesses at all (ground rule 8).
+
+    The relax share comes from `config.relax_workers` and is capped so at least one
+    worker is left building: a pool that is ALL relax workers would leave the queue that
+    feeds them empty and the machine with one busy core, which is the shape this split
+    exists to undo.  `relaxes=False` — a `construct` run — has no second queue at all, and
+    reserving a worker for it would idle a core for the length of the run.
+    """
+    total = workers if workers is not None else max_workers()
+    total = max(1, int(total))
+    if total <= 1 or (workers is None and not parallel_enabled()):
+        return WorkerPlan(1, 1, 0)
+    n_relax = min(max(0, relax_workers()) if relaxes else 0, total - 1)
+    return WorkerPlan(total, total - n_relax, n_relax)
+
+
+def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
+                workers: int | None = None) -> WorkerPlan:
+    """Drain a planned run with whatever parallelism this machine declares.
+
+    The one place a worker pool is built.  Every caller that drains a queue — the CLI,
+    the builder page's background thread — comes through here, so no entry point can be
+    parallel while another is quietly serial.
+
+    Processes are started with the **spawn** context, not forked.  A forked child cannot
+    re-initialise CUDA, so on the one configuration this split is for — a GPU relaxing
+    while the cores build — fork produces workers that die at their first relaxation.
+    Spawn also keeps a fork out of the web server, which is a threaded process.
+
+    A spawned worker starts from nothing, so exactly three things reach it: the DATABASE
+    it is pointed at, the SPEC as JSON, and the ENVIRONMENT (which is where the device,
+    the model and the worker count live — `config` reads them at execution time, so a
+    declaration made in this process does reach the children).  In-process state does
+    not, which is worth knowing before substituting a backend in memory and expecting a
+    pool to use it.
+    """
+    # A `construct` run has no relax queue, so it gets no relax worker: the division
+    # follows the work that exists, not the hardware alone.
+    pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
+    if pool.total <= 1:
+        work(reg, spec, run_id)
+        return pool
+
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    args = (str(reg.db_path), str(reg.store.root), spec.to_json(indent=None), run_id)
+    # Build workers never claim a relax task when a relax worker exists: one shared queue
+    # puts construction behind the optimiser, and on a GPU it also means several
+    # processes on one card.
+    builders = [ctx.Process(target=_worker_process, args=args,
+                            kwargs={"exclude_kinds": RELAX_KINDS if pool.split else None},
+                            name=f"mofsbu-build-{run_id}-{i}")
+                for i in range(pool.build)]
+    builds_done = ctx.Event() if pool.split else None
+    relaxers = [ctx.Process(target=_worker_process, args=args,
+                            kwargs={"kinds": RELAX_KINDS, "more_coming": builds_done},
+                            name=f"mofsbu-relax-{run_id}-{i}")
+                for i in range(pool.relax)]
+    for proc in [*builders, *relaxers]:
+        proc.start()
+    try:
+        for proc in builders:
+            proc.join()
+    finally:
+        if builds_done is not None:
+            # Set even if the join raised: a relax worker waiting on this event is the
+            # one thing that would not stop on its own.
+            builds_done.set()
+    for proc in relaxers:
+        proc.join()
+
+    # A worker that DIED is not a task that failed: it recorded nothing, so its share of
+    # the queue is still pending.  `finish_run` refuses to call that done; this says which
+    # process it was and what killed it.
+    dead = [f"{p.name} (exit {p.exitcode})"
+            for p in [*builders, *relaxers] if p.exitcode not in (0, None)]
+    if dead:
+        raise MofsbuError(
+            f"{len(dead)} of {pool.total} workers died before the queue was drained: "
+            + ", ".join(dead) + ". Their tasks are still pending; the run can be "
+            "resumed once the cause is fixed")
+    return pool
 
 
 def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[str, Any]:
     """Plan and execute a spec.  Serial on a laptop; parallel only where declared."""
+    # Starting work on a database is the moment to notice that the last process to work
+    # on it never came back — a run killed with its shell writes no ending, and until
+    # something says so it reads as still going.  Reported, because a run that silently
+    # changed status between two commands is worse than one that says it did.
+    for swept in sweep_interrupted(reg):
+        print(f"mofsbu: run {swept['run_id']} is {swept['now']} — {swept['reason']}"
+              + (f"; {swept['returned_claims']} task(s) returned to the queue"
+                 if swept["returned_claims"] else ""))
     run_id, n_tasks = plan(reg, spec)
     reg.conn.commit()
-    n_workers = workers if workers is not None else max_workers()
+    pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
     if spec.run_mode != "construct":
         # Printed before any work starts: an accelerator sitting idle for a whole run is
-        # otherwise only visible in nvidia-smi, an hour later, by accident.
+        # otherwise only visible in nvidia-smi, an hour later, by accident.  The division
+        # is printed for the same reason — a GPU fed by a single core is the other way to
+        # own the hardware and not use it.
         print(f"mofsbu run {run_id}: mode={spec.run_mode}  {device_note()}  "
-              f"workers={n_workers}")
+              f"workers={pool.total} ({pool.describe()})")
 
-    if n_workers <= 1 or not parallel_enabled():
-        work(reg, spec, run_id)
-    else:
-        import multiprocessing as mp
+    try:
+        execute_run(reg, spec, run_id, workers=workers)
+    finally:
+        # Closed out even when a worker died, so the run row says what happened instead
+        # of staying `pending` for ever while the exception travels.
+        from mofsbu.registry import relabel_all
 
-        db, store = str(reg.db_path), str(reg.store.root)
-        procs = [mp.Process(target=_worker_process, args=(db, store, spec.to_json(indent=None), run_id))
-                 for _ in range(n_workers)]
-        for proc in procs:
-            proc.start()
-        for proc in procs:
-            proc.join()
-
-    from mofsbu.registry import relabel_all
-
-    relabel_all(reg)          # labels are a projection; refresh once the fragments exist
-    status = finish_run(reg, run_id)
+        relabel_all(reg)      # labels are a projection; refresh once the fragments exist
+        status = finish_run(reg, run_id)
     return {"run_id": run_id, "tasks": n_tasks, "status": status,
-            "counts": task_counts(reg, run_id), "workers": n_workers,
+            "counts": task_counts(reg, run_id), "workers": pool.total,
+            "build_workers": pool.build, "relax_workers": pool.relax,
             "summary": outcome_summary(reg, run_id)}

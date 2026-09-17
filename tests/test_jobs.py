@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 
 import pytest
 
@@ -22,6 +23,23 @@ def reg(tmp_path):
     with Registry(tmp_path / "r.db", BlobStore(tmp_path / "s")) as r:
         r.migrate()
         yield r
+
+
+def _dead_pid() -> int:
+    """A pid that certainly is not running: one that ran, exited, and was reaped.
+
+    Skips where the question cannot be asked.  `worker_alive` is POSIX-only on purpose —
+    `os.kill` on Windows terminates rather than probes — so a test that depends on a
+    definitive "that process is gone" has nothing to assert there.
+    """
+    import subprocess
+    import sys
+
+    if os.name != "posix":
+        pytest.skip("process liveness is POSIX-only; the heartbeat covers the rest")
+    proc = subprocess.Popen([sys.executable, "-c", ""])
+    proc.wait()
+    return proc.pid
 
 
 def catechol_spec(**over) -> BuildSpec:
@@ -87,6 +105,199 @@ def test_a_dead_worker_returns_its_task_to_the_queue(reg):
     assert claim_task(reg, run_id) is not None
 
 
+# ── a run whose process is gone ──────────────────────────────────────────────
+# A run row is written BY a process, so the one state it cannot record is "the process
+# stopped existing".  Killed with its shell, the row keeps saying `pending` and the page
+# keeps calling it ongoing — forever, and with its claimed tasks stranded where no worker
+# will take them.
+
+def test_a_run_whose_worker_is_gone_is_interrupted_not_ongoing(reg):
+    from mofsbu.registry.jobs import INTERRUPTED, run_liveness, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {"i": 0})
+    add_task(reg, run_id, "place", {"i": 1})
+    # A worker on this host claims one task and is killed: the claim stays behind with
+    # its pid on it, and that pid is the evidence.
+    claim_task(reg, run_id, worker=f"{socket.gethostname()}:{_dead_pid()}")
+    reg.conn.commit()
+
+    assert run_liveness(reg, run_id)["verdict"] == "interrupted"
+    swept = sweep_interrupted(reg)
+    assert [s["run_id"] for s in swept] == [run_id]
+    assert swept[0]["returned_claims"] == 1
+
+    row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+    assert row["status"] == INTERRUPTED
+    # The stranded task is claimable again — it was never in flight, only held.
+    assert task_counts(reg, run_id).get("claimed") is None
+    assert claim_task(reg, run_id) is not None
+
+
+def test_a_live_worker_is_never_swept(reg):
+    """The dangerous direction.  Sweeping a run that IS being worked on hands its tasks
+    to a second worker and has the work done twice."""
+    from mofsbu.registry.jobs import run_liveness, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    claim_task(reg, run_id)                   # claimed by THIS process, which is alive
+    reg.conn.commit()
+
+    assert run_liveness(reg, run_id)["verdict"] == "live"
+    assert sweep_interrupted(reg) == []
+    assert task_counts(reg, run_id).get("claimed") == 1
+
+
+def test_a_worker_on_another_host_is_unknown_not_dead(reg):
+    """`claimed_by` is host:pid, so the question is only answerable on that host.
+
+    From anywhere else the honest answer is "cannot tell", and a sweep must treat it as
+    live: the two-machine workflow has one registry reachable from both ends, and
+    guessing `dead` there would reset tasks the workstation is running.
+    """
+    from mofsbu.registry.jobs import run_liveness, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    claim_task(reg, run_id, worker=f"some-other-box:{_dead_pid()}")
+    reg.conn.commit()
+
+    verdict = run_liveness(reg, run_id)
+    assert verdict["verdict"] == "unknown" and "some-other-box" in verdict["reason"]
+    assert sweep_interrupted(reg) == []
+
+
+def test_a_long_task_is_not_mistaken_for_a_dead_one(reg, monkeypatch):
+    """The heartbeat goes stale during an hour of xTB, and that must decide nothing.
+
+    A claimed task is only ever judged by its process, never by the clock — otherwise the
+    slowest tasks in the queue, which are the expensive ones, are exactly the ones that
+    get reset and recomputed.
+    """
+    from mofsbu.registry import jobs
+    from mofsbu.registry.jobs import run_liveness
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "relax", {})
+    claim_task(reg, run_id)                   # this process: alive, and busy
+    reg.conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?",
+                     ("2020-01-01T00:00:00+00:00", run_id))
+    reg.conn.commit()
+    monkeypatch.setattr(jobs, "STALE_AFTER", 1.0)
+
+    assert run_liveness(reg, run_id)["verdict"] == "live"
+    assert jobs.sweep_interrupted(reg) == []
+
+
+def test_a_run_that_never_claimed_anything_is_judged_by_its_heartbeat(reg, monkeypatch):
+    """Killed between planning and the first claim: no pid anywhere to ask about.
+
+    Nothing is claimed, so nothing can be disturbed by the verdict — which is exactly
+    when the clock is safe to use.
+    """
+    from mofsbu.registry import jobs
+    from mofsbu.registry.jobs import INTERRUPTED, run_liveness
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    reg.conn.commit()
+    assert run_liveness(reg, run_id)["verdict"] == "live"      # just planned
+
+    reg.conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?",
+                     ("2020-01-01T00:00:00+00:00", run_id))
+    reg.conn.commit()
+    monkeypatch.setattr(jobs, "STALE_AFTER", 1.0)
+    assert run_liveness(reg, run_id)["verdict"] == "interrupted"
+    assert jobs.sweep_interrupted(reg)[0]["now"] == INTERRUPTED
+
+
+def test_a_run_that_finished_without_being_closed_out_is_done_not_interrupted(reg):
+    """Killed after the last task: the work IS all there, only the closing write is not.
+
+    Reporting that as interrupted would invite someone to re-run a complete run.
+    """
+    from mofsbu.registry.jobs import run_liveness, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    complete_task(reg, claim_task(reg, run_id).id)
+    reg.conn.commit()
+
+    assert run_liveness(reg, run_id)["verdict"] == "unfinalised"
+    assert sweep_interrupted(reg)[0]["now"] == "done"
+
+
+def test_a_stop_that_was_asked_for_stays_cancelled_even_if_the_worker_dies(reg):
+    """The worker dying on the way out does not turn a decision into an accident."""
+    from mofsbu.registry.jobs import request_cancel, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    claim_task(reg, run_id, worker=f"{socket.gethostname()}:{_dead_pid()}")
+    request_cancel(reg, run_id)
+
+    assert sweep_interrupted(reg)[0]["now"] == "cancelled"
+    assert reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                            (run_id,)).fetchone()["status"] == "cancelled"
+
+
+def test_an_interrupted_run_can_be_resumed(reg):
+    """The state nobody chose is the one where continuing matters most."""
+    from mofsbu.registry.jobs import resume_run, sweep_interrupted
+
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {"i": 0})
+    add_task(reg, run_id, "place", {"i": 1})
+    claim_task(reg, run_id, worker=f"{socket.gethostname()}:{_dead_pid()}")
+    reg.conn.commit()
+    sweep_interrupted(reg)
+
+    resume_run(reg, run_id)
+    assert reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                            (run_id,)).fetchone()["status"] == "running"
+    assert task_counts(reg, run_id).get("pending") == 2
+
+
+def test_a_worker_stamps_the_run_it_is_working_on(reg):
+    """Without a stamp per task, a worker part-way through a long queue is
+    indistinguishable from one that died at the first."""
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    reg.conn.execute("UPDATE runs SET heartbeat_at=NULL WHERE id=?", (run_id,))
+    claim_task(reg, run_id)
+    assert reg.conn.execute("SELECT heartbeat_at FROM runs WHERE id=?",
+                            (run_id,)).fetchone()["heartbeat_at"] is not None
+
+
+# ── one queue, two kinds of hardware ─────────────────────────────────────────
+
+def test_a_worker_claims_only_the_kinds_it_is_asked_for(reg):
+    """A GPU worker and a CPU worker pull from one queue and must not take each other's
+    work: sharing it is what put construction behind the optimiser."""
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {"i": 0})
+    add_task(reg, run_id, "relax", {"i": 1})
+    add_task(reg, run_id, "place", {"i": 2})
+
+    relaxer = claim_task(reg, run_id, kinds=("relax",))
+    assert relaxer.kind == "relax"
+    assert claim_task(reg, run_id, kinds=("relax",)) is None      # only the one
+
+    builder = claim_task(reg, run_id, exclude_kinds=("relax",))
+    assert builder.kind == "place"
+    assert claim_task(reg, run_id, exclude_kinds=("relax",)).kind == "place"
+    assert claim_task(reg, run_id, exclude_kinds=("relax",)) is None
+
+
+def test_an_empty_kind_list_claims_nothing(reg):
+    """`kinds=()` is 'this worker takes nothing', which is not the same as no filter."""
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {})
+    assert claim_task(reg, run_id, kinds=()) is None
+    assert claim_task(reg, run_id) is not None
+
+
 # ── ground rule 8: the laptop is the default ─────────────────────────────────
 
 def test_parallelism_is_opt_in(monkeypatch):
@@ -113,10 +324,151 @@ def test_a_run_on_an_undeclared_machine_stays_in_process(reg, monkeypatch):
     def explode(*_a, **_k):                      # pragma: no cover - must never run
         raise AssertionError("spawned a process on an undeclared machine")
 
+    # Both, because the pool is started from the spawn context rather than from the
+    # module: a forked child cannot re-initialise CUDA, which is the one configuration
+    # the split exists for.
     monkeypatch.setattr(mp, "Process", explode)
+    monkeypatch.setattr(mp.get_context("spawn"), "Process", explode)
     summary = run(reg, catechol_spec())
     assert summary["workers"] == 1
     assert summary["counts"].get("done", 0) > 0
+
+
+# ── the GPU is one device; the cores are not ─────────────────────────────────
+
+def test_the_pool_dedicates_a_worker_to_the_relax_queue_on_a_gpu(monkeypatch):
+    """The reported bug: a declared GPU relaxed while ONE core built for it.
+
+    The declared total is divided, never exceeded — the workstation profile already
+    leaves a core for the machine to stay responsive, and adding a GPU feeder on top
+    would take it back.
+    """
+    from mofsbu.runner import plan_workers
+
+    monkeypatch.delenv("MOFSBU_RELAX_WORKERS", raising=False)
+    monkeypatch.setenv("MOFSBU_WORKERS", "8")
+
+    monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
+    cpu = plan_workers()
+    assert (cpu.total, cpu.build, cpu.relax) == (8, 8, 0), (
+        "on CPU, relaxation is core work like everything else and splitting the pool "
+        "would only reserve a core for it")
+
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda")
+    gpu = plan_workers()
+    assert (gpu.total, gpu.build, gpu.relax) == (8, 7, 1)
+    assert gpu.build > 1, "the whole point: construction is not down to one core"
+
+    monkeypatch.setenv("MOFSBU_RELAX_WORKERS", "3")            # a multi-GPU box says so
+    assert plan_workers().relax == 3
+    monkeypatch.setenv("MOFSBU_RELAX_WORKERS", "0")            # or opts back out
+    assert plan_workers().relax == 0
+
+
+def test_a_construct_run_reserves_nothing_for_a_queue_it_will_not_have(monkeypatch):
+    """`construct` queues no relaxations, so a worker held back for them idles all run."""
+    from mofsbu.runner import plan_workers
+
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda")
+    monkeypatch.setenv("MOFSBU_WORKERS", "8")
+    assert plan_workers(relaxes=False).build == 8
+    assert plan_workers(relaxes=False).relax == 0
+
+
+def test_an_undrained_queue_is_not_a_finished_run(reg):
+    """A worker that dies records nothing, so its tasks are still pending — and a run
+    summarised from only the survivors' successes must not read as `done`."""
+    run_id = create_run(reg, catechol_spec())
+    add_task(reg, run_id, "place", {"i": 0})
+    add_task(reg, run_id, "place", {"i": 1})
+    complete_task(reg, claim_task(reg, run_id).id)
+    assert finish_run(reg, run_id) == "failed"
+
+    complete_task(reg, claim_task(reg, run_id).id)
+    assert finish_run(reg, run_id) == "done"
+
+
+def test_the_relax_share_never_consumes_the_builders(monkeypatch):
+    """All-relax would starve the queue that feeds it — one busy core again."""
+    from mofsbu.runner import plan_workers
+
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda")
+    monkeypatch.setenv("MOFSBU_WORKERS", "2")
+    monkeypatch.setenv("MOFSBU_RELAX_WORKERS", "9")
+    pool = plan_workers()
+    assert (pool.total, pool.build, pool.relax) == (2, 1, 1)
+
+
+def test_an_explicit_worker_count_is_a_declaration(monkeypatch):
+    """`--workers 4` on an unconfigured machine means four, not 'laptop, so one'.
+
+    Ground rule 8 is that parallelism is never ASSUMED; a number typed on the command
+    line or in the page is somebody assuming it on purpose.
+    """
+    from mofsbu.runner import plan_workers
+
+    monkeypatch.delenv("MOFSBU_PROFILE", raising=False)
+    monkeypatch.delenv("MOFSBU_WORKERS", raising=False)
+    assert plan_workers().total == 1                  # nothing declared: still one
+    assert plan_workers(4).total == 4
+
+
+def test_a_relax_worker_waits_for_work_the_builders_have_not_queued_yet(reg, monkeypatch):
+    """An empty relax queue early in a run means 'not yet', not 'never'.
+
+    Relax tasks are queued BY the build tasks as they finish, so a relax worker that
+    stopped at the first empty claim would exit seconds into a run and leave the
+    accelerator idle for the rest of it.
+    """
+    import threading
+
+    from mofsbu import runner
+
+    monkeypatch.setattr(runner, "execute",
+                        lambda reg, task, spec: runner.Outcome(None, None))
+    run_id = create_run(reg, catechol_spec())
+    reg.conn.commit()
+
+    builders_running = threading.Event()
+    builders_running.set()
+
+    def queue_one_late() -> None:
+        with Registry(reg.db_path, BlobStore(reg.store.root)) as other:
+            add_task(other, run_id, "relax", {"late": True})
+            other.conn.commit()
+        builders_running.clear()
+
+    threading.Timer(0.3, queue_one_late).start()
+    done = runner.work(reg, catechol_spec(), run_id, kinds=("relax",),
+                       wait_while=builders_running.is_set, poll=0.05)
+    assert done == 1, "the worker gave up before the builders had queued anything"
+    assert task_counts(reg, run_id).get("done") == 1
+
+
+def test_a_declared_pool_really_drains_the_queue_in_parallel(reg, monkeypatch):
+    """End to end through spawned processes: every task is executed exactly once.
+
+    Cheap to run and worth the seconds — the two things that only break across a process
+    boundary are the claim (two workers, one row) and the writes (several processes, one
+    SQLite file), and neither is exercised by an in-process worker.
+    """
+    monkeypatch.setenv("MOFSBU_WORKERS", "3")
+    monkeypatch.setenv("MOFSBU_PROFILE", "workstation")
+    summary = run(reg, catechol_spec(coordination=(4, 6), run_mode="construct"))
+    assert summary["workers"] == 3
+    counts = summary["counts"]
+    assert counts.get("pending", 0) == 0 and counts.get("claimed", 0) == 0
+    assert counts.get("done", 0) > 0
+    claimants = {r[0] for r in reg.conn.execute(
+        "SELECT DISTINCT claimed_by FROM tasks WHERE run_id=?", (summary["run_id"],))}
+    # Every task was executed by a worker process, not by the process that planned the
+    # run.  Not "by more than one of them": spawn takes about a second to come up and a
+    # queue this short can be finished by whichever worker is ready first, which is
+    # parallelism working rather than parallelism failing.
+    assert claimants and f":{os.getpid()}" not in "".join(claimants)
+    # Attempts stay at one per task: a second claim of the same row is the failure this
+    # queue's IMMEDIATE transaction exists to prevent.
+    assert summary["summary"]["retried_tasks"] == 0
 
 
 # ── ground rule 7: missing functions are stubs that shout ────────────────────

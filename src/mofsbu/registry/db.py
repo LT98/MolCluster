@@ -11,6 +11,13 @@ from mofsbu.versions import ALGO_VERSIONS
 SCHEMA_VERSION = 1
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+#: How long a connection waits for the write lock before giving up.  sqlite3's own default
+#: is 5 s, which is a whole run's worth of workers deciding they are deadlocked: a dozen
+#: processes committing a structure each, plus a relaxation writing a geometry, queue on
+#: one lock and the slow one is the one that matters.  `database is locked` here is a
+#: throughput problem misreported as a failure, so the wait is long enough to absorb it.
+BUSY_TIMEOUT = 30.0
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -24,7 +31,7 @@ class Registry:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.store = store or BlobStore(self.db_path.parent / "store")
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=BUSY_TIMEOUT)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.journal_mode = self._set_journal_mode(journal_mode)
@@ -36,20 +43,33 @@ class Registry:
         network/synced filesystems that delete is refused, and SQLite reports it as a
         bare `disk I/O error` at commit time — far from its cause.  Probe once, here,
         where the fallback is cheap and the diagnosis is obvious.
-        """
-        import sqlite3 as _sq
 
+        The probe table is named per connection.  A shared name is a table two workers
+        starting at the same moment both create and both drop, so one of them sees its
+        own INSERT fail on a table the other has just removed — and concludes the
+        filesystem cannot hold a WAL, on a machine where it can.
+        """
+        import os
+        import sqlite3 as _sq
+        import uuid
+
+        probe = f"_probe_{os.getpid()}_{uuid.uuid4().hex[:8]}"
         for mode in ([requested] if requested != "auto" else ["WAL", "TRUNCATE", "MEMORY"]):
             try:
                 self.conn.execute(f"PRAGMA journal_mode = {mode}")
-                self.conn.execute("CREATE TABLE IF NOT EXISTS _probe (x INTEGER)")
-                self.conn.execute("INSERT INTO _probe VALUES (1)")
+                self.conn.execute(f"CREATE TABLE IF NOT EXISTS {probe} (x INTEGER)")
+                self.conn.execute(f"INSERT INTO {probe} VALUES (1)")
                 self.conn.commit()
-                self.conn.execute("DROP TABLE _probe")
+                self.conn.execute(f"DROP TABLE {probe}")
                 self.conn.commit()
                 return mode
             except _sq.Error:
                 self.conn.rollback()
+                try:                      # a probe that got as far as CREATE must not stay
+                    self.conn.execute(f"DROP TABLE IF EXISTS {probe}")
+                    self.conn.commit()
+                except _sq.Error:
+                    self.conn.rollback()
                 continue
         raise RuntimeError(
             f"no usable SQLite journal mode at {self.db_path}. If a stale "

@@ -276,6 +276,12 @@ function renderCompute(c) {
   $('#workers').onchange = applyCompute;
 }
 
+// The worker note says how the pool is DIVIDED, not just how big it is. Construction is
+// CPU work and relaxation on a GPU is one device's worth however many ask for it, so the
+// server dedicates one worker to the relax queue and leaves the rest building — which is
+// the difference between the two halves of a run overlapping and queueing behind one
+// another. `worker_note` comes from `runner.plan_workers`, so the page cannot describe a
+// division the run will not use.
 function showHwNote() {
   const c = state.compute || {};
   const dev = $('#device').value;
@@ -285,7 +291,8 @@ function showHwNote() {
     (dev === 'cpu'
       ? (onlyCpu ? 'no GPU visible to torch here' : 'GPU available but not selected')
       : 'GPU runs apply to ml_go only')
-    + ' · ' + (n > 1 ? `workstation: ${n} workers` : 'laptop: one worker');
+    + ' · ' + (n > 1 ? `workstation: ${n} workers` : 'laptop: one worker')
+    + (c.worker_note && n > 1 ? ` (${c.worker_note})` : '');
 }
 
 async function applyCompute() {
@@ -295,7 +302,9 @@ async function applyCompute() {
       body: JSON.stringify({device: $('#device').value, workers: +$('#workers').value || 1})});
     state.compute = c;
     showHwNote();
-    $('#submitMsg').textContent = `device ${c.device} · ${c.workers} worker(s)`;
+    $('#submitMsg').textContent =
+      `device ${c.device} · ${c.workers} worker(s)`
+      + (c.worker_note && c.workers > 1 ? ` · ${c.worker_note}` : '');
   } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
 }
 

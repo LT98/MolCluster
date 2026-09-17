@@ -12,6 +12,131 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## Runner, issue #32 — a GPU relaxed while one core built for it ✅
+
+**Reported as** "process utilization unoptimized": with a GPU declared for the ML rung, the
+CPU side of a run — enumeration, embedding, perception, placement, hashing — used one core,
+so the accelerator spent the run waiting for something to relax.
+
+**Two independent causes, and the second was the larger one.**
+
+*One queue, two kinds of hardware.* `work()` claimed any pending task, so a pool of N workers
+was N processes competing for the same rows. The optimiser and the constructor do not want
+the same hardware: construction scales with cores, and an ML relaxation on one card is one
+device's worth of work however many processes ask for it. With one pool the two halves of a
+run interleave rather than overlap — and on a GPU, several workers on one card divide its
+memory rather than multiplying its throughput.
+
+*The page never spawned a worker at all.* `ui/builder.submit_run` called `work()` directly on
+its background thread. The worker count typed on `/builder` was written to the run row,
+reported back to the page, and applied to nothing. Every run started from the browser — which
+is how most of them are started, and the only way to select the GPU without a shell — was one
+process, whatever the machine had been declared to be. That is where the "only one core" came
+from; the queue design was merely what kept it from being fixable by declaring more workers.
+
+**Built** `claim_task` takes `kinds` / `exclude_kinds`, so one queue can feed an
+inhomogeneous pool without losing the single-row claim. `runner.plan_workers` divides the
+**declared** total — never exceeds it, the workstation profile's spare core stays spare — into
+builders and a relax share from `config.relax_workers`: 1 on a declared accelerator, 0 on CPU,
+where relaxation is core work like everything else. `runner.execute_run` is now the single
+place the pool is built, and both the CLI and the page go through it.
+
+Relax tasks are queued *by* build tasks as they finish, so a relax worker that stopped at its
+first empty claim would exit seconds into a run. `work(wait_while=…)` lets it wait; the parent
+sets an event when the builders are done, which is the only thing that ends the wait.
+
+**What building it turned up.**
+
+* **Fork cannot serve the case this is for.** Children were forked. A forked child cannot
+  re-initialise CUDA, so the moment a GPU worker was a real GPU worker it would have died at
+  its first relaxation. The pool uses the **spawn** context — also the right answer for the
+  web server, which is threaded, and a fork from a threaded process is its own hazard.
+* **A dead worker read as a finished run.** `finish_run` called a run `done` whenever no task
+  was marked `failed`. With one in-process worker that was unreachable; with a pool it is not —
+  a worker that dies records nothing, so its share of the queue stays `pending` while the
+  survivors' successes are all there is to summarise. Leftover pending or claimed work is now
+  `failed`, and `execute_run` names the process and its exit code.
+* **Two small things that only bite with N writers**, both found by starting workers
+  simultaneously rather than by reasoning: the journal-mode probe used a fixed table name, so
+  two connections opening at once could drop each other's probe table and conclude the
+  filesystem could not hold a WAL; and connections took sqlite3's default 5 s lock timeout,
+  which a dozen processes committing structures exceed as a matter of throughput and report as
+  `database is locked`. Per-connection probe name; `BUSY_TIMEOUT = 30 s`.
+* **Fork was hiding a test-suite fault.** A forked worker inherits the parent's memory, so a
+  test that substitutes a fake energy backend in this process had it apply inside the workers
+  too. A spawned one starts from nothing: database, spec JSON and environment reach it, and
+  in-process state does not. That turned a pre-existing leak into a hang — `POST /api/compute`
+  writes `MOFSBU_WORKERS` into the process on purpose (it is how the page reaches the work),
+  no test undid it, and a later test calling `run()` therefore spawned real workers that went
+  looking for a real optimiser. It passed only because `test_rerun_and_cancel` sorts before
+  `test_ui_controls`. An autouse fixture in `tests/conftest.py` now undoes every `MOFSBU_*`
+  declaration at the end of the test that made it.
+
+Ground rule 8 is unchanged: an undeclared machine still runs one in-process worker and spawns
+nothing. What did change is that an explicit `workers=` — a `--workers` flag, the number typed
+on the page — is now honoured as the declaration it is, instead of being overridden back to
+one by the laptop default.
+
+Gates: `tests/test_jobs.py` (kind filters, the division, the relax worker's wait, and a real
+three-process run), `tests/test_ui_controls.py::test_a_run_submitted_from_the_page_uses_the_declared_pool`.
+
+---
+
+## Runner, issue #32 follow-up — a run killed with its shell was ongoing for ever ✅
+
+**Was** A run row records that work STARTED and that it FINISHED. Nothing writes the third
+outcome — *the process stopped existing* — so a run killed with its terminal kept the last
+thing it managed to say, `pending`, and `runs.html` had no choice but to believe it: `const
+live = ['pending','running','cancelling'].includes(run.status)`. The "running" label beside it
+came from an in-memory dict in the server process, so a restart cleared that and left the row
+alone. Worse than the display: the tasks that worker held stayed `claimed`, and nothing outside
+the cancel path calls `reset_stale_claims`, so they were unclaimable — the run could not be
+finished by anything, ever.
+
+Not fixable by a `finally`. SIGHUP from a closed terminal, SIGKILL, a crash and a flat battery
+all skip it, and the web server's run lives on a `daemon=True` thread, which is not reliably
+given the chance to run one either. The missing thing was not a cleanup path; it was a FACT —
+nothing in the schema said whether a process was still there.
+
+**Built** Two signals, because neither is sufficient alone, and they are trusted asymmetrically:
+
+* **the claimants.** `claimed_by` is `host:pid`, so on that host the question is answerable
+  exactly. A dead pid is *proof* and is acted on at once. From anywhere else — and on Windows,
+  where `os.kill` terminates rather than probes — the answer is `None`, and the verdict is
+  `unknown` rather than `dead`. The two-machine workflow makes that distinction load-bearing:
+  guessing "dead" about the workstation would reset tasks it is running.
+* **`runs.heartbeat_at`**, stamped in the same transaction as each claim and after each task.
+  It only ever decides a run with NOTHING claimed. A worker inside an hour of xTB stamps
+  nothing for an hour, and sweeping it would hand its tasks to a second worker and pay for the
+  work twice — so a claimed task is judged by its process or not at all.
+
+`run_liveness` returns `live` / `interrupted` / `unknown` / `unfinalised` and writes nothing,
+which is what lets the read-only listing tell the truth about a worker that died while the
+server stayed up. `sweep_interrupted` acts on it when a process TAKES OVER a database — a
+server starting, a run starting, a resume — rather than on a timer, because that is the moment
+the question is both worth asking and safely answerable.
+
+`interrupted` is a new run status and deliberately not one of the existing ones. It is not
+`cancelled` (nobody chose it) and not `failed` (the work was fine); it is the one state that
+simply resumes, which is what `resume_run` now accepts. Its stranded tasks go back to
+`pending`: the process holding them is gone, so they were never in flight.
+
+**What building it turned up.** A run killed *after its last task* is not interrupted at all —
+the work is all there and only the closing write was lost. That is `unfinalised`, and the sweep
+closes it out with `finish_run` so it reports the status its tasks earned. Reporting it as
+interrupted would have invited someone to re-run a complete run.
+
+**Not done here:** actually draining a resumed run's queue. Resume returns the tasks and says
+`resubmit the spec to execute them`, exactly as it did for a cancelled run — a run whose queue
+is refilled and then left alone will read `interrupted` again once the heartbeat ages out,
+which is accurate. Executing it from the page is issue #33.
+
+Gates: `tests/test_jobs.py` (the verdicts, including the two that must NOT sweep — a live
+worker and a claimant on another host), `tests/test_ui_controls.py` (a run stranded with a real
+dead pid, through a server start, the read path, and resume).
+
+---
+
 ## UI, rev 24 — seven usability defects, all closed
 
 None of these was a correctness bug: nothing here produced a wrong structure or a wrong

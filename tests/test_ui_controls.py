@@ -366,6 +366,131 @@ def test_an_unfinished_spec_gets_a_reason_rather_than_a_500(client):
     assert bad["ok"] is False and "counts down" in bad["reason"]
 
 
+# ── a run whose process is gone must stop reading as ongoing ─────────────────
+
+def _strand_a_run(db, store):
+    """Leave behind exactly what a killed shell leaves: a `pending` run holding a task
+    claimed by a pid that no longer exists, and no ending written anywhere."""
+    import os
+    import socket
+    import subprocess
+    import sys
+
+    from mofsbu.registry.jobs import add_task, claim_task, create_run
+    from mofsbu.spec import BuildSpec, MetalSpec, MoleculeSpec
+
+    if os.name != "posix":
+        pytest.skip("process liveness is POSIX-only; the heartbeat covers the rest")
+    gone = subprocess.Popen([sys.executable, "-c", ""])
+    gone.wait()
+
+    spec = BuildSpec(molecules=(MoleculeSpec("THQ", THQ, 1),),
+                     metals=(MetalSpec("Ni", 2, "hs"),), coordination=(6,),
+                     ligands_per_metal=(1,), binding=("chelate",))
+    with Registry(db, BlobStore(store)) as reg:
+        reg.migrate("test")
+        run_id = create_run(reg, spec)
+        add_task(reg, run_id, "place", {"i": 0})
+        add_task(reg, run_id, "place", {"i": 1})
+        claim_task(reg, run_id, worker=f"{socket.gethostname()}:{gone.pid}")
+        reg.conn.commit()
+    return run_id
+
+
+def test_a_run_killed_with_its_shell_no_longer_reads_as_ongoing(registry, active):
+    """The reported symptom.  The run row still says `pending` — it was written by a
+    process that is no longer able to correct it — and the page believed it."""
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+
+    # Starting a server is the clearest statement that the previous one is not running.
+    client = TestClient(create_app(db, store, active))
+    row = next(r for r in client.get("/api/runs").json()["runs"] if r["id"] == run_id)
+    assert row["status"] == "interrupted"
+    assert row["liveness"] is None, "a closed-out run has nothing left to be live about"
+
+    detail = client.get(f"/api/runs/{run_id}").json()["run"]
+    assert detail["status"] == "interrupted"
+    # And the stranded task went back to the queue rather than staying claimed forever.
+    counts = {r["status"]: r["n"] for r in [
+        {"status": t["status"], "n": 1} for t in
+        client.get(f"/api/runs/{run_id}/tasks").json()["tasks"]]}
+    assert "claimed" not in counts
+
+
+def test_a_worker_that_dies_while_the_server_is_up_is_reported_on_the_read_path(
+        registry, active):
+    """No restart to wait for: asking a pid whether it exists writes nothing, so the
+    listing can tell the truth about a run it has not swept."""
+    db, store = registry
+    client = TestClient(create_app(db, store, active))     # sweeps; nothing to sweep yet
+    run_id = _strand_a_run(db, store)                      # then the worker dies
+
+    row = next(r for r in client.get("/api/runs").json()["runs"] if r["id"] == run_id)
+    assert row["status"] == "pending", "the row itself cannot know"
+    assert row["liveness"]["verdict"] == "interrupted"
+    assert "gone" in row["liveness"]["reason"]
+
+
+def test_resuming_an_interrupted_run_returns_its_tasks_to_the_queue(registry, active):
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    client = TestClient(create_app(db, store, active))
+
+    body = client.post(f"/api/runs/{run_id}/resume").json()
+    assert body["was"] == "interrupted"
+    assert body["pending"] == 2, "the claimed task is stranded, not in flight"
+
+    with Registry(db, BlobStore(store)) as reg:
+        assert reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                                (run_id,)).fetchone()["status"] == "running"
+
+
+# ── the worker count on the page has to reach the work ───────────────────────
+
+def test_a_run_submitted_from_the_page_uses_the_declared_pool(client, monkeypatch):
+    """The reported bug, at its source.
+
+    The page's worker count was written to the run row and applied to nothing: `submit_run`
+    called `work` directly, which is one worker whatever the machine had been declared to
+    be. Every run from the browser — the only way most people start one — was serial.
+    """
+    import threading
+
+    from mofsbu import runner
+
+    seen: dict = {}
+    called = threading.Event()
+
+    def fake_execute_run(reg, spec, run_id, *, workers=None):
+        seen.update(run_id=run_id, workers=workers,
+                    pool=runner.plan_workers(workers,
+                                             relaxes=spec.run_mode != "construct"))
+        called.set()
+        return seen["pool"]
+
+    monkeypatch.setattr(runner, "execute_run", fake_execute_run)
+    monkeypatch.setattr(runner, "work", lambda *a, **k: pytest.fail(
+        "the page went back to draining the queue with a single in-process worker"))
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda")
+    compute = client.post("/api/compute",
+                          json={"device": "cuda", "workers": 4}).json()
+    # The hardware panel states the division, so "4 workers" cannot read as four
+    # relaxations at once on one card.
+    assert (compute["build_workers"], compute["relax_workers"]) == (3, 1)
+    assert "relaxing" in compute["worker_note"]
+
+    # A `construct` run has no relax queue, so all four build — the page reports the
+    # division this run will use, not the one the machine would use for another.
+    body = client.post("/api/runs", json={"spec": spec_payload()}).json()
+    assert called.wait(10), "the run thread never started the work"
+    assert seen["run_id"] == body["run_id"]
+    pool = seen["pool"]
+    assert (pool.total, pool.build, pool.relax) == (4, 4, 0)
+    assert body["workers"] == 4 and body["build_workers"] == 4
+    assert body["relax_workers"] == 0
+
+
 def test_the_page_says_what_the_notation_and_the_ladder_mean(client):
     """Both are rendered from capabilities, so the page cannot describe them wrongly."""
     caps = client.get("/api/capabilities").json()
