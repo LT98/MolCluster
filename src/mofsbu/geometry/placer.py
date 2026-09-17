@@ -703,6 +703,43 @@ def to_rdkit(metal: str, ligands: list[LigandPlacement], result: PlacementResult
     return mol
 
 
+@dataclass
+class Center:
+    """One coordination centre of a polynuclear node.
+
+    `cn` and `local_geometry` have no defaults on purpose (ground rule 5): which
+    polyhedron a metal sits in is precisely the ambiguity that has to branch rather than
+    be guessed, and a default here would be the guess.  The remaining fields are the
+    per-centre labels D12 insists on — a mixed-valence Fe3 node is three centres with
+    different `oxidation_state`, not one node with an average.
+    """
+
+    element: str
+    cn: int
+    local_geometry: str
+    charge: int = 0
+    oxidation_state: int | None = None
+    spin_class: str | None = None
+
+
+@dataclass
+class Join:
+    """One ligand donor attached to one centre.
+
+    A bridge is TWO of these naming the same `block` and different centres, which is what
+    keeps D14 true through the placer: nothing tags a ligand as bridging, its mu-ness is
+    counted from how many centres its joins reach.
+    """
+
+    center: int                                   # index into `centers`
+    block: LigandPlacement                        # the ligand being attached
+    #: Which of `block.donor_idxs` this join uses — a POSITION in that tuple, not an atom
+    #: index.  A bridging formate is `site=0` on one centre and `site=1` on the other.
+    site: int = 0
+    mode: BindingMode = BindingMode.MONODENTATE
+    torsion_well: int = 0
+
+
 def place_multicentre(centers: list[Center], joins: list[Join],
                       constraints: list["InterCentreConstraint"], *, seed: int = 0):
     """Place several coordination centres with inter-centre constraints.  NOT IMPLEMENTED.
@@ -722,10 +759,53 @@ def place_multicentre(centers: list[Center], joins: list[Join],
     )
 
 
+def to_rdkit_multicentre(centers: list[Center], joins: list[Join],
+                         constraints: list["InterCentreConstraint"],
+                         result: PlacementResult) -> Chem.Mol:
+    """A placed polynuclear node as one RDKit mol.  NOT IMPLEMENTED.
+
+    The multi-centre counterpart of `to_rdkit`, and the reason it is a separate settled
+    signature rather than something M6 improvises: the exit gate is that a placed node
+    hashes to the hand-written fixture, and a hash needs a typed graph, so the placer is
+    only half of what the gate measures.  Going back through RDKit keeps that second half
+    on the same single conversion path everything else uses.
+
+    `constraints` is an argument here and not in `to_rdkit` because a METAL_METAL edge is
+    a CHEMICAL claim that no coordinate can supply: the Cu2 paddlewheel carries one at
+    2.62 A and the Fe3 trimer carries none at 3.29 A, and the two fixtures differ at L1
+    because of it.  See `InterCentreConstraint.metal_metal_bond`.
+    """
+    from mofsbu.assembly.join import NotBuiltYet
+
+    raise NotBuiltYet(
+        f"geometry.placer.to_rdkit_multicentre ({len(centers)} centres) — M6. "
+        "Use to_rdkit for a single centre."
+    )
+
+
 @dataclass
 class InterCentreConstraint:
     """Distance / angle relationship between two coordination centres (M6)."""
 
     centres: tuple[int, int]
     mm_distance: float | None = None
+    #: The acceptance window, when one has been curated for this node
+    #: (`data/reference/node_cases.tsv`).  Absent means nobody has measured it, which is
+    #: not the same as a zero-width window — `window()` falls back to a tolerance rather
+    #: than refusing everything.
+    mm_lo: float | None = None
+    mm_hi: float | None = None
     bridge_bite_deg: float | None = None
+    #: Does this pair carry a METAL_METAL edge?  Not inferable from `mm_distance`: a
+    #: paddlewheel's Cu-Cu at 2.62 A is an edge and an Fe3-oxo trimer's Fe...Fe at 3.29 A
+    #: is not, and the two hand-written fixtures differ at L1 by exactly that edge.  A
+    #: placer that guessed it from distance would be guessing the identity of its product.
+    metal_metal_bond: bool = False
+
+    def window(self, *, tol: float = 0.15) -> tuple[float, float] | None:
+        """The range this pair may sit in, or None if the constraint sets no distance."""
+        if self.mm_lo is not None and self.mm_hi is not None:
+            return (self.mm_lo, self.mm_hi)
+        if self.mm_distance is None:
+            return None
+        return (self.mm_distance - tol, self.mm_distance + tol)

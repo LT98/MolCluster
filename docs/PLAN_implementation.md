@@ -403,15 +403,21 @@ class ChoiceVector:
 def construct(spec, *, seed) -> ConstructResult            # deterministic; emits choice_vector
 def enumerate_constructs(spec) -> Iterator[ConstructSpec]  # Kind-B/C branch tree, live-DOF gated
 
-# geometry/placer.py — the multicentre half -> M6
+# geometry/placer.py — the multicentre half -> M6.  SIGNATURES NOW IN THE CODE (bodies raise);
+# these are exact as of the M6 test-case prep, which is what forced each of them.
 @dataclass
-class Center: element; charge; oxidation_state; spin_class; cn; local_geometry
+class Center: element; cn; local_geometry; charge=0; oxidation_state=None; spin_class=None
+@dataclass                    # a BRIDGE is two Joins naming the same block — D14, nothing tags it
+class Join: center; block: LigandPlacement; site: int; mode; torsion_well
 @dataclass
-class Join: center; block; site; mode; torsion_well
-@dataclass
-class InterCentreConstraint: centres; mm_distance; bridge      # note the British spelling
-def place_multicentre(centers, joins, ...) -> PlacementResult  # raises NotBuiltYet
-def check_intercentre(coords, constraints) -> QCResult         # not written; extends qc.py
+class InterCentreConstraint:                                   # note the British spelling
+    centres; mm_distance; mm_lo; mm_hi; bridge_bite_deg; metal_metal_bond
+    def window(self, *, tol=0.15) -> tuple[float, float] | None
+def place_multicentre(centers, joins, constraints, *, seed=0) -> PlacementResult
+def to_rdkit_multicentre(centers, joins, constraints, result) -> Chem.Mol
+# geometry/qc.py
+class BadIntercentre(NamedTuple): centres; distance; lo; hi; symbols; source
+def check_intercentre(coords, constraints, *, metal_idxs, symbols=None) -> list[BadIntercentre]
 
 # geometry/templates.py — NOT WRITTEN.  M6's declared plan B (see §4)
 def node_template(name) -> TemplateNode          # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
@@ -459,7 +465,9 @@ Plus: `construct` on an ambiguous spec (CN not determined) **raises/branches** r
 
 **Work** — `geometry/placer.py`: coordination centers + inter-center constraints (M–M distance,
 bridge bite angle) + per-center local geometry; `geometry/qc.py` extended with
-`check_intercenter`; fix the CN=5 local geometries.
+`check_intercentre`. The CN=5 local geometries are no longer outstanding — `site_vectors` has
+both real polyhedra and `test_placer.py` now pins their vertex angles, which matters because the
+paddlewheel is built on `square_pyramidal` with the apex left vacant.
 
 **Ground-truth targets:** Cu₂(µ-O₂CR)₄ paddlewheel and Fe₃(µ₃-O) trimer, built **from scratch**.
 
@@ -467,6 +475,41 @@ bridge bite angle) + per-center local geometry; `geometry/qc.py` extended with
 **same L1 hash as the hand-written M2 fixtures**. That single test proves the placer, the graph
 extraction, and identity all agree. Plus: QC passes (no clashes, M–M within literature range,
 bridge angles sane) and an xTB relax doesn't tear the node apart.
+
+**The test cases are written and in the suite already** — the same fixtures-before-code move
+§7.3 prescribes for M5. Start from them rather than from this paragraph:
+
+* `data/reference/node_cases.tsv` — the ground-truth nodes and the numbers a built one is
+  measured against. **This is the interface for adding an M6 case**; no code changes for a new
+  row. Values are *typical* for the compound class, not one refinement — every row carries a
+  window and the file says so. Narrow them against the CSD before any of it carries a
+  quantitative claim.
+* `tests/test_placer_multicentre.py` — 24 tests that pass today (the target graphs, and whether
+  the curated numbers are self-consistent) plus 17 marked `@m6`, a **strict** xfail on
+  `NotBuiltYet`. Strict means M6 cannot land with the gate unexercised: the moment the placer
+  works, every one of them XPASSes and the suite goes red until the marker comes off.
+* `zn4o` joins the fixture set as the third ground-truth node — the one that carries MU_N and
+  MU2 in one graph, so "µ-ness is counted, not tagged" (D14) is tested on the placer's output.
+
+Three things the test cases forced, all of them now settled interfaces with raising bodies:
+
+1. **`to_rdkit_multicentre`.** The exit gate is a *hash*, so the placer is only half of what it
+   measures; the graph path out of a polynuclear placement needs a name of its own.
+2. **`InterCentreConstraint.metal_metal_bond`.** A METAL_METAL edge is a chemical claim no
+   coordinate supplies — Cu–Cu at 2.62 Å is an edge, Fe···Fe at 3.29 Å is not — so it is
+   declared, never inferred from distance. Inferring it would make identity a function of a
+   bond-length table.
+3. **`geometry.qc.BadIntercentre` + `QCReport.bad_intercentres`.** One verdict object, not a
+   second report shape. `test_qc_today_cannot_see_a_node_whose_centres_are_far_too_close`
+   demonstrates the gap: two Cu at 1.90 Å sit *above* the clash floor and are not a metal–donor
+   pair, so today's `qc()` returns clean on a node that would tear apart under a relax.
+
+**One prerequisite is not an interface question and needs a call:** there is no `oxo_O` donor
+type. A bare oxide perceives as `hydroxide_O`, and a µ₃/µ₄-oxo is neither — but a donor type
+with no row in `donor_descriptors.tsv` fails a descriptor test, so M6 cannot simply start
+emitting one. Add the row (pKa, HSAB, preferred modes) before the Fe₃ and Zn₄O gates can pass;
+`test_the_central_oxo_has_no_donor_type_of_its_own_yet` fails loudly when it is added, and says
+to delete itself in that commit.
 
 **Plan B, declared in advance (see §4):** if constrained multi-center placement stalls, fall back to
 `geometry/templates.py` — place from a stored reference node geometry and graft ligands onto it

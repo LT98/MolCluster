@@ -1,0 +1,51 @@
+# Reference cases for the M6 multi-centre placer: the polynuclear nodes it must build,
+# and the numbers a built one is measured against.
+#
+# THIS FILE IS THE INTERFACE FOR ADDING M6 TEST CASES.  Add a row and the whole set is
+# re-checked by `python -m pytest tests/test_placer_multicentre.py`; nothing in the test
+# module needs changing.  Same arrangement as `ligand_cases.tsv` one layer down.
+#
+# It lives under data/reference/ because that is the one place in data/ that IS tracked,
+# so the laptop and the workstation measure against the same targets.
+#
+# PROVENANCE, stated plainly.  These are TYPICAL crystallographic values for the named
+# compound class, carried here from the structural-chemistry literature — they are not a
+# refinement of one deposited structure, and no CIF was consulted.  That is why every row
+# carries a WINDOW (`d_mm_lo`/`d_mm_hi`) and not just an ideal: the window is what a QC
+# verdict is allowed to lean on, and it is deliberately wider than the spread between
+# real refinements of the same node.  Before any of these numbers carries a QUANTITATIVE
+# claim (an M8 path score, a published distance), check the ideal against the CSD and
+# narrow the window in the same commit.  Until then they are a shape check, and the tests
+# treat them as one.
+#
+# Columns
+#   name            row id
+#   fixture         the hand-written typed graph in `mofsbu.examples` this node must hash
+#                   to (M6's exit gate), or `-` for a family row with no fixture
+#   metal           element at every centre
+#   n_metals        centres in the node
+#   bridge          how the centres are held together
+#   cn              coordination number of the polyhedron AT EACH CENTRE (vacancies included)
+#   local_geometry  a key of `geometry.placer.GEOMETRIES`
+#   mm_bond         does the pair carry a METAL_METAL edge?  yes/no.  A chemical decision,
+#                   NOT derivable from d_mm — the paddlewheel has one, the Fe3-oxo trimer
+#                   does not, and the two fixtures differ at L1 because of it
+#   n_bridges       bridging carboxylates in the node
+#   n_vacancies     open vertices per centre in the FIXTURE (the axial/terminal sites that
+#                   fixture leaves unoccupied)
+#   d_mm            ideal centre-centre distance, A
+#   d_mm_lo/hi      the window a built node must land in
+#   d_m_o           centre to a BRIDGING CARBOXYLATE oxygen, A
+#   d_m_mu          centre to the central mu-oxo, A, or `-` where there is none
+#   mu_angle        M-(mu-O)-M angle, degrees, or `-`
+#   source          the compound the numbers are typical of
+#   note            anything the row needs said about it
+#
+name	fixture	metal	n_metals	bridge	cn	local_geometry	mm_bond	n_bridges	n_vacancies	d_mm	d_mm_lo	d_mm_hi	d_m_o	d_m_mu	mu_angle	source	note
+cu_paddlewheel	cu_paddlewheel	Cu	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.62	2.50	2.75	1.97	-	-	Cu2(O2CCH3)4(H2O)2 paddlewheel	The apical vertex is the open axial site and points AWAY from the partner metal; the four bridging O are equatorial. The M-M edge is what makes this one node rather than two.
+fe3_mu3_oxo_333	fe3_mu3_oxo_333	Fe	3	mu3-oxo + syn-syn-carboxylate	6	octahedral	no	6	1	3.29	3.20	3.40	2.02	1.90	120.0	basic iron(III) carboxylate [Fe3O(O2CR)6L3]+	Equilateral triangle around a planar mu3-O. The sixth vertex at each Fe is the terminal L site, vacant in the fixture. No Fe-Fe edge: the centres are held only by the oxo and the carboxylates.
+fe3_mu3_oxo_233	fe3_mu3_oxo_233	Fe	3	mu3-oxo + syn-syn-carboxylate	6	octahedral	no	6	1	3.34	3.20	3.50	2.05	1.93	120.0	mixed-valence Fe(II)Fe(III)2 analogue of the above	d_m_mu is the MEAN: the Fe(II)-O is the long one, so the real triangle is isosceles, not equilateral. The window is widened for exactly that and the equilateral relation is only a shape check here.
+zn4o	zn4o	Zn	4	mu4-oxo + syn-syn-carboxylate	4	tetrahedral	no	6	0	3.17	3.05	3.30	1.94	1.94	109.47	Zn4O(O2CR)6, the MOF-5 / IRMOF secondary building unit	Six carboxylates over the six edges of the Zn4 tetrahedron, so every Zn sees three of them plus the central oxo and is saturated at CN 4. The one node here with no vacancy.
+cr2_paddlewheel	-	Cr	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.36	2.20	2.50	2.02	-	-	Cr2(O2CCH3)4(H2O)2	Family row, no fixture graph. Here to keep the M-M target from being a two-point table: a quadruply-bonded d4 dimer is 0.26 A shorter than Cu and the same carboxylate still bridges it.
+rh2_paddlewheel	-	Rh	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.39	2.30	2.50	2.04	-	-	Rh2(O2CCH3)4	Family row, no fixture graph. Rh is NOT in `geometry.distances.BASE_MO`, which is the gap this row exists to make visible.
+mo2_paddlewheel	-	Mo	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.09	2.00	2.20	2.11	-	-	Mo2(O2CCH3)4	Family row, no fixture graph. The shortest M-M here by a wide margin, and the one row where the bridging O bend PAST perpendicular to the M-M axis. Mo is not in BASE_MO either.
