@@ -73,6 +73,35 @@ def parallel_enabled() -> bool:
     return max_workers() > 1
 
 
+def relax_workers() -> int:
+    """How many of the declared workers drain the RELAX queue, and only that queue.
+
+    0 means no split: every worker claims any task, which is the right shape when
+    relaxation is CPU work like construction and the two compete for the same cores.
+
+    On a declared accelerator it is 1.  The card is one device — a second process feeding
+    it divides its memory rather than multiplying its throughput — while construction is
+    CPU work that the same pool was serialising behind it.  Splitting the queue is what
+    lets the two run at once: the GPU relaxes what has been built while the remaining
+    workers build the next batch.
+
+    `MOFSBU_RELAX_WORKERS` overrides, including back to 0 (share one pool) or up to N for
+    a multi-GPU box.  Declared, never detected — the device it keys off is itself declared.
+    """
+    explicit = os.environ.get("MOFSBU_RELAX_WORKERS")
+    if explicit:
+        try:
+            return max(0, int(explicit))
+        except ValueError:
+            pass
+    try:
+        return 0 if compute_device() == CPU else 1
+    except ValueError:
+        # A malformed MOFSBU_DEVICE is reported where it is set, not here; until then
+        # this run has no accelerator to feed.
+        return 0
+
+
 # ── compute device: declared, never detected ─────────────────────────────────
 # Ground rule 9's stance applied to the accelerator.  `MACEBackend` used to default to
 # `device="cpu"` with no way to say otherwise, so a workstation with a GPU ran an MLIP on

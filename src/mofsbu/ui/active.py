@@ -114,20 +114,35 @@ def available_devices() -> list[dict[str, object]]:
 
 
 def compute_state() -> dict[str, object]:
-    """What is declared right now, and what could be declared instead."""
+    """What is declared right now, and what could be declared instead.
+
+    `build_workers`/`relax_workers` are how the declared total will actually be divided
+    (`runner.plan_workers`).  The page shows it because the division is not something a
+    worker count on its own tells you: on a GPU, one of those workers feeds the card and
+    the rest build, and a person who sees only "8 workers" cannot tell whether the two
+    halves of a run are running at the same time.
+    """
+    from mofsbu.runner import plan_workers
+
     try:
         declared = compute_device()
     except ValueError as exc:
         # A bad MOFSBU_DEVICE must not take the page down with it; say so instead.
         return {"devices": available_devices(), "device": None, "device_error": str(exc),
                 "profile": machine_profile(), "workers": max_workers(),
+                "build_workers": max_workers(), "relax_workers": 0,
+                "worker_note": "device declaration is malformed",
                 "cpu_count": os.cpu_count() or 1}
+    pool = plan_workers()
     return {
         "devices": available_devices(),
         "device": declared,
         "device_error": None,
         "profile": machine_profile(),
         "workers": max_workers(),
+        "build_workers": pool.build,
+        "relax_workers": pool.relax,
+        "worker_note": pool.describe(),
         "cpu_count": os.cpu_count() or 1,
     }
 

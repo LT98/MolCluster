@@ -16,7 +16,9 @@ import json
 import os
 import socket
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
+
+from datetime import datetime, timezone
 
 from mofsbu.registry.db import Registry, utcnow
 from mofsbu.spec import BuildSpec
@@ -26,10 +28,69 @@ PENDING, CLAIMED, DONE, FAILED, REJECTED = "pending", "claimed", "done", "failed
 # same rule as `rejected` vs `failed`: a run list where every abandoned experiment reads
 # as a crash is a run list nobody trusts.
 CANCELLING, CANCELLED = "cancelling", "cancelled"
+# And a build that was killed is neither.  Nothing asked it to stop and nothing went
+# wrong with the chemistry: the process it was running in stopped existing, which is a
+# third thing and the only one that can simply be continued.
+INTERRUPTED = "interrupted"
+
+#: How long a run with nothing in flight may go unstamped before it is taken to be over.
+#: Only ever applied when NO task is claimed — see `run_liveness`, which refuses to call a
+#: run dead while a worker might be inside a long relaxation.
+STALE_AFTER = 300.0
 
 
 def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def worker_alive(claimed_by: str | None) -> bool | None:
+    """Is the process that claimed this task still there?  None = cannot tell from here.
+
+    `claimed_by` is `host:pid`, so the question is only answerable on the host that wrote
+    it — from anywhere else the honest answer is "unknown", not "no".  Three-valued for
+    exactly that reason: a `False` here is used as PROOF that a run is over, and a guess
+    dressed as proof would hand another worker tasks that are still being worked on.
+
+    POSIX only.  `os.kill(pid, 0)` is the standard liveness probe there; on Windows
+    `os.kill` maps onto `TerminateProcess`, so asking the question would answer it, and
+    this returns None instead and lets the heartbeat decide.
+    """
+    if not claimed_by or ":" not in claimed_by:
+        return None
+    host, _, pid_text = claimed_by.rpartition(":")
+    if host != socket.gethostname() or os.name != "posix":
+        return None
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True            # alive; it just is not ours to signal
+    except OSError:
+        return None
+    return True
+
+
+def _age_seconds(stamp: str | None) -> float | None:
+    """Seconds since an ISO timestamp, or None if there is nothing to measure."""
+    if not stamp:
+        return None
+    try:
+        when = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - when).total_seconds()
+
+
+def touch_run(reg: Registry, run_id: int) -> None:
+    """Record that a worker is still here.  One indexed UPDATE, on a row already open."""
+    reg.conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?", (utcnow(), run_id))
 
 
 @dataclass(frozen=True)
@@ -91,13 +152,25 @@ def add_task(reg: Registry, run_id: int, kind: str, payload: dict[str, Any],
 
 
 def claim_task(reg: Registry, run_id: int | None = None, *,
-               worker: str | None = None) -> Task | None:
+               worker: str | None = None,
+               kinds: Sequence[str] | None = None,
+               exclude_kinds: Sequence[str] | None = None) -> Task | None:
     """Atomically take one pending task, or None if there are none left.
 
     IMMEDIATE acquires the write lock before reading, so the select-then-update cannot
     interleave with another worker doing the same thing.  Without it two workers happily
     claim the same row and do the same job twice.
+
+    `kinds` / `exclude_kinds` narrow what this worker will take, which is what makes a
+    heterogeneous pool possible: the tasks a GPU should run and the tasks that should
+    keep the cores busy are different rows in one queue, and a worker that claims either
+    puts them back in competition for the same machine.  Neither filter changes the
+    claim's atomicity — they are predicates on the same single-row UPDATE.
     """
+    if kinds is not None and not kinds:
+        # An empty allow-list is "this worker takes nothing", not "take anything" — and
+        # `kind IN ()` is not SQL.
+        return None
     if run_id is not None and cancel_requested(reg, run_id):
         # Defence in depth.  `work()` checks before each claim, but a separate worker
         # PROCESS can be mid-loop when the stop arrives, and the claim is the one
@@ -116,17 +189,31 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
     conn.isolation_level = None
     try:
         conn.execute("BEGIN IMMEDIATE")
-        sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks "
-               "WHERE status = ?" + (" AND run_id = ?" if run_id else "") +
-               " ORDER BY priority DESC, id ASC LIMIT 1")
-        args = (PENDING, run_id) if run_id else (PENDING,)
-        row = conn.execute(sql, args).fetchone()
+        where = ["status = ?"]
+        args: list[Any] = [PENDING]
+        if run_id:
+            where.append("run_id = ?")
+            args.append(run_id)
+        if kinds is not None:
+            where.append(f"kind IN ({','.join('?' * len(kinds))})")
+            args += list(kinds)
+        if exclude_kinds:
+            where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
+            args += list(exclude_kinds)
+        sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks WHERE "
+               + " AND ".join(where) + " ORDER BY priority DESC, id ASC LIMIT 1")
+        row = conn.execute(sql, tuple(args)).fetchone()
         if row is None:
             conn.execute("COMMIT")
             return None
+        now = utcnow()
         conn.execute(
             "UPDATE tasks SET status=?, claimed_by=?, claimed_at=?, attempts=attempts+1 "
-            "WHERE id=?", (CLAIMED, who, utcnow(), row["id"]))
+            "WHERE id=?", (CLAIMED, who, now, row["id"]))
+        # In the same transaction as the claim, because it is the same fact: a worker is
+        # here.  `run_liveness` reads it to tell a run nobody is working on from one
+        # whose worker simply has nothing to report yet.
+        conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?", (now, row["run_id"]))
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -249,6 +336,129 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
     }
 
 
+TERMINAL_RUN_STATUSES = (DONE, FAILED, CANCELLED, INTERRUPTED)
+
+
+def run_liveness(reg: Registry, run_id: int) -> dict[str, Any]:
+    """Is anything actually working on this run?  Reads only; decides nothing.
+
+    A run row records that work was STARTED and that it FINISHED.  Nothing writes the
+    third outcome — the process stopped existing — so a killed worker leaves a row that
+    is indistinguishable from one that is busy, and the page has no choice but to call
+    it live.  This is the missing fact, and it is derived from two signals rather than
+    one because neither is sufficient alone:
+
+    * the **claimants** (`host:pid`), which on their own host answer the question exactly;
+    * the **heartbeat**, which answers it approximately and is all there is from another
+      host or on Windows.
+
+    Three verdicts, and the middle one is the point.  `live` and `interrupted` are
+    claims; `unknown` is what is returned whenever the evidence does not support either,
+    and a caller that sweeps must treat it as live.  Reporting "cannot tell from here" is
+    the only honest answer about a process on a machine this one cannot see.
+
+    Note the asymmetry in what each signal is allowed to prove.  A dead pid is proof and
+    is acted on immediately.  A stale heartbeat is NOT, while any task is claimed: a
+    worker inside an hour-long relaxation stamps nothing for an hour, and sweeping it
+    would hand its tasks to a second worker and have the work done twice.  So the
+    heartbeat only ever decides a run with nothing in flight — where there is, by
+    definition, nothing to disturb.
+    """
+    row = reg.conn.execute(
+        "SELECT status, heartbeat_at, created_at FROM runs WHERE id=?",
+        (run_id,)).fetchone()
+    if row is None:
+        return {"verdict": "unknown", "reason": f"no run {run_id}", "workers": []}
+    if row["status"] in TERMINAL_RUN_STATUSES:
+        return {"verdict": "finished", "reason": f"the run is {row['status']}",
+                "workers": [], "status": row["status"]}
+
+    counts = task_counts(reg, run_id)
+    claimants = [r["claimed_by"] for r in reg.conn.execute(
+        "SELECT DISTINCT claimed_by FROM tasks WHERE run_id=? AND status=?",
+        (run_id, CLAIMED))]
+    workers = [{"worker": c, "alive": worker_alive(c)} for c in claimants if c]
+    age = _age_seconds(row["heartbeat_at"] or row["created_at"])
+
+    if workers:
+        if any(w["alive"] for w in workers):
+            return {"verdict": "live", "reason": "a worker that claimed a task is running",
+                    "workers": workers, "age": age}
+        if all(w["alive"] is False for w in workers):
+            return {"verdict": "interrupted",
+                    "reason": (f"every process holding a task is gone "
+                               f"({', '.join(w['worker'] for w in workers)})"),
+                    "workers": workers, "age": age}
+        return {"verdict": "unknown",
+                "reason": ("tasks are held by a process this machine cannot ask about "
+                           f"({', '.join(w['worker'] for w in workers)})"),
+                "workers": workers, "age": age}
+
+    if counts.get(PENDING):
+        if age is not None and age > STALE_AFTER:
+            return {"verdict": "interrupted",
+                    "reason": (f"{counts[PENDING]} task(s) are waiting and nothing has "
+                               f"claimed one for {int(age)}s"),
+                    "workers": [], "age": age}
+        return {"verdict": "live", "reason": "tasks are waiting to be claimed",
+                "workers": [], "age": age}
+
+    # Nothing pending, nothing claimed: the work IS done and only the closing write is
+    # missing.  That is a finished run, not an interrupted one, and `sweep_interrupted`
+    # closes it out with the status its tasks earned.
+    return {"verdict": "unfinalised",
+            "reason": "every task is accounted for but the run was never closed out",
+            "workers": [], "age": age}
+
+
+def sweep_interrupted(reg: Registry, *, run_id: int | None = None) -> list[dict[str, Any]]:
+    """Close out runs nothing is working on any more.  Returns what it changed.
+
+    Called when a process TAKES OVER a database — a server starting, a run starting, a
+    resume — rather than on a timer.  That is the moment the question is both worth
+    asking and safely answerable: something new is about to work here, so a run that no
+    longer has a process is a run whose tasks should be claimable again.
+
+    Two outcomes, and they are different facts.  A run whose work is all accounted for is
+    `finish_run`ed with the status its tasks earned — it really did finish, and only the
+    closing write was lost. A run with work left becomes `interrupted`, and its claimed
+    tasks go back to `pending` so the next worker can take them: the process holding them
+    is gone, so they are not in flight, they are stranded.
+    """
+    swept: list[dict[str, Any]] = []
+    sql = ("SELECT id, status FROM runs WHERE status NOT IN "
+           f"({','.join('?' * len(TERMINAL_RUN_STATUSES))})")
+    args: list[Any] = list(TERMINAL_RUN_STATUSES)
+    if run_id is not None:
+        sql += " AND id=?"
+        args.append(run_id)
+    for row in reg.conn.execute(sql, tuple(args)).fetchall():
+        rid = int(row["id"])
+        verdict = run_liveness(reg, rid)
+        if verdict["verdict"] == "unfinalised":
+            swept.append({"run_id": rid, "was": "unfinalised", "now": finish_run(reg, rid),
+                          "returned_claims": 0, "reason": verdict["reason"]})
+            continue
+        if verdict["verdict"] != "interrupted":
+            continue
+        if row["status"] == CANCELLING:
+            # Asked to stop, and it stopped — the worker dying on the way out does not
+            # turn a decision into an accident.  `cancelled`, as the person requested.
+            counts = finalise_cancel(reg, rid)
+            swept.append({"run_id": rid, "was": CANCELLING, "now": CANCELLED,
+                          "returned_claims": counts["returned_claims"],
+                          "reason": "the stop was requested; the worker is gone"})
+            continue
+        returned = reset_stale_claims(reg, rid)
+        reg.conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?",
+                         (INTERRUPTED, utcnow(), rid))
+        swept.append({"run_id": rid, "was": "running", "now": INTERRUPTED,
+                      "returned_claims": returned, "reason": verdict["reason"]})
+    if swept:
+        reg.conn.commit()
+    return swept
+
+
 def request_cancel(reg: Registry, run_id: int) -> bool:
     """Ask a run to stop.  Cooperative: nothing is killed.
 
@@ -290,24 +500,31 @@ def finalise_cancel(reg: Registry, run_id: int) -> dict[str, int]:
     return {"cancelled_tasks": cur.rowcount, "returned_claims": returned}
 
 
+RESUMABLE = (CANCELLING, CANCELLED, INTERRUPTED)
+
+
 def resume_run(reg: Registry, run_id: int) -> int:
     """Undo a stop.  Returns how many tasks were revived.
 
-    Two states arrive here and both are legitimate.  A run already `cancelled` has its
+    Three states arrive here and all are legitimate.  A run already `cancelled` has its
     tasks parked in `cancelled` and they are put back to `pending`.  A run still
     `cancelling` — stopped, but no worker has closed it out yet — has tasks that never
     left `pending`, so nothing is revived and clearing the flag is the whole job.  Zero
     revived is therefore a success, not a no-op, which is why the caller is told which
     case it was rather than just a count.
+
+    An `interrupted` run is the third: its tasks were returned to `pending` by the sweep
+    that noticed it, so resuming it is also just the flag — and it is the state where
+    resuming matters most, because nobody chose it.
     """
     row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
-    if row is None or row["status"] not in (CANCELLING, CANCELLED):
+    if row is None or row["status"] not in RESUMABLE:
         return 0
     cur = reg.conn.execute(
         "UPDATE tasks SET status=?, finished_at=NULL WHERE run_id=? AND status=?",
         (PENDING, run_id, CANCELLED))
-    reg.conn.execute("UPDATE runs SET status=?, finished_at=NULL WHERE id=?",
-                     ("running", run_id))
+    reg.conn.execute("UPDATE runs SET status=?, finished_at=NULL, heartbeat_at=? "
+                     "WHERE id=?", ("running", utcnow(), run_id))
     reg.conn.commit()
     return cur.rowcount
 
@@ -320,7 +537,11 @@ def finish_run(reg: Registry, run_id: int) -> str:
         finalise_cancel(reg, run_id)
         return CANCELLED
     counts = task_counts(reg, run_id)
-    status = FAILED if counts.get(FAILED) else DONE
+    # Work still in the queue is not a finished run.  A pool of processes can lose one,
+    # and its share of the queue stays `pending` while the survivors' successes are all
+    # that is left to summarise — `done` would be the report that hides it.
+    unfinished = counts.get(PENDING, 0) + counts.get(CLAIMED, 0)
+    status = FAILED if (counts.get(FAILED) or unfinished) else DONE
     reg.conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?",
                      (status, utcnow(), run_id))
     return status
