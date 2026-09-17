@@ -188,11 +188,11 @@ non-carboxylate, symmetric and mixed-valence.
 | `assembly/join.py::join` | raises for `n_metals > 1` |
 | `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
-| `geometry/placer.py::place_multicentre` | **signature settled, body raises** — `Center`, `Join`, `InterCentreConstraint` (with `metal_metal_bond` and `window()`) now exist |
+| `geometry/placer.py::place_multicentre` | **signature settled, body raises.** `Center` and `InterCentreConstraint` (with `metal_metal_bond` and `window()`) exist; `Center.element` is deliberately not always a metal, because a bridging atom is a centre (§4). **`Join` stays named-but-undefined on purpose** — what the placer receives from the join path is S1's output and therefore S3's call, so guessing it now would settle the wrong end first |
 | `geometry/placer.py::GEOMETRIES` | no bent CN-2 |
 | `geometry/distances.py` | no M–M distances in `src/`; the *targets* are curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
 | `geometry/qc.py::check_intercentre` | **signature settled, body raises** — `BadIntercentre` exists |
-| `geometry/placer.py::to_rdkit_multicentre` | **signature settled, body raises** — the extraction half of the gate |
+| `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0 and never writes an M–M bond. The fix is a **widening of this function, not a second one** — one conversion means one place to be wrong, which is its own docstring's argument (S7) |
 | `sites/perception.py` | `[OH-]` perceives **zero** donors — filed as [B13](BUGS.md#b13) |
 | `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS.md#b14) |
 | `assembly/construct.py` | `metal_block`'s metal charge gives one species two L1 — filed as [B12](BUGS.md#b12) |
