@@ -1,0 +1,72 @@
+# The M6 battery: the polynuclear nodes the milestone must reach, and the numbers a built
+# one is measured against.  This is WORKPLAN_M6.md §6 as data.
+#
+# THIS FILE IS THE INTERFACE FOR ADDING AN M6 CASE.  Add a row and the whole set is
+# re-checked by `python -m pytest tests/test_m6_battery.py`; nothing in the test module
+# needs changing.  Same arrangement as `ligand_cases.tsv` one layer down.
+#
+# It lives under data/reference/ because that is the one place in data/ that IS tracked,
+# so the laptop and the workstation measure against the same targets.
+#
+# TWO KINDS OF NUMBER LIVE HERE AND THEY ARE NOT INTERCHANGEABLE.
+#
+#   MEASURED (`source` starts with "WORKPLAN_M6") — produced by the battery run recorded in
+#   WORKPLAN_M6.md §3-§5, from this package's own geometry.  `d_mm_bridge` and the mu-oxo
+#   `d_m_mu`/`mu_angle` are of this kind.  They are what the model actually does.
+#
+#   LITERATURE-TYPICAL (`source` names a compound) — values typical of the named compound
+#   class, carried from the structural-chemistry literature.  No CIF was consulted and no
+#   single refinement is reproduced.  `d_mm` and its window are of this kind.  That is why
+#   every row carries a window rather than only an ideal, and why the tests treat them as a
+#   shape check.  Before any of these backs a quantitative claim, check against the CSD and
+#   narrow the window in the same commit.
+#
+# Under D20 the M...M distance is an OUTPUT TO VALIDATE, not an input to impose.  So `d_mm`
+# and its window are what gate 4 measures a built node against; they are not what drives a
+# placer.  The exception is a DECLARED nucleus (S4), where the caller states the distance on
+# purpose.
+#
+# Columns
+#   name            row id
+#   fixture         the hand-written typed graph in `mofsbu.examples` this node must hash to
+#                   (WORKPLAN_M6 gate 2), or `-` where the battery row has no fixture yet
+#   mechanism       A = multi-atom bridge (two donors, one per metal)
+#                   B = single-atom bridge (one donor, 2-4 metals, treated as a CENTRE)
+#                   A+B = both, which is where the two determinants collide (§5)
+#   metal           element at every coordination centre
+#   n_metals        metal centres in the node
+#   bridge          what holds the centres together
+#   cn              coordination number of the polyhedron AT EACH METAL, vacancies included
+#   local_geometry  a key of `geometry.placer.GEOMETRIES`
+#   mm_bond         METAL_METAL edge?  yes/no.  C10 is open: branch or declare, never infer
+#                   from distance.  The paddlewheel has one at 2.62 A, the Fe3 trimer has
+#                   none at 3.29 A, and the two fixtures differ at L1 because of it
+#   n_bridges       multi-atom (mechanism A) bridges in the node
+#   n_vacancies     open vertices per metal in the FIXTURE
+#   d_mm            literature-typical M...M, A, or `-` where nobody has measured it
+#   d_mm_lo/hi      the window a built node must land in, or `-`
+#   d_m_o           metal to a bridging mechanism-A donor, A
+#   mu_geometry     local geometry OF THE BRIDGING ATOM treated as a centre (WORKPLAN §4),
+#                   or `-` for a row with no single-atom bridge
+#   d_m_mu          metal to the bridging atom, A, or `-`
+#   mu_angle        M-(bridge)-M angle, degrees, or `-`.  With d_m_mu this DETERMINES the
+#                   skeleton: M...M = 2 d sin(theta/2)
+#   d_mm_bridge     M...M that the mechanism-A bridge ALONE asks for, measured, or `-`.
+#                   Where both this and the mu-oxo skeleton exist they disagree: that
+#                   disagreement is M6's real work (§5) and is checked as data
+#   blocked_on      what has to be fixed before this row can build, or `-`
+#   source          where the numbers came from -- see the two kinds above
+#   note            anything the row needs said about it
+#
+name	fixture	mechanism	metal	n_metals	bridge	cn	local_geometry	mm_bond	n_bridges	n_vacancies	d_mm	d_mm_lo	d_mm_hi	d_m_o	mu_geometry	d_m_mu	mu_angle	d_mm_bridge	blocked_on	source	note
+cu_paddlewheel	cu_paddlewheel	A	Cu	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.62	2.50	2.75	1.98	-	-	-	2.673	-	Cu2(O2CCH3)4(H2O)2 paddlewheel; d_mm_bridge from WORKPLAN_M6 §3	The baseline, and the one row that already builds QC-clean and hashes to its fixture at L0 and L1. The apical vertex is the open axial site and points AWAY from the partner. Nothing here needs place_multicentre.
+zn2_bridged_formate	zn2_bridged	A	Zn	2	syn-syn-carboxylate	4	tetrahedral	no	2	2	-	-	-	2.00	-	-	-	-	-	fixture examples.zn2_bridged_formates	The under-bridged dimer: two bridges instead of four, so the route that adds the third and fourth is discriminable from the one that does not. d_mm deliberately absent -- nobody has measured it and absent is not zero. S1 must report it.
+cu2_benzoate_paddlewheel	-	A	Cu	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.62	2.50	2.75	1.98	-	-	-	2.461	-	Cu2(O2C-Ph)4 paddlewheel; d_mm_bridge from WORKPLAN_M6 §3	Ligand-dependence of the span, and a mechanism-A collision in its own right: benzoate offers 2.461 A where formate offers 2.673, so the SAME motif with a different bridge misses the literature Cu-Cu from the other side.
+cu2_pyrazolate	-	A	Cu	2	pyrazolate-N,N	4	square_planar	no	2	2	-	-	-	2.03	-	-	-	-	B14	non-carboxylate test of mechanism A	The check that mechanism A generalises past carboxylate. No numbers yet on purpose: pyrazolate's two equivalent N type differently (B14), so the bridge is refused on one end and nothing has been measured to put here.
+cu2_mu2_hydroxide	-	B	Cu	2	mu2-hydroxide	4	square_planar	no	0	2	3.00	2.80	3.20	-	bent	1.95	100.0	-	B13; no bent CN-2 in GEOMETRIES	Mechanism B at its smallest. Two things block it: [OH-] perceives zero donors (B13), and GEOMETRIES has only `linear` at CN 2, so a BENT bridging oxygen cannot be expressed at all -- the same class of defect as the legacy table mapping CN 5 to 'planar'.
+fe3_mu3_oxo_333	fe3_mu3_oxo_333	A+B	Fe	3	mu3-oxo + syn-syn-carboxylate	6	octahedral	no	6	1	3.29	3.20	3.40	2.02	trigonal	1.90	120.0	2.696	-	basic iron(III) carboxylate [Fe3O(O2CR)6L3]+; skeleton and d_mm_bridge from WORKPLAN_M6 §4-§5	The collision case. The oxo skeleton asks for 3.291 A and syn-syn formate offers 2.696 -- 0.595 A apart, and a rigid ligand cannot open its O-C-O to close it. Report as strain, do not average. No Fe-Fe edge: the centres are held by the oxo and the carboxylates only.
+fe3_mu3_oxo_233	fe3_mu3_oxo_233	A+B	Fe	3	mu3-oxo + syn-syn-carboxylate	6	octahedral	no	6	1	3.34	3.20	3.50	2.05	trigonal	1.93	120.0	-	-	mixed-valence Fe(II)Fe(III)2 analogue	Per-centre labels in L0 and L1. d_m_mu is the MEAN -- the Fe(II)-O is the long one, so the real triangle is isosceles and the equilateral relation is a shape check here, which is what the wider window is for.
+zn4o	zn4o	A+B	Zn	4	mu4-oxo + syn-syn-carboxylate	4	tetrahedral	no	6	0	3.17	3.05	3.30	1.94	tetrahedral	1.94	109.47	2.677	-	Zn4O(O2CR)6, the MOF-5 / IRMOF secondary building unit; skeleton and d_mm_bridge from WORKPLAN_M6 §4-§5	Nuclearity 4, and the second collision at 0.491 A. Six carboxylates over the six edges of the Zn4 tetrahedron saturates every Zn at CN 4 -- the only row in the battery with no vacancy.
+cr2_paddlewheel	-	A	Cr	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.36	2.20	2.50	2.02	-	-	-	-	-	Cr2(O2CCH3)4(H2O)2	Not a battery row -- here for S4's `metal_metal_distance` table, so the declared-nucleus M-M target is not a one-metal lookup. A quadruply-bonded d4 dimer is 0.26 A shorter than Cu and the same carboxylate still bridges it.
+rh2_paddlewheel	-	A	Rh	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.39	2.30	2.50	2.04	-	-	-	-	-	Rh2(O2CCH3)4	S4 table row. Rh is NOT in `geometry.distances.BASE_MO`, which is the gap this row exists to make visible.
+mo2_paddlewheel	-	A	Mo	2	syn-syn-carboxylate	5	square_pyramidal	yes	4	1	2.09	2.00	2.20	2.11	-	-	-	-	-	Mo2(O2CCH3)4	S4 table row. The shortest M-M here by a wide margin, and the one row where the bridging O bend PAST perpendicular to the M-M axis. Mo is not in BASE_MO either.

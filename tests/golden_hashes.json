@@ -1,11 +1,20 @@
 {
   "algo_versions": {
     "canonical_order": "ir1",
+    "choice_vector": "cv1",
+    "descriptor_tables": "1",
+    "ease_model": "floor1",
+    "energy_backends": "2",
     "graph_schema": "1",
     "l0_composition": "1",
     "l1_certificate": "cert1",
-    "l2_isomer_tag": "0-stub",
+    "l2_isomer_tag": "iso1",
     "l3_conformer_id": "0-stub",
+    "perception": "2",
+    "placement": "2",
+    "reference_scheme": "balanced1",
+    "site_state": "1",
+    "spin_convention": "hs1",
     "wl_index": "wl3-nx"
   },
   "l0": {
@@ -24,7 +33,8 @@
     "two_cyclopropanes": "C6H12_q0_s1",
     "water": "H2O_q0_s1",
     "zn2_bridged": "Zn2_C2H2O4_q2_s1|Zn(+2,ls),Zn(+2,ls)",
-    "zn2_chelated": "Zn2_C2H2O4_q2_s1|Zn(+2,ls),Zn(+2,ls)"
+    "zn2_chelated": "Zn2_C2H2O4_q2_s1|Zn(+2,ls),Zn(+2,ls)",
+    "zn4o": "Zn4_C6H6O13_q0_s1|Zn(+2,ls),Zn(+2,ls),Zn(+2,ls),Zn(+2,ls)"
   },
   "l1": {
     "btc": "bdf2511d76405f210b37d2e2e57c6ae75927e070813f902d5b07e6da5b8347ac",
@@ -42,6 +52,7 @@
     "two_cyclopropanes": "3a0ffb52b2cb5ecc22f8134b58c5c464ec5ccb69aa40570af517d222ccf8f429",
     "water": "f95165077456782a443254659ae13092afbb7d19129a95b04504825174ddb677",
     "zn2_bridged": "0431c0255c733d25f117f40d2f62038e4cb1b9078c5eaff8b367a2442ae1a907",
-    "zn2_chelated": "f2a2e667e5bb4701cfa7f0cf5394ba0fc003e1f4303512421452a58243deeb85"
+    "zn2_chelated": "f2a2e667e5bb4701cfa7f0cf5394ba0fc003e1f4303512421452a58243deeb85",
+    "zn4o": "562afd4641a3b68a49f96e194a1d28dcd41e0aebf4707f2de280257fc050518f"
   }
 }

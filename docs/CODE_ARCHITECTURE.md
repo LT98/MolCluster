@@ -60,8 +60,9 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
 | `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot | ✅ |
-| ↳ `place_multicentre` | inter-centre constraints | 🔴 **stub → M6** |
+| ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
+| ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
 | `geometry/distances.py` | M–L target distance as a property of the *pair* | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
 | `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |

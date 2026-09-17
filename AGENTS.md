@@ -54,6 +54,7 @@ local ref or on `origin/main`.
 | Graph identity/canonicalization | `src/mofsbu/graph/`, `identity/` | `test_graph.py`, `test_canon.py`, `test_identity.py` |
 | Donor/site behavior | `src/mofsbu/sites/` | `test_sites.py`, `test_donor_patterns.py`, `test_sites_state.py` |
 | Geometry/QC | `src/mofsbu/geometry/` | `test_placer.py`, `test_distances.py` |
+| Polynuclear nodes (M6) | `docs/WORKPLAN_M6.md` first, then `assembly/join.py`, `geometry/placer.py`, `qc.py` | `test_m6_battery.py` + `data/reference/node_cases.tsv` |
 | Registry/schema/migrations | `src/mofsbu/registry/` | `test_registry.py`, `test_migration.py`, `test_verify.py` |
 | Energy backends/references | `src/mofsbu/energy/` | `test_energy.py`, `test_reference.py` |
 | Browser/API behavior | `src/mofsbu/ui/` | `test_ui.py`, `test_run_inspector.py` |

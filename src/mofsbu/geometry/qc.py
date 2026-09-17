@@ -111,6 +111,71 @@ class BadBond(NamedTuple):
                 "tol": self.tol, "source": self.source}
 
 
+class BadIntercentre(NamedTuple):
+    """Two centres at a separation the node they belong to does not allow.
+
+    Deliberately `BadBond`'s shape one level up — measured, target, tol, source — because
+    it is the same kind of statement about a bigger thing, and a report a caller has to
+    read two ways is a report that gets read one way.  `(centres, distance)` lead, matching
+    how `Clash` and `BadBond` front the fields indexed positionally.
+
+    The target travels with the finding for the same reason a clash carries its limit:
+    "Cu...Cu 1.90 A" is not a verdict until it says what it was measured against, and under
+    D20 that number is a LITERATURE RANGE being validated against, not a constraint that
+    was imposed — so `source` naming the row it came from is what separates "the node is
+    wrong" from "the table is wrong".
+    """
+
+    centres: tuple[int, int]
+    distance: float
+    target: float = 0.0
+    tol: float = 0.0
+    symbols: tuple[str, str] = ("", "")
+    source: str = ""             # which reference row supplied the target
+
+    @property
+    def window(self) -> tuple[float, float]:
+        return (self.target - self.tol, self.target + self.tol)
+
+    def describe(self) -> str:
+        a, b = self.centres
+        si, sj = self.symbols
+        src = f", {self.source}" if self.source else ""
+        return (f"{si}{a}...{sj}{b} {self.distance:.2f} A vs target {self.target:.2f} "
+                f"+/- {self.tol:.2f}{src}")
+
+    def to_dict(self) -> dict:
+        return {"centres": list(self.centres), "symbols": list(self.symbols),
+                "distance": round(self.distance, 3), "target": round(self.target, 3),
+                "tol": self.tol, "source": self.source}
+
+
+def check_intercentre(coords: np.ndarray, constraints: list,
+                      *, metal_idxs: list[int], symbols: list[str] | None = None,
+                      ) -> list[BadIntercentre]:
+    """Validate the M...M the joins produced, and the bridge angles.  NOT IMPLEMENTED.
+
+    Ground rule 7: settled signature, scheduled body (M6, slice S6).  `constraints` is a
+    list of `geometry.placer.InterCentreConstraint`; `metal_idxs` maps a constraint's
+    centre numbers onto rows of `coords`, because a centre is an index into the NODE and an
+    atom is an index into the assembly, and conflating the two is how a two-metal node ends
+    up measuring the distance from a metal to a carboxylate carbon.
+
+    **Validate, not impose** (D20).  By the time this runs the node exists; the question is
+    whether the distance it came out at is one the chemistry allows.
+
+    This is the check `qc` cannot do today: every finding it returns is about a pair of
+    atoms that are not bonded to each other and are not a metal-donor pair, so both
+    existing checks skip them and a node built with its metals 1.9 A apart reports clean.
+    """
+    from mofsbu.assembly.join import NotBuiltYet
+
+    raise NotBuiltYet(
+        f"geometry.qc.check_intercentre ({len(constraints)} constraint(s)) — M6. "
+        "Nothing in qc() measures centre-centre geometry yet."
+    )
+
+
 #: A clash this deep or shallower is a NEAR MISS: worth relaxing before it is thrown away.
 #:
 #: Calibrated, not guessed, from 2951 rejections in the working registry.  Split by whether
@@ -131,6 +196,10 @@ class QCReport:
     ok: bool = True
     clashes: list[Clash] = field(default_factory=list)
     bad_bonds: list[BadBond] = field(default_factory=list)
+    #: Centre-centre findings (M6).  Empty from a single-centre placement, which has no
+    #: pair to measure — one verdict object for both cases rather than a second report
+    #: shape that callers would have to know to ask for.
+    bad_intercentres: list[BadIntercentre] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -140,9 +209,10 @@ class QCReport:
         Bad M-L bonds disqualify a report from being marginal however small they are.  A
         clash is the placer putting two things too close and an optimiser pulls them
         apart; a wrong metal-donor distance means the centre was BUILT to the wrong
-        length, and relaxing it does not recover the geometry that was asked for.
+        length, and relaxing it does not recover the geometry that was asked for.  A
+        centre-centre distance is the same kind of fact one level up.
         """
-        if self.ok or self.bad_bonds or not self.clashes:
+        if self.ok or self.bad_bonds or self.bad_intercentres or not self.clashes:
             return False
         worst = self.worst_clash
         return worst is not None and worst.overlap <= MARGINAL_OVERLAP
@@ -167,6 +237,11 @@ class QCReport:
             return "qc_clash"
         if self.bad_bonds:
             return "qc_bond_length"
+        if self.bad_intercentres:
+            # Its own code, not folded into `qc_bond_length`: a node whose centres are at
+            # the wrong separation failed at the level of the NODE, and grouping it with
+            # a stretched M-L bond would hide which of the two the placer got wrong.
+            return "qc_intercentre"
         return "qc_other"
 
     @property
@@ -180,6 +255,8 @@ class QCReport:
         for c in self.clashes:
             out.update(s for s in (c.sym_i, c.sym_j) if s)
         out.update(b.sym for b in self.bad_bonds if b.sym)
+        for bad in self.bad_intercentres:
+            out.update(s for s in bad.symbols if s)
         return sorted(out)
 
     def to_dict(self) -> dict:
@@ -190,6 +267,7 @@ class QCReport:
                 "worst_overlap": round(worst.overlap, 3) if worst else None,
                 "clashes": [c.to_dict() for c in self.clashes[:20]],
                 "bad_bonds": [b.to_dict() for b in self.bad_bonds[:20]],
+                "bad_intercentres": [b.to_dict() for b in self.bad_intercentres[:20]],
                 "elements": self.elements_involved(),
                 "notes": self.notes}
 
@@ -203,6 +281,9 @@ class QCReport:
         if self.bad_bonds:
             bits.append(f"{len(self.bad_bonds)} bad M-L bond(s): "
                         + "; ".join(b.describe() for b in self.bad_bonds[:3]))
+        if self.bad_intercentres:
+            bits.append(f"{len(self.bad_intercentres)} centre-centre: "
+                        + "; ".join(b.describe() for b in self.bad_intercentres[:3]))
         return "QC FAILED: " + "; ".join(bits + self.notes)
 
 
@@ -264,5 +345,5 @@ def qc(symbols: list[str], coords: np.ndarray, bonded: set[tuple[int, int]],
         report.bad_bonds = check_metal_bonds(coords, metal_idx, donor_idxs, d_ml=d_ml,
                                              symbols=symbols, owners=owners,
                                              sources=sources)
-    report.ok = not report.clashes and not report.bad_bonds
+    report.ok = not (report.clashes or report.bad_bonds or report.bad_intercentres)
     return report

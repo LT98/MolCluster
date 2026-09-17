@@ -24,3 +24,28 @@ For every dataset added, note what it is and anything the OTHER machine must cha
   expectation was wrong, not the code (oxalic acid has 3 protomers not 4; a carboxylate
   does chelate through its own two oxygens).  Corrections are annotated in the row so the
   reasoning is not lost.
+
+- 2026-09-17  node_cases.tsv  — the **M6 battery** (`docs/WORKPLAN_M6.md` §6) as data: the
+  polynuclear nodes the milestone must reach, which bridge mechanism each one exercises, and
+  the numbers a built one is measured against.  **This is the interface for adding an M6 test
+  case:** add a row and `python -m pytest tests/test_m6_battery.py` re-checks the whole set.
+  Read by `tests/node_cases.py`.
+  Both machines: nothing to configure — tracked, like the rest of this folder.
+  **Two kinds of number live in it and they are not interchangeable**, which the file header
+  says at length and which is repeated here because it decides what the values may be used for:
+  * **measured** (`source` starts with `WORKPLAN_M6`) — from the battery run recorded in that
+    file, produced by this package's own geometry.  `d_mm_bridge` and the µ-oxo skeleton
+    columns are of this kind.
+  * **literature-typical** (`source` names a compound) — values typical of the named compound
+    class.  No CIF was consulted and no single refinement is reproduced.  That is why every row
+    carries a window rather than only an ideal.  Before any of them backs a quantitative claim,
+    check against the CSD and narrow the window in the same commit.
+  Under **D20** the M···M distance is an output to *validate*, not an input to impose, so these
+  are what gate 4 measures a built node against — not what drives a placer.  The exception is a
+  declared nucleus (S4), where the caller states the distance on purpose.
+  Rows with `blocked_on` set cannot build yet ([B13](../../docs/BUGS.md#b13) for the hydroxide
+  bridge, [B14](../../docs/BUGS.md#b14) for the pyrazolate one, and the missing bent CN-2
+  geometry); a test checks each stated blocker is still real, so the table cannot claim to be
+  waiting on something already fixed.  Three rows (Cr/Rh/Mo paddlewheels) are not battery rows
+  at all — they are there for S4's `metal_metal_distance` table, and Rh and Mo are deliberately
+  metals `geometry.distances.BASE_MO` does not know.

@@ -131,6 +131,28 @@ def fe3_mu3_oxo(valences: tuple[int, int, int] = (3, 3, 3)) -> TypedGraph:
     return g
 
 
+def zn4o() -> TypedGraph:
+    """Zn4O(mu-O2CH)6 — the MOF-5 secondary building unit.
+
+    The third M6 ground-truth node, and the one that separates "count the metals a
+    ligand reaches" from "tag the bridge" (D14): the central oxygen reaches FOUR zincs
+    and every carboxylate reaches two, so one graph carries both MU_N and MU2 without
+    either being written down anywhere.  Six carboxylates span the six edges of the Zn4
+    tetrahedron, which saturates each Zn at CN 4 — the only node in the set with no
+    vacant vertex.
+    """
+    g = TypedGraph(charge=0, multiplicity=1, name="zn4o")
+    zns = [g.add_atom("Zn", oxidation_state=2, spin_class="ls") for _ in range(4)]
+    mu4 = g.add_atom("O")
+    for zn in zns:
+        g.add_bond(mu4, zn, DAT)
+    for a, b in ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)):
+        _c, o1, o2, _h = _formate(g)
+        g.add_bond(o1, zns[a], DAT)
+        g.add_bond(o2, zns[b], DAT)
+    return g
+
+
 # -- connectivity discrimination pair (same composition, different binding) -----
 
 def zn2_bridged_formates() -> TypedGraph:
@@ -319,6 +341,7 @@ ALL: dict[str, "callable[[], TypedGraph]"] = {
     "cu_paddlewheel": cu_paddlewheel,
     "fe3_mu3_oxo_333": lambda: fe3_mu3_oxo((3, 3, 3)),
     "fe3_mu3_oxo_233": lambda: fe3_mu3_oxo((2, 3, 3)),
+    "zn4o": zn4o,
     "zn2_bridged": zn2_bridged_formates,
     "zn2_chelated": zn2_chelated_formates,
     "pt_ammine_dichloride_a": lambda: pt_ammine_dichloride("a"),
