@@ -24,3 +24,18 @@ For every dataset added, note what it is and anything the OTHER machine must cha
   expectation was wrong, not the code (oxalic acid has 3 protomers not 4; a carboxylate
   does chelate through its own two oxygens).  Corrections are annotated in the row so the
   reasoning is not lost.
+
+- 2026-09-14  node_cases.tsv  — the polynuclear nodes the M6 multi-centre placer must build,
+  and the M–M / M–O / µ-oxo numbers a built one is measured against.  **This is the interface
+  for adding an M6 test case:** add a row and `python -m pytest tests/test_placer_multicentre.py`
+  re-checks the whole set.  Read by `tests/node_cases.py`.
+  Both machines: nothing to configure — tracked, like the rest of this folder.
+  **Provenance, stated in the file's own header and repeated here because it matters:** these
+  are values TYPICAL of the named compound class, carried from the structural-chemistry
+  literature.  No CIF was consulted and no single refinement is being reproduced.  That is why
+  every row carries a window rather than only an ideal, and why the tests treat them as a shape
+  check.  Before any of these numbers backs a quantitative claim, check the ideal against the
+  CSD and narrow the window in the same commit.
+  Three rows (Cr/Rh/Mo paddlewheels) have `fixture = -`: they exist so the M–M target is not a
+  two-point table, and Rh and Mo are deliberately there as metals `geometry.distances.BASE_MO`
+  does not know.

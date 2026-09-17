@@ -71,6 +71,39 @@ def test_cn5_geometries_exist():
         site_vectors("octahedral", 5)
 
 
+def vertex_angles(geometry: str, n: int) -> list[float]:
+    v = site_vectors(geometry, n, 1.0)
+    return sorted(round(float(np.degrees(np.arccos(np.clip(a @ b, -1, 1)))), 1)
+                  for a, b in itertools.combinations(v, 2))
+
+
+def test_the_cn5_geometries_are_the_polyhedra_they_are_named_after():
+    """Having five vertices is not the same as being the right five.
+
+    M6's paddlewheel is built on `square_pyramidal` — four equatorial bridging oxygens
+    and an open apex — so what these vertices actually are is load-bearing, and the shape
+    assertion above would pass for any five directions at all.
+    """
+    tbp = vertex_angles("trigonal_bipyramidal", 5)
+    assert tbp.count(90.0) == 6           # each axial vertex to each of three equatorial
+    assert tbp.count(120.0) == 3          # equatorial to equatorial
+    assert tbp.count(180.0) == 1          # the one axial pair
+
+    sqp = vertex_angles("square_pyramidal", 5)
+    assert sqp.count(90.0) == 8           # four in the base, four base-to-apex
+    assert sqp.count(180.0) == 2          # the two trans pairs of the base
+    assert len(sqp) == 10
+
+
+def test_the_square_pyramid_has_exactly_one_apex():
+    """The vertex M6 leaves vacant on each half of a paddlewheel.  It has to be findable
+    as the odd one out — the only direction not trans to another."""
+    v = site_vectors("square_pyramidal", 5, 1.0)
+    lonely = [i for i in range(5)
+              if not any(j != i and float(v[i] @ v[j]) < -0.99 for j in range(5))]
+    assert len(lonely) == 1
+
+
 def test_monodentate_placement_is_exact_and_clash_free():
     result = place_mononuclear("Zn", [aqua() for _ in range(4)], geometry="tetrahedral")
     assert result.ok, str(result.report)

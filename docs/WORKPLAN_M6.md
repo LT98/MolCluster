@@ -137,24 +137,39 @@ paddlewheel never needs it, and Fe₃-oxo and Zn₄O cannot be built without it.
 
 ---
 
-## 6. The battery, written before the code
+## 6. The battery — partly built
 
-M5's cheapest move was fixtures before code. M6's battery does not exist yet: `examples.ALL`
-holds 16 entries and **Zn₄O is not among them**, nor are mononuclear Zn/BDC, BDC, bipy, EDTA,
-anthrarufin, or the cis/trans anthrarufin–Cu pair that `PLAN_implementation.md` §6 lists as the
-shared fixture set. Building the battery is the first half of S0, and each row is a failing
-target first.
+M5's cheapest move was fixtures before code, and a parallel session did that half already:
+**`data/reference/node_cases.tsv` is the interface for adding an M6 test case**, read by
+`tests/node_cases.py` and checked by `tests/test_placer_multicentre.py`, with `examples.zn4o`
+and its golden hashes landed alongside. Add a row and the whole set is re-checked; nothing in
+the test module needs changing. Same arrangement as `ligand_cases.tsv` one layer down.
+
+Two things about that table to keep in view. Its numbers are **typical of the named compound
+class, not a refinement of one deposited structure** — no CIF was consulted — which is why
+every row carries a window rather than only an ideal, and why the tests treat it as a shape
+check. Before any of them backs a quantitative claim, check the ideal against the CSD and
+narrow the window in the same commit. And three rows (Cr/Rh/Mo paddlewheels) carry
+`fixture = -` deliberately, so the M–M target is not a two-point table; Rh and Mo are there
+precisely because `geometry.distances.BASE_MO` does not know them, which is the gap S4 fills.
+
+The exit-gate tests for the nodes are already written and **strict-xfailed on `NotBuiltYet`**,
+so they flip to passing the moment a body lands and the strict marker forces the marker's
+removal. What that table does *not* yet cover is mechanism A's non-carboxylate case and the
+single-atom bridges, so those rows are still owed: Cu₂(µ-OH)₂ and the pyrazolate dimer, both
+blocked on [B13](BUGS.md#b13) / [B14](BUGS.md#b14).
 
 | cluster | n | bridges | what it stresses | today |
 |---|---|---|---|---|
-| Cu₂(µ-O₂CH)₄ paddlewheel | 2 | A ×4 + M–M | the baseline | builds, QC ok, L0+L1 ✅ |
-| Cu₂(µ-O₂CH)₂ | 2 | A ×2 | under-bridged dimer; route discrimination | `zn2_bridged` is the Zn analogue |
-| Cu₂(µ-O₂C–Ph)₄ | 2 | A ×4 | ligand-dependence of the span (2.46 vs 2.67 Å) | benzoate perceives ✅ |
-| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | N typing wrong (§7) |
-| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | OH⁻ unperceived; no bent CN-2 |
-| Fe₃(µ₃-O)(µ-O₂CH)₆ | 3 | B + A ×6 | both mechanisms; 0.60 Å collision | fixture ✅, skeleton exact |
-| Fe₃ mixed-valence (2,3,3) | 3 | as above | per-centre labels in L0 and L1 | fixture ✅ |
-| Zn₄O(O₂CH)₆ | 4 | B(µ4) + A ×6 | nuclearity 4; 0.49 Å collision | fixture missing |
+| Cu₂(µ-O₂CH)₄ paddlewheel | 2 | A ×4 + M–M | the baseline | fixture + row ✅, builds QC-clean, L0+L1 ✅ |
+| Fe₃(µ₃-O)(µ-O₂CH)₆ | 3 | B + A ×6 | both mechanisms; 0.60 Å collision | fixture + row ✅, skeleton exact |
+| Fe₃ mixed-valence (2,3,3) | 3 | as above | per-centre labels in L0 and L1 | fixture + row ✅ |
+| Zn₄O(O₂CH)₆ | 4 | B(µ4) + A ×6 | nuclearity 4; 0.49 Å collision; no vacancy at all | fixture + row ✅ |
+| Cr₂ / Rh₂ / Mo₂ paddlewheels | 2 | A ×4 + M–M | M–M is not a two-point table; Rh and Mo are absent from `BASE_MO` | rows ✅, no fixture by design |
+| Cu₂(µ-O₂CH)₂ | 2 | A ×2 | under-bridged dimer; route discrimination | `zn2_bridged` is the Zn analogue; **row owed** |
+| Cu₂(µ-O₂C–Ph)₄ | 2 | A ×4 | ligand-dependence of the span (2.46 vs 2.67 Å) | benzoate perceives ✅; **row owed** |
+| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | blocked on [B14](BUGS.md#b14) |
+| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | blocked on [B13](BUGS.md#b13); no bent CN-2 |
 
 Between them: both mechanisms, nuclearity 2/3/4, with and without an M–M bond, carboxylate and
 non-carboxylate, symmetric and mixed-valence.
@@ -173,11 +188,11 @@ non-carboxylate, symmetric and mixed-valence.
 | `assembly/join.py::join` | raises for `n_metals > 1` |
 | `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
-| `geometry/placer.py::place_multicentre` | stub; `Center` and `Join` are named in its signature and **do not exist** |
+| `geometry/placer.py::place_multicentre` | **signature settled, body raises** — `Center`, `Join`, `InterCentreConstraint` (with `metal_metal_bond` and `window()`) now exist |
 | `geometry/placer.py::GEOMETRIES` | no bent CN-2 |
-| `geometry/distances.py` | no M–M distances anywhere in `src/` or `data/reference/` |
-| `geometry/qc.py` | no `check_intercentre` |
-| `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0; never writes an M–M bond |
+| `geometry/distances.py` | no M–M distances in `src/`; the *targets* are curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
+| `geometry/qc.py::check_intercentre` | **signature settled, body raises** — `BadIntercentre` exists |
+| `geometry/placer.py::to_rdkit_multicentre` | **signature settled, body raises** — the extraction half of the gate |
 | `sites/perception.py` | `[OH-]` perceives **zero** donors — filed as [B13](BUGS.md#b13) |
 | `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS.md#b14) |
 | `assembly/construct.py` | `metal_block`'s metal charge gives one species two L1 — filed as [B12](BUGS.md#b12) |
@@ -198,8 +213,10 @@ each with a changelog line; `ALGO_VERSIONS["l3_conformer_id"]` off `"0-stub"`; t
 `CODE_ARCHITECTURE.md` rows flipped; `WORKPLAN_M5.md` deleted. M6 adds its own ledger entries,
 so the ledger has to be current before it does.
 
-**(b) The battery** (§6) and the perception fixes it depends on — [B13](BUGS.md#b13) for the
-hydroxide bridge, [B14](BUGS.md#b14) for the pyrazolate one — as failing tests.
+**(b) The battery** (§6). Four of its rows and the reference table landed from a parallel
+session; what is owed is the two mechanism-A rows the table does not yet carry, and the two
+blocked on the perception fixes — [B13](BUGS.md#b13) for the hydroxide bridge,
+[B14](BUGS.md#b14) for the pyrazolate one — as failing tests.
 
 **(c) D20 — emergence primary, constraints for reconciliation.** Supersedes §6.1's framing.
 M···M is an **output to validate** wherever one mechanism determines it (§3), and
@@ -218,6 +235,15 @@ what `from_rdkit` does, and it makes both fixtures correct instead of one of the
 `EdgeType.METAL_METAL` is in the certificate, so a wrong answer is a wrong identity, and a
 distance threshold applied silently is exactly the kind of inference ground rule 5 forbids.
 Branch or declare; never default.
+
+**Independently reached, which is the strongest evidence a gate is real.** The parallel
+session's reference table arrived at the same place from the data side — `node_cases.tsv`
+carries `mm_bond` as a column and says it is "a chemical decision, NOT derivable from d_mm",
+and `InterCentreConstraint.metal_metal_bond` says a placer that guessed it from distance would
+be guessing the identity of its product. The Fe₃ trimer at 3.29 Å has no edge and the Cu₂
+paddlewheel at 2.62 Å has one; the two fixtures differ at L1 by exactly that. So C10's
+*resolution* is already implied — declared, never inferred — and what S0 owes is the D-number
+and the changelog line, not the argument.
 
 **(f) [B12](BUGS.md#b12) — `metal_block` labels metals differently from every other producer.**
 `from_rdkit` and `examples.py` set a metal's `formal_charge` to 0 (D15, charge is graph-level);

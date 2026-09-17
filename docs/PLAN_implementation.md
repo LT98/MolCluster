@@ -404,15 +404,21 @@ class ChoiceVector:
 def construct(spec, *, seed) -> ConstructResult            # deterministic; emits choice_vector
 def enumerate_constructs(spec) -> Iterator[ConstructSpec]  # Kind-B/C branch tree, live-DOF gated
 
-# geometry/placer.py — the multicentre half -> M6
+# geometry/placer.py — the multicentre half -> M6.  SIGNATURES NOW IN THE CODE (bodies raise);
+# these are exact as of the M6 test-case prep, which is what forced each of them.
+@dataclass                    # `cn`/`local_geometry` have NO defaults: that is the Kind-C branch
+class Center: element; cn; local_geometry; charge=0; oxidation_state=None; spin_class=None
+@dataclass                    # a BRIDGE is two Joins naming the same block — D14, nothing tags it
+class Join: center; block: LigandPlacement; site: int; mode; torsion_well
 @dataclass
-class Center: element; charge; oxidation_state; spin_class; cn; local_geometry
-@dataclass
-class Join: center; block; site; mode; torsion_well
-@dataclass
-class InterCentreConstraint: centres; mm_distance; bridge      # note the British spelling
-def place_multicentre(centers, joins, ...) -> PlacementResult  # raises NotBuiltYet
-def check_intercentre(coords, constraints) -> QCResult         # not written; extends qc.py
+class InterCentreConstraint:                                   # note the British spelling
+    centres; mm_distance; mm_lo; mm_hi; bridge_bite_deg; metal_metal_bond
+    def window(self, *, tol=0.15) -> tuple[float, float] | None
+def place_multicentre(centers, joins, constraints, *, seed=0) -> PlacementResult
+def to_rdkit_multicentre(centers, joins, constraints, result) -> Chem.Mol
+# geometry/qc.py
+class BadIntercentre(NamedTuple): centres; distance; lo; hi; symbols; source
+def check_intercentre(coords, constraints, *, metal_idxs, symbols=None) -> list[BadIntercentre]
 
 # geometry/templates.py — NOT WRITTEN.  M6's declared plan B (see §4)
 def node_template(name) -> TemplateNode          # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
