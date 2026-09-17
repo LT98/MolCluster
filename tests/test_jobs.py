@@ -1,6 +1,7 @@
 """Specs, the task queue, and the two ground rules they exist to serve."""
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -12,7 +13,8 @@ from mofsbu.registry.jobs import (
     reset_stale_claims, task_counts,
 )
 from mofsbu.runner import plan, run
-from mofsbu.spec import BuildSpec, MetalSpec, MoleculeSpec, PocketPredicate
+from mofsbu.spec import (
+    SPEC_VERSION, BuildSpec, MetalSpec, MoleculeSpec, PocketPredicate)
 
 
 @pytest.fixture()
@@ -126,17 +128,19 @@ def test_degree_above_one_refuses_rather_than_doing_something_smaller(reg):
         plan(reg, catechol_spec(degree=2))
 
 
-def test_the_assembly_interfaces_exist_and_all_raise():
-    """Signatures are settled so callers can be written; bodies are scheduled work."""
-    from mofsbu.assembly.join import NotBuiltYet, compatible, grow, join
+def test_the_assembly_interfaces_that_are_still_stubs_all_raise():
+    """Signatures are settled so callers can be written; bodies are scheduled work.
+
+    The list shortened as M5 landed — `compatible` left at S2, `join` at S3, `grow` at S4,
+    each covered by its own file (`test_compatible.py`, `test_join.py`,
+    `test_construct.py`). `place_multicentre` is what is left, and the point of the test is
+    unchanged: a scheduled body raises rather than returning a plausible-looking value.
+    """
+    from mofsbu._types import NotBuiltYet
     from mofsbu.geometry.placer import place_multicentre
 
-    for call in (lambda: compatible(None, None),
-                 lambda: join(None, None, None, None),
-                 lambda: grow(None, (), degree=2),
-                 lambda: place_multicentre([1, 2], [], [])):
-        with pytest.raises(NotBuiltYet):
-            call()
+    with pytest.raises(NotBuiltYet):
+        place_multicentre([1, 2], [], [])
 
 
 # ── end to end ───────────────────────────────────────────────────────────────
@@ -227,11 +231,14 @@ def test_a_version_3_spec_comes_forward_without_inventing_a_model(tmp_path):
         "molecules": [{"name": "x", "smiles": "O", "multiplicity": 1,
                        "max_deprotonations": None}]})
     assert spec.ml_model is None
-    assert spec.to_dict()["spec_version"] == 6
+    assert spec.to_dict()["spec_version"] == SPEC_VERSION
     # v6 adds mixed-ligand enumeration.  A v3 spec meant one molecule per coordination
     # sphere, so it comes forward homoleptic — defaulting it to anything else would
     # silently multiply the size of every run already on disk.
     assert spec.max_distinct_ligands == 1
+    # v7 adds the pathway ladder, and the same rule applies: an old spec asked for the
+    # products, not for the intermediates they are assembled from.
+    assert spec.pathways is False
 
 
 def test_a_version_4_spec_drops_the_stale_metal_multiplicity():
@@ -347,3 +354,41 @@ def test_a_composition_never_exceeds_the_requested_ligand_count(reg):
 def test_max_distinct_ligands_must_be_at_least_one():
     with pytest.raises(ValueError, match="at least 1"):
         _two_ligand_spec(max_distinct_ligands=0)
+
+
+# ── counts written as ranges ─────────────────────────────────────────────────
+# A sweep of one to three ligand copies is ONE experiment, and typing it out as a list is
+# the notation getting in the way of the question. The expansion happens in `from_dict`,
+# so the page, a hand-written file and the estimate all read it the same way.
+
+def test_a_range_expands_and_the_spec_stores_the_integers():
+    from mofsbu.spec import int_series
+
+    assert int_series("1~3") == (1, 2, 3)
+    assert int_series("4-6, 8") == (4, 5, 6, 8)
+    assert int_series("1..2") == (1, 2)
+    assert int_series([4, 6]) == (4, 6)
+    assert int_series("2,2,3") == (2, 3)               # duplicates collapse
+    spec = catechol_spec(coordination="4~6", ligands_per_metal="1~2")
+    assert spec.coordination == (4, 5, 6) and spec.ligands_per_metal == (1, 2)
+    # The reproducibility record carries what was enumerated, not how it was phrased.
+    assert json.loads(spec.to_json())["coordination"] == [4, 5, 6]
+
+
+def test_a_range_written_as_a_spec_file_round_trips(tmp_path):
+    spec = BuildSpec.from_dict({**catechol_spec().to_dict(), "ligands_per_metal": "1~3"})
+    assert BuildSpec.load(spec.save(tmp_path / "range.json")).ligands_per_metal == (1, 2, 3)
+
+
+@pytest.mark.parametrize("bad, says", [
+    ("3~1", "counts down"),
+    ("1~500", "past the"),
+    ("0", "start at 1"),
+    ("four", "whole number"),
+    ("", "empty"),
+])
+def test_a_range_that_cannot_mean_what_it_says_refuses(bad, says):
+    """Refusing beats truncating: a typo that would queue 500 coordination numbers is
+    the case the ceiling exists for, and it says so rather than quietly building some."""
+    with pytest.raises(ValueError, match=says):
+        catechol_spec(coordination=bad)

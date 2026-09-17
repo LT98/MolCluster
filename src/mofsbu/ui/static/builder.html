@@ -1,19 +1,20 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>mofsbu — build spec</title>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
 <style>
+  /* --accent-soft is what the shared tab strip fills an active or hovered tab with;
+     the other two pages already define it. */
   :root{--bg:#fbfbfa;--panel:#fff;--ink:#1c1b19;--muted:#6b6862;--line:#e2e0dc;
-        --accent:#3a6ea5;--warn:#8a5a00;--warnbg:#fff6e0;--ok:#2f6b3a;--bad:#a33}
+        --accent:#3a6ea5;--accent-soft:#e9f0f7;--warn:#8a5a00;--warnbg:#fff6e0;
+        --ok:#2f6b3a;--bad:#a33}
   @media (prefers-color-scheme:dark){:root{--bg:#16181c;--panel:#1d2025;--ink:#e6e4e1;
-        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--warn:#e0b062;--warnbg:#2b2313;
-        --ok:#7fc48d;--bad:#e08080}}
+        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--accent-soft:#243444;
+        --warn:#e0b062;--warnbg:#2b2313;--ok:#7fc48d;--bad:#e08080}}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
-         align-items:baseline;gap:14px}
-  header h1{font-size:15px;margin:0;font-weight:600}
-  header a{color:var(--accent);font-size:12px}
   .wrap{display:grid;grid-template-columns:minmax(340px,1fr) minmax(320px,1fr) minmax(300px,0.9fr);
         gap:16px;padding:16px;align-items:start}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -51,11 +52,12 @@
   legend{font-size:11px;color:var(--muted);padding:0 4px}
 </style>
 
-<header>
-  <h1>mofsbu · build spec</h1>
-  <span class="muted">writes a spec and queues a run — it never writes structures</span>
-  <a href="/runs" style="margin-left:auto">run inspector →</a>
-  <a href="/">registry viewer →</a>
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right">
+    <h1>build spec — writes a spec and queues a run; it never writes structures</h1>
+  </div>
 </header>
 
 <div class="wrap">
@@ -107,7 +109,7 @@
   </section>
 
   <!-- ── options + submit ───────────────────────────────────────────── -->
-  <section class="card">
+  <section class="card" id="construction">
     <h2>3 · construction</h2>
 
     <label for="degree">degree</label>
@@ -117,9 +119,12 @@
     <fieldset>
       <legend>coordination (metal runs)</legend>
       <div class="row">
-        <input id="cns" value="4,6" title="coordination numbers">
-        <input id="lpm" value="1" title="ligand copies per metal" style="flex:0 0 90px">
+        <input id="cns" value="4,6" placeholder="CN e.g. 4,6 or 4~6"
+               title="coordination numbers — a list, a range (4~6), or both">
+        <input id="lpm" value="1" placeholder="copies e.g. 1~3" style="flex:0 0 110px"
+               title="ligand copies per metal — a list, a range (1~3), or both">
       </div>
+      <div class="muted" id="rangeNote" style="margin-top:4px"></div>
       <label for="coligand">co-ligand filling remaining sites (blank = none)</label>
       <input id="coligand" value="O">
       <label class="muted" style="margin-top:6px">
@@ -132,6 +137,12 @@
 share a coordination sphere.">
         <span class="muted" id="mixedNote" style="align-self:center"></span>
       </div>
+      <label for="pathways">pathways</label>
+      <label class="muted">
+        <input type="checkbox" id="pathways" checked> record how the rungs reach each
+        other — build the intermediate below each product and join the step between them
+      </label>
+      <div class="muted" id="pathwaysNote" style="margin-top:4px"></div>
       <label>binding</label>
       <div class="row" style="justify-content:flex-start">
         <label class="muted"><input type="checkbox" id="bChel" checked> chelate</label>
@@ -182,6 +193,12 @@ share a coordination sphere.">
     <label for="note">note</label>
     <input id="note" placeholder="what this run is for">
 
+    <!-- ── what this spec costs ───────────────────────────────────────────
+         Answered from the planner's own enumeration, and before submitting: the
+         difference between 14 tasks and 1,400 is a decision, and it should be
+         available while the spec is still being edited rather than afterwards. -->
+    <div id="estimate" class="muted" style="margin-top:12px">—</div>
+
     <div class="row" style="margin-top:12px">
       <button id="saveSpec">Save spec JSON</button>
       <button class="primary" id="submit">Submit run</button>
@@ -197,8 +214,7 @@ share a coordination sphere.">
 
 <script>
 const $ = s => document.querySelector(s);
-const state = {molecules: [], metals: [], caps: null, current: null,
-               compute: null, databases: []};
+const state = {molecules: [], metals: [], caps: null, current: null, compute: null};
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -234,7 +250,15 @@ async function loadCaps() {
   $('#mixed').oninput = showMixedNote;
   showMixedNote();
   $('#metalList').title = state.caps.metals_note;
+  $('#rangeNote').textContent = state.caps.range_note || '';
+  $('#pathwaysNote').textContent = state.caps.pathways_note || '';
   renderCompute(state.caps.compute);
+  // One listener for the whole construction card rather than one per control: every
+  // input in it is part of the spec, and a control added later would otherwise be the
+  // one that silently stops updating the estimate.
+  $('#construction').addEventListener('input', scheduleEstimate);
+  $('#construction').addEventListener('change', scheduleEstimate);
+  scheduleEstimate();
 }
 
 // ── hardware ────────────────────────────────────────────────────────────────
@@ -276,47 +300,23 @@ async function applyCompute() {
 }
 
 // ── which database a run writes to ──────────────────────────────────────────
-async function loadDatabases() {
-  let body;
-  try { body = await api('/api/databases'); }
-  catch (e) { $('#dbNote').textContent = 'could not list databases'; return; }
-  state.databases = body.databases;
-  // Two folders can hold a `registry.db`, and the launch one may sit outside the data
-  // root entirely, so the option VALUE is the full path and the label disambiguates
-  // only when it has to. A dropdown with two identical entries is not a choice.
-  const counts = {};
-  body.databases.forEach(d => counts[d.name] = (counts[d.name] || 0) + 1);
-  $('#database').innerHTML = body.databases.map(d => {
-    const size = d.error ? 'unreadable'
-      : d.exists ? `${d.n_structures} structures · ${d.n_runs} runs`
-      : 'empty (not created yet)';
-    const where = counts[d.name] > 1 ? ` [${d.folder}]` : '';
-    return `<option value="${d.path}" title="${d.path}" ${d.active ? 'selected' : ''}>`
-         + `${d.name}${where} — ${size}</option>`;
-  }).join('');
-  const active = body.databases.find(d => d.active) || {};
-  $('#dbNote').textContent = `runs write to ${active.path || '—'} · the viewer reads the `
-    + `same one (read-only) · new ones are created in ${body.data_root}`;
-  $('#database').onchange = async () => {
-    try {
-      await api('/api/database/select', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({path: $('#database').value})});
-      const to = $('#database').value;
-      await loadDatabases();
-      pollRuns();
-      $('#submitMsg').textContent = `switched to ${to}`;
-    } catch (e) { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; }
-  };
+// The listing, the labelling and the switch itself live in static/chrome.js, because
+// the registry viewer offers the same choice and the two must not drift apart.
+function loadDatabases() {
+  return mofsbuDb.mount({
+    select: $('#database'), note: $('#dbNote'),
+    noteText: (active, body) => `runs write to ${active.path || '—'} · the viewer reads `
+      + `the same one (read-only) · new ones are created in ${body.data_root}`,
+    onSwitch: (to) => { pollRuns(); $('#submitMsg').textContent = `switched to ${to}`; },
+    onError: (e) => { $('#submitMsg').innerHTML = `<span class="err">${e.message}</span>`; },
+  });
 }
 
 $('#newDb').onclick = async () => {
   const name = prompt('Name for the new registry (letters, digits, - and _):');
   if (!name) return;
   try {
-    const r = await api('/api/databases', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name})});
+    const r = await mofsbuDb.create(name);
     await loadDatabases();
     pollRuns();
     $('#submitMsg').textContent = r.note;
@@ -328,13 +328,21 @@ function showMixedNote() {
   // leaving it to be discovered when the queue is full.  A "kind" is one
   // (molecule, protomer, donor set, binding mode) — two protomers of one molecule are
   // two kinds, which is why a single molecule can still be mixed at 2+.
+  //
+  // At 1 the note names the ACTIVATION STATE, not just the molecule.  "Homoleptic" with
+  // one molecule loaded reads as "well, yes, there is only one molecule" — and the thing
+  // it is actually saying is that a metal carrying two ligands carries two copies of one
+  // protomer and one pocket, never a -2H next to a -3H. That is the sentence somebody
+  // needs BEFORE the run, not after looking at the products and finding them symmetric.
   const n = +$('#mixed').value || 1;
   const mols = state.molecules.length;
   $('#mixedNote').textContent = n <= 1
-    ? 'homoleptic: one ligand kind per metal' + (mols > 1
-        ? ` — your ${mols} molecules are enumerated separately, never together` : '')
-    : `up to ${n} kinds share a metal (mixed ligands, and mixed protomers of one `
-      + 'molecule). Runs get substantially larger.';
+    ? 'homoleptic: every ligand on a metal is the same kind — same activation state, '
+      + 'same pocket. Different ones are enumerated as separate structures, never '
+      + 'combined on one centre'
+    : `up to ${n} kinds share a metal: different molecules, and different activation `
+      + 'states or pockets of one molecule. Runs get substantially larger'
+      + (mols ? '' : ' — add a molecule to see by how much');
 }
 
 function showMlNote() {
@@ -402,6 +410,7 @@ function renderMolecules() {
     state.molecules.splice(+b.dataset.i, 1); renderMolecules(); });
   // The note counts molecules, so it has to follow the list rather than only the input.
   showMixedNote();
+  scheduleEstimate();
 }
 function renderMetals() {
   const el = $('#metalList');
@@ -411,6 +420,7 @@ function renderMetals() {
     : '<li class="muted">none — molecular construction (COF / cage)</li>';
   el.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => {
     state.metals.splice(+b.dataset.i, 1); renderMetals(); });
+  scheduleEstimate();
 }
 
 $('#addRun').onclick = () => {
@@ -457,9 +467,10 @@ async function loadLibrary() {
 }
 
 // ── spec assembly
-function numbers(s) {
-  return s.split(/[,\s]+/).filter(Boolean).map(Number).filter(n => !Number.isNaN(n));
-}
+// The count fields are sent AS TYPED. `BuildSpec.from_dict` expands `1~3` into 1, 2, 3
+// and stores the expanded list, so there is one parser for the page, for a hand-written
+// spec file and for the estimate — a second copy of it here is a second thing to get
+// wrong, and it would disagree exactly where the notation is interesting.
 function renderDiagnostics(items) {
   const el = $('#diagnostics');
   if (!items || !items.length) { el.innerHTML = ''; return; }
@@ -499,6 +510,9 @@ function applySpec(spec) {
   // showing through: loading a v5 spec must not silently present it as a mixed one.
   $('#mixed').value = spec.max_distinct_ligands ?? 1;
   showMixedNote();
+  // Same migration showing through: a spec written before pathways existed asked for the
+  // products only, and loading one must not silently turn the intermediates on.
+  $('#pathways').checked = !!spec.pathways;
   $('#bChel').checked = (spec.binding || []).includes('chelate');
   $('#bMono').checked = (spec.binding || []).includes('mono');
   $('#pRing').value = spec.pocket?.ring_size ?? '';
@@ -508,6 +522,62 @@ function applySpec(spec) {
   if (mode && !mode.disabled) mode.checked = true;
   $('#mlModel').value = spec.ml_model || '';
   showMlNote();
+  scheduleEstimate();
+}
+
+// ── how big is this run? ────────────────────────────────────────────────────
+// Asked of the planner's own enumeration (`runner.estimate`), so the number shown is the
+// number submitting produces rather than a second formula that agrees until it doesn't.
+// Debounced rather than live: enumerating embeds a conformer per protomer, and a request
+// per keystroke would make the page slower the more interesting the spec got.
+let estimateTimer = null, estimateToken = 0;
+
+function scheduleEstimate() {
+  clearTimeout(estimateTimer);
+  if (!state.molecules.length) {
+    $('#estimate').innerHTML = '<span class="muted">add a molecule to see the size of '
+      + 'this run</span>';
+    return;
+  }
+  $('#estimate').innerHTML = '<span class="muted">estimating…</span>';
+  estimateTimer = setTimeout(runEstimate, 500);
+}
+
+async function runEstimate() {
+  const token = ++estimateToken;
+  try {
+    const res = await api('/api/estimate', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: buildSpec()})});
+    if (token !== estimateToken) return;          // a later edit already asked again
+    renderEstimate(res);
+  } catch (e) {
+    if (token === estimateToken) $('#estimate').innerHTML = `<span class="err">${e.message}</span>`;
+  }
+}
+
+function renderEstimate(res) {
+  const el = $('#estimate');
+  if (!res.ok) {
+    el.innerHTML = `<span class="muted">no estimate — </span><span class="err">${res.reason}</span>`;
+    return;
+  }
+  const k = res.by_kind || {};
+  const parts = [];
+  if (k.ligand) parts.push(`${k.ligand} activation state${k.ligand > 1 ? 's' : ''}`);
+  if (k.place) parts.push(`${k.place} coordination sphere${k.place > 1 ? 's' : ''}`);
+  if (k.grow) parts.push(`${k.grow} pathway step${k.grow > 1 ? 's' : ''}`);
+  const relax = res.relaxations
+    ? ` <span class="muted">+ up to ${res.relaxations} relaxation(s) at ${res.run_mode}</span>`
+    : '';
+  el.innerHTML =
+    `<b>≈ ${res.total} task${res.total === 1 ? '' : 's'}</b> `
+    + `<span class="muted">${parts.join(' · ') || 'nothing to build'}</span>${relax}`
+    + (res.diagnostics && res.diagnostics.length
+        ? '<div style="margin-top:4px">' + res.diagnostics.map(d =>
+            `<span class="chip" title="${d.hint}">×${d.count} ${d.reason}</span>`).join('')
+          + '</div>'
+        : '');
 }
 
 function buildSpec() {
@@ -521,13 +591,14 @@ function buildSpec() {
     spec_version: 1,
     molecules: state.molecules, metals: state.metals,
     degree: +$('#degree').value || 1,
-    coordination: numbers($('#cns').value),
+    coordination: $('#cns').value,
     geometries: null,
-    ligands_per_metal: numbers($('#lpm').value),
+    ligands_per_metal: $('#lpm').value,
     co_ligand: $('#coligand').value.trim() || null,
     binding, pocket, seed: 0,
     allow_unsaturated: $('#unsat').checked,
     max_distinct_ligands: +$('#mixed').value || 1,
+    pathways: $('#pathways').checked,
     run_mode: document.querySelector('input[name=mode]:checked').value,
     ml_model: $('#mlModel').value || null,
     note: $('#note').value,

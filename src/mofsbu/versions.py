@@ -1,10 +1,21 @@
-"""Pinned algorithm versions.
+"""Pinned algorithm versions, and which checkout is answering right now.
 
-Ground rule 6 (docs/PLAN_implementation.md §0): every stored value carries the version of
-the recipe that produced it. Bump a version here when its algorithm changes; never
-silently re-label existing rows.
+Two different questions, in one file because both are "what version", and worth keeping
+apart because they behave oppositely:
+
+* `ALGO_VERSIONS` is what produced a STORED ROW.  Ground rule 6
+  (docs/PLAN_implementation.md §0): every stored value carries the version of the recipe
+  that produced it.  Bump one here when its algorithm changes; never silently re-label
+  existing rows.  These travel with the data and outlive the process.
+* `build_info()` is which CODE is running.  It is never stored and never enters an
+  identity — it answers "what am I looking at", which is a question you ask of a server,
+  not of a row.  The pages show it so that a branch under test is distinguishable from
+  `main` at a glance.
 """
 from __future__ import annotations
+
+import functools
+import subprocess
 
 ALGO_VERSIONS: dict[str, str] = {
     "graph_schema":    "1",       # NodeLabel/EdgeType layout + what enters a hash
@@ -12,8 +23,17 @@ ALGO_VERSIONS: dict[str, str] = {
     "l1_certificate":  "cert1",   # sha256 over the IR canonical certificate — the L1 key
     "wl_index":        "wl3-nx",  # networkx WL, 3 iterations — fast bucket index only
     "canonical_order": "ir1",     # individualisation-refinement canonical labelling
-    "l2_isomer_tag":   "0-stub",  # M5
+    # What counts as an arrangement, how donors are grouped into classes, and where
+    # the cis/trans split sits.  Structures tagged under a different version are not
+    # comparable at L2 and are never re-labelled (ground rule 6).
+    "l2_isomer_tag":   "iso1",    # M5/S5 — cis/trans, fac/mer, Delta/Lambda (D10)
     "l3_conformer_id": "0-stub",  # M5
+    # How a choice vector becomes a key: what is dropped (seed, a self-referential
+    # digest), how floats are quantised, how it serialises.  It prefixes the digest it
+    # produces rather than living in a column, because a choice digest is not part of an
+    # address — see `assembly.choice`.  Bump it and every later digest stops comparing
+    # equal to the ones already stored, which is the intended and only honest outcome.
+    "choice_vector":   "cv1",     # M5/S1 — the L3 label's producer (D11, D13)
     # 2: the MACE backends became a family (MP-0 / OMOL-0).  A method row now records
     #    `training_set`, and `spin_blind` alongside `charge_blind`, so a stored ML number
     #    says which foundation model made it instead of only "mace".  Old rows keep
@@ -54,3 +74,62 @@ ALGO_VERSIONS: dict[str, str] = {
 
 def version_block() -> str:
     return "\n".join(f"{k:18s} {v}" for k, v in sorted(ALGO_VERSIONS.items()))
+
+
+def _git(*args: str) -> str:
+    """One git question, answered from the checkout this package lives in, or "".
+
+    Never raises.  A checkout is a convenience here, not a requirement — an installed
+    wheel has no `.git` and is a perfectly good way to run this — so a missing git, a
+    missing repository and a timeout all mean the same thing: no branch to report.
+    """
+    from mofsbu.config import REPO_ROOT
+
+    try:
+        out = subprocess.run(("git", *args), cwd=REPO_ROOT, capture_output=True,
+                             text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+@functools.lru_cache(maxsize=1)
+def build_info() -> dict[str, str]:
+    """Which code this process is running: package version, branch, commit, checkout.
+
+    **Read once, at first ask, and cached for the life of the process** — deliberately.
+    The question being answered is "what am I running", and what a running server is
+    running is what it imported at start-up; re-reading git would make the stamp track
+    the working tree instead of the process, so a page could report a commit whose code
+    is not the code answering the request.  Restarting the server is what changes it,
+    which is also when it actually changes.
+
+    `dirty` is the one soft edge: it is the working tree's state at start-up, and it is
+    reported because "0.0.1 on main" means something quite different with uncommitted
+    changes under it.
+    """
+    from mofsbu import __version__
+
+    commit = _git("rev-parse", "HEAD")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    from mofsbu.config import REPO_ROOT
+
+    return {
+        "version": __version__,
+        "branch": branch,
+        "commit": commit,
+        "short": commit[:7],
+        "dirty": "1" if _git("status", "--porcelain") else "",
+        "committed_at": _git("log", "-1", "--format=%cs"),
+        "checkout": str(REPO_ROOT),
+        "source": "git" if commit else "installed package (no checkout)",
+    }
+
+
+def build_line() -> str:
+    """The stamp as one line, for a console banner and the page's tooltip."""
+    info = build_info()
+    where = (f"{info['branch']} @ {info['short']}{'*' if info['dirty'] else ''}"
+             if info["commit"] else info["source"])
+    when = f", {info['committed_at']}" if info["committed_at"] else ""
+    return f"mofsbu {info['version']} — {where}{when}"

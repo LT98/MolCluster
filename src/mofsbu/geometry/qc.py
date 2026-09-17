@@ -112,44 +112,57 @@ class BadBond(NamedTuple):
 
 
 class BadIntercentre(NamedTuple):
-    """Two coordination centres at a separation their node does not allow.
+    """Two centres at a separation the node they belong to does not allow.
 
-    `(centres, distance)` first, matching how `Clash` and `BadBond` front the fields a
-    caller indexes positionally.  The window travels with the finding for the same reason
-    a clash carries its limit: "Cu...Cu 1.90 A" is not a verdict until it says what it was
-    measured against, and the answer comes from a curated table that may itself be wrong.
+    Deliberately `BadBond`'s shape one level up — measured, target, tol, source — because
+    it is the same kind of statement about a bigger thing, and a report a caller has to
+    read two ways is a report that gets read one way.  `(centres, distance)` lead, matching
+    how `Clash` and `BadBond` front the fields indexed positionally.
+
+    The target travels with the finding for the same reason a clash carries its limit:
+    "Cu...Cu 1.90 A" is not a verdict until it says what it was measured against, and under
+    D20 that number is a LITERATURE RANGE being validated against, not a constraint that
+    was imposed — so `source` naming the row it came from is what separates "the node is
+    wrong" from "the table is wrong".
     """
 
     centres: tuple[int, int]
     distance: float
-    lo: float = 0.0
-    hi: float = 0.0
+    target: float = 0.0
+    tol: float = 0.0
     symbols: tuple[str, str] = ("", "")
-    source: str = ""             # which reference row supplied the window
+    source: str = ""             # which reference row supplied the target
+
+    @property
+    def window(self) -> tuple[float, float]:
+        return (self.target - self.tol, self.target + self.tol)
 
     def describe(self) -> str:
         a, b = self.centres
         si, sj = self.symbols
         src = f", {self.source}" if self.source else ""
-        return (f"{si}{a}...{sj}{b} {self.distance:.2f} A vs "
-                f"{self.lo:.2f}-{self.hi:.2f}{src}")
+        return (f"{si}{a}...{sj}{b} {self.distance:.2f} A vs target {self.target:.2f} "
+                f"+/- {self.tol:.2f}{src}")
 
     def to_dict(self) -> dict:
         return {"centres": list(self.centres), "symbols": list(self.symbols),
-                "distance": round(self.distance, 3), "lo": self.lo, "hi": self.hi,
-                "source": self.source}
+                "distance": round(self.distance, 3), "target": round(self.target, 3),
+                "tol": self.tol, "source": self.source}
 
 
 def check_intercentre(coords: np.ndarray, constraints: list,
                       *, metal_idxs: list[int], symbols: list[str] | None = None,
                       ) -> list[BadIntercentre]:
-    """Centre-centre distances and bridge bite angles that are out of range.  NOT IMPLEMENTED.
+    """Validate the M...M the joins produced, and the bridge angles.  NOT IMPLEMENTED.
 
-    Ground rule 7: settled signature, scheduled body (M6).  `constraints` is a list of
-    `geometry.placer.InterCentreConstraint`; `metal_idxs` maps a constraint's centre
-    numbers onto rows of `coords`, because a centre is an index into the NODE and an atom
-    is an index into the assembly and conflating the two is how a two-metal node ends up
-    measuring the distance from a metal to a carboxylate carbon.
+    Ground rule 7: settled signature, scheduled body (M6, slice S6).  `constraints` is a
+    list of `geometry.placer.InterCentreConstraint`; `metal_idxs` maps a constraint's
+    centre numbers onto rows of `coords`, because a centre is an index into the NODE and an
+    atom is an index into the assembly, and conflating the two is how a two-metal node ends
+    up measuring the distance from a metal to a carboxylate carbon.
+
+    **Validate, not impose** (D20).  By the time this runs the node exists; the question is
+    whether the distance it came out at is one the chemistry allows.
 
     This is the check `qc` cannot do today: every finding it returns is about a pair of
     atoms that are not bonded to each other and are not a metal-donor pair, so both

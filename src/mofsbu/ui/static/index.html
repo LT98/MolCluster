@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mofsbu registry viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
 <style>
 :root{
   --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
@@ -16,22 +18,88 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-#app{display:grid;grid-template-columns:265px minmax(420px,1fr) 400px;height:100vh}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
+     display:flex;flex-direction:column}
+/* The tab strip is a row of the page, so the three panes get what is left rather
+   than a hardcoded 100vh that would push the bar off the top. */
+#app{display:grid;grid-template-columns:265px minmax(420px,1fr) 400px;flex:1;min-height:0}
 .pane{overflow:auto;padding:12px 14px}
 #sidebar{border-right:1px solid var(--line);background:var(--panel)}
 #detail{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
 h1{font-size:14px;margin:0 0 2px;letter-spacing:.02em}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
    margin:16px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+/* A collapsible filter axis.  The summary keeps the old h2's look so the sidebar reads
+   the same when everything is open. */
+.sec{margin-top:14px}
+.sec>summary{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  border-bottom:1px solid var(--line);padding:0 0 3px 13px;margin-bottom:6px;
+  cursor:pointer;list-style:none;position:relative;user-select:none}
+.sec>summary::-webkit-details-marker{display:none}
+.sec>summary::before{content:"▸";position:absolute;left:1px;transition:transform .12s}
+.sec[open]>summary::before{transform:rotate(90deg)}
+.sec>summary:hover{color:var(--ink)}
+.sec>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+/* The count of live filters inside.  Only drawn when there are some, and deliberately
+   loud enough to notice on a closed section. */
+.secn{display:none}
+.secn.on{display:inline-block;margin-left:6px;background:var(--accent-soft);color:var(--accent);
+  border:1px solid var(--accent);border-radius:9px;padding:0 6px;font-size:10px;font-weight:600;
+  letter-spacing:0}
+.sec-body{padding-bottom:2px}
 label{display:block;font-size:11px;color:var(--muted);margin:8px 0 2px}
 input,select,button{font:inherit;color:var(--ink);background:var(--panel);
   border:1px solid var(--line);border-radius:4px;padding:4px 6px}
 input[type=text],input[type=number],select{width:100%}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+/* Two thumbs on one track.  Both inputs cover the full width and are stacked, so the
+   whole bar is grabbable for either bound; `pointer-events` is off on the input and
+   back on for the thumb, which is what stops the upper input from swallowing every
+   click meant for the lower one. */
+.range{margin:10px 0 14px}
+.range-head{display:flex;justify-content:space-between;align-items:baseline;gap:6px;
+  font-size:11px;color:var(--muted)}
+.range-val{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.range-val.full{color:var(--muted)}
+.range-slider{position:relative;height:22px;margin-top:5px}
+.range-track,.range-fill{position:absolute;top:9px;height:4px;border-radius:2px}
+.range-track{left:0;right:0;background:var(--line)}
+.range-fill{background:var(--accent)}
+.range-slider input[type=range]{position:absolute;top:0;left:0;width:100%;height:22px;
+  margin:0;padding:0;border:0;background:none;pointer-events:none;
+  -webkit-appearance:none;appearance:none}
+.range-slider input[type=range]:focus-visible{outline:2px solid var(--accent);
+  outline-offset:2px;border-radius:4px}
+.range-slider input[type=range]::-webkit-slider-runnable-track{height:22px;background:none}
+.range-slider input[type=range]::-moz-range-track{height:22px;background:none}
+.range-slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+  pointer-events:auto;width:14px;height:14px;margin-top:4px;border-radius:50%;
+  background:var(--panel);border:2px solid var(--accent);cursor:grab}
+.range-slider input[type=range]::-moz-range-thumb{pointer-events:auto;
+  width:13px;height:13px;border-radius:50%;
+  background:var(--panel);border:2px solid var(--accent);cursor:grab}
+.range-note{font-size:10.5px;color:var(--muted);margin-top:3px}
+.range.off .range-slider{display:none}
 .chip{border:1px solid var(--line);border-radius:11px;padding:2px 9px;cursor:pointer;font-size:11px;user-select:none}
 .chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+/* Donor chips are cards: the name, then the group it names.  `currentColor` on the
+   sketch is what makes the drawing follow the chip's own state — selected, hovered,
+   light or dark — without a second palette to keep in sync. */
+.chips.donors{gap:5px}
+.chip.donor{display:flex;flex-direction:column;align-items:center;gap:1px;
+  border-radius:7px;padding:3px 5px 1px;line-height:1.25}
+.chip.donor .dsym{color:var(--muted);font-size:9.5px}
+.chip.donor.on .dsym{color:var(--accent)}
+.chips.preview .chip{opacity:.5;cursor:default}
+.chip.donor svg{display:block;width:58px;height:30px;overflow:visible;color:var(--ink)}
+.chip.donor.on svg{color:var(--accent)}
+.chip.donor svg .bond{stroke:currentColor;stroke-width:1.1;fill:none}
+.chip.donor svg .dative{stroke:currentColor;stroke-width:1.1;fill:none;stroke-dasharray:2 2;opacity:.75}
+.chip.donor svg text{font:7px var(--mono);fill:currentColor;text-anchor:middle;
+  dominant-baseline:middle}
+.chip.donor svg .m{fill:var(--accent);font-weight:700}
+.chip.donor svg .chg{font-size:6px;opacity:.8}
 .chk{display:flex;align-items:center;gap:6px;color:var(--ink);font-size:12px;margin:5px 0}
 .chk input{width:auto}
 button{cursor:pointer}
@@ -61,6 +129,12 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .spacer{flex:1}
+/* The pane itself no longer scrolls — the wrapper does.  That is what keeps the paging
+   row in place, and it is also what lets `th{position:sticky}` work, since sticky is
+   relative to the nearest scrolling ancestor and that is now the wrapper. */
+#results{overflow:hidden;display:flex;flex-direction:column}
+#table-wrap{flex:1;min-height:0;overflow:auto}
+#results-bar{margin:0 0 8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 #viewer{position:relative;width:100%;height:300px;border:1px solid var(--line);border-radius:5px;
         background:var(--bg);overflow:hidden}
 #viewer-fallback{position:absolute;inset:0;padding:10px;font-size:11.5px;overflow:auto;display:none}
@@ -77,65 +151,104 @@ dd{margin:0;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right"><span id="meta">read-only</span></div>
+</header>
 <div id="app">
 
   <!-- ── filters ───────────────────────────────────────────────── -->
   <aside id="sidebar" class="pane">
-    <h1>mofsbu registry</h1>
-    <div class="muted mono" id="meta">read-only</div>
-    <div style="font-size:12px;margin-top:4px"><a href="/builder">builder</a> ·
-      <a href="/runs">run inspector</a></div>
+    <h1>registry</h1>
 
-    <label for="f-q">Search label / formula / L0</label>
-    <input type="text" id="f-q" placeholder="Cu paddlewheel, C4H6O9…">
+    <!-- Each axis is a <details>, not a scripted show/hide: the disclosure state, the
+         keyboard behaviour and the "closed content is not tabbable" rule all come free
+         and correct.  The count in the summary is the part that has to be built — a
+         collapsed section that is silently filtering is the one failure mode a
+         collapsible introduces, and it is exactly the one nobody would suspect. -->
 
-    <h2>composition · charge · spin</h2>
-    <label>Metal</label>
-    <div class="chips" id="f-metals"></div>
-    <div class="row2">
-      <div><label for="f-nmin">n metals ≥</label><input type="number" id="f-nmin"></div>
-      <div><label for="f-nmax">n metals ≤</label><input type="number" id="f-nmax"></div>
-    </div>
-    <div class="row2">
-      <div><label for="f-qmin">charge ≥</label><input type="number" id="f-qmin"></div>
-      <div><label for="f-qmax">charge ≤</label><input type="number" id="f-qmax"></div>
-    </div>
-    <label for="f-mult">Multiplicity</label>
-    <select id="f-mult"><option value="">any</option></select>
+    <!-- The registry this page reads is a property of the server, not of the builder
+         page, so it is chosen here too (ui/active.py: one path, all three pages). -->
+    <details class="sec" id="sec-db" open>
+      <summary>database</summary>
+      <div class="sec-body">
+        <select id="db-pick" aria-label="registry this page reads"></select>
+        <div class="muted" id="db-note" style="font-size:11px;margin-top:4px"></div>
+      </div>
+    </details>
 
-    <h2>connectivity · binding mode</h2>
-    <label>Max bridge class</label>
-    <div class="chips" id="f-bridge"></div>
-    <label for="f-mm">Metal–metal contact</label>
-    <select id="f-mm"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
-    <fieldset id="fs-donor">
-      <label>Donor type</label>
-      <div class="chips" id="f-donor"></div>
-      <label for="f-open">Open sites ≥</label>
-      <input type="number" id="f-open">
-      <div class="reserved-note" id="note-donor">reserved — populated in M4</div>
-    </fieldset>
+    <details class="sec" id="sec-search" open>
+      <summary>search<span class="secn"></span></summary>
+      <div class="sec-body">
+        <label for="f-q">Search label / formula / L0</label>
+        <input type="text" id="f-q" placeholder="Cu paddlewheel, C4H6O9…">
+      </div>
+    </details>
 
-    <h2>energy · fidelity</h2>
-    <label for="f-fid">Best fidelity ≥</label>
-    <select id="f-fid"><option value="">any</option></select>
-    <label for="f-conv">Converged</label>
-    <select id="f-conv"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
-    <div class="row2">
-      <div><label for="f-emin">energy ≥</label><input type="number" id="f-emin" step="any"></div>
-      <div><label for="f-emax">energy ≤</label><input type="number" id="f-emax" step="any"></div>
-    </div>
+    <details class="sec" id="sec-comp" open>
+      <summary>composition · charge · spin<span class="secn"></span></summary>
+      <div class="sec-body">
+        <label>Metal</label>
+        <div class="chips" id="f-metals"></div>
+        <!-- Both bounds of a range on one bar: the pair of number boxes never showed what
+             the registry actually holds, so "charge ≥ 4" looked reasonable right up until
+             it returned nothing.  The bar is built from /api/filters, so its ends ARE the
+             extremes of the open registry and a full-width bar means no filter. -->
+        <div class="range" id="f-nmetals"></div>
+        <div class="range" id="f-charge"></div>
+        <label for="f-mult">Multiplicity</label>
+        <select id="f-mult"><option value="">any</option></select>
+      </div>
+    </details>
 
-    <h2>provenance</h2>
-    <label for="f-route">Incoming routes</label>
-    <select id="f-route"><option value="">any</option><option value="true">has a route</option><option value="false">no route</option></select>
-    <fieldset id="fs-depth">
-      <label for="f-depth">Depth ≤</label>
-      <input type="number" id="f-depth">
-      <div class="reserved-note">reserved — populated in M8</div>
-    </fieldset>
-    <label for="f-tag">Tag</label>
-    <select id="f-tag"><option value="">any</option></select>
+    <details class="sec" id="sec-conn" open>
+      <summary>connectivity · binding mode<span class="secn"></span></summary>
+      <div class="sec-body">
+        <label>Max bridge class</label>
+        <div class="chips" id="f-bridge"></div>
+        <label for="f-mm">Metal–metal contact</label>
+        <select id="f-mm"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
+        <fieldset id="fs-donor">
+          <label>Donor type</label>
+          <!-- Each chip carries the group it names, drawn as a skeletal sketch with the
+               metal on its donor atom.  The names are the perception vocabulary
+               (sites/frames.py), and "enol_O" versus "enolate_O" is a difference you can
+               see in one glance at two pictures and not in two words. -->
+          <div class="chips donors" id="f-donor"></div>
+          <label for="f-open">Open sites ≥</label>
+          <input type="number" id="f-open">
+          <div class="reserved-note" id="note-donor">reserved — populated in M4;
+            the sketches above are the vocabulary it will offer</div>
+        </fieldset>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-energy" open>
+      <summary>energy · fidelity<span class="secn"></span></summary>
+      <div class="sec-body">
+        <label for="f-fid">Best fidelity ≥</label>
+        <select id="f-fid"><option value="">any</option></select>
+        <label for="f-conv">Converged</label>
+        <select id="f-conv"><option value="">any</option><option value="true">yes</option><option value="false">no</option></select>
+        <div class="range" id="f-energy"></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-prov" open>
+      <summary>provenance<span class="secn"></span></summary>
+      <div class="sec-body">
+        <label for="f-route">Incoming routes</label>
+        <select id="f-route"><option value="">any</option><option value="true">has a route</option><option value="false">no route</option></select>
+        <fieldset id="fs-depth">
+          <label for="f-depth">Depth ≤</label>
+          <input type="number" id="f-depth">
+          <div class="reserved-note">reserved — populated in M8</div>
+        </fieldset>
+        <label for="f-tag">Tag</label>
+        <select id="f-tag"><option value="">any</option></select>
+      </div>
+    </details>
 
     <!-- Hiding is this project's delete (see registry/api.set_hidden). The switch to
          see what you hid is part of the feature, not an advanced option: a delete you
@@ -147,23 +260,31 @@ dd{margin:0;overflow-wrap:anywhere}
   </aside>
 
   <!-- ── results ───────────────────────────────────────────────── -->
+  <!-- The paging controls used to scroll away with the rows, which left the sticky
+       header the only fixed thing on a long page: you could see WHICH columns you were
+       reading but had to scroll back up to find out which page they were on, or to leave
+       it.  So the scroll container is the table wrapper, not the pane, and the toolbar
+       is a sibling of it rather than the first thing inside it. -->
   <main id="results" class="pane">
-    <div class="toolbar">
-      <strong id="count">…</strong>
+    <div class="toolbar" id="results-bar">
+      <strong id="page-of">…</strong>
+      <span class="muted" id="count"></span>
       <span class="spacer"></span>
       <span class="kbhint" id="kbhint" title="click the table (or Tab to it) first">
-        ↑↓ move · PgUp/PgDn · Home/End</span>
+        ↑↓ row · PgUp/PgDn page · Home/End</span>
       <label for="f-limit" style="margin:0">page size</label>
       <select id="f-limit" style="width:auto">
         <option>25</option><option selected>50</option><option>100</option><option>250</option>
       </select>
       <button id="prev">‹ prev</button><button id="next">next ›</button>
     </div>
-    <table id="table" tabindex="0" aria-label="structures">
-      <thead><tr id="head"></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <div id="empty" class="empty" hidden>No structures match these filters.</div>
+    <div id="table-wrap">
+      <table id="table" tabindex="0" aria-label="structures">
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>No structures match these filters.</div>
+    </div>
   </main>
 
   <!-- ── detail + 3D ───────────────────────────────────────────── -->
@@ -244,6 +365,252 @@ const labelOf = (r) => r.display_label && r.display_label.trim()
 const metalsOf = (r) => (r.metals||"").split(",").filter(Boolean).join(" ") || "—";
 const short = (h) => h ? h.slice(0,10) + "…" : "—";
 
+/* ── donor-type sketches ──────────────────────────────────────
+   "enol" and "enolate" are one letter apart and are not the same ligand; "sulfinate"
+   and "sulfonate" differ by one oxygen.  A name cannot show that and a picture can, so
+   each chip carries the group it names, drawn flat with the metal on its donor atom.
+
+   The drawings are DATA, not 30 hand-written SVGs: every glyph is atoms + bonds in a
+   58×30 box, and one renderer turns that into lines.  Adding a donor type M4 introduces
+   is then a row in a table, and anything missing from the table still draws — the
+   fallback reads the element off the name's suffix, which is the one thing the naming
+   convention guarantees (sites/perception.py).  Carbon is a bare vertex, as in any
+   skeletal formula; "d" is the dative bond to the metal. */
+const MET = [4,15];                                   // the metal, same place in every box
+function ring(cx, cy, r, n){                         // n-gon, first vertex leftmost
+  const out = [];
+  for(let i=0;i<n;i++){ const a = Math.PI + i*2*Math.PI/n;
+    out.push([+(cx + r*Math.cos(a)).toFixed(1), +(cy + r*Math.sin(a)).toFixed(1)]); }
+  return out;
+}
+function aromatic(cx, cy, r, n, sym, extra){
+  const v = ring(cx, cy, r, n);
+  const atoms = [["M", 9, cy], [sym, ...v[0]], ...v.slice(1).map(p => ["", ...p])];
+  const bonds = [[0,1,"d"]];
+  for(let i=0;i<n;i++) bonds.push([1+i, 1+(i+1)%n]);  // ring, closed
+  return Object.assign({atoms, bonds, arom:[cx, cy, r*0.44]}, extra||{});
+}
+const DONORS = {
+  aqua_O:        {atoms:[["M",...MET],["O",17,15],["H",27,7],["H",27,23]],
+                  bonds:[[0,1,"d"],[1,2],[1,3]]},
+  hydroxide_O:   {atoms:[["M",...MET],["O",17,15],["H",29,15]],
+                  bonds:[[0,1,"d"],[1,2]], charge:[1,"−",0,-7]},
+  alkoxide_O:    {atoms:[["M",...MET],["O",17,15],["",28,9],["",39,15]],
+                  bonds:[[0,1,"d"],[1,2],[2,3]], charge:[1,"−",-4,-6]},
+  ether_O:       {atoms:[["M",...MET],["O",16,15],["",26,8],["",37,4],["",26,22],["",37,26]],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[1,4],[4,5]]},
+  carbonyl_O:    {atoms:[["M",...MET],["O",17,15],["",29,15],["",39,8],["",39,22]],
+                  bonds:[[0,1,"d"],[1,2,2],[2,3],[2,4]]},
+  enol_O:        {atoms:[["M",...MET],["O",16,15],["H",13,5],["",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2],[1,3],[3,4,2]]},
+  enolate_O:     {atoms:[["M",...MET],["O",16,15],["",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2]], charge:[1,"−"]},
+  carboxylate_O: {atoms:[["M",4,24],["O",14,24],["",25,18],["O",25,6],["",36,24]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4]], charge:[1,"−",0,-7]},
+  nitro_O:       {atoms:[["M",4,23],["O",14,23],["N",25,17],["O",36,23],["",25,6]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4]], charge:[1,"−",0,-7]},
+  sulfonate_O:   {atoms:[["M",4,24],["O",13,24],["S",25,18],["O",36,24],["O",25,6],["",37,13]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4,2],[2,5]], charge:[1,"−",0,-7]},
+  sulfinate_O:   {atoms:[["M",4,23],["O",13,23],["S",25,17],["O",36,23],["",25,6]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4]], charge:[1,"−",0,-7]},
+  phosphonate_O: {atoms:[["M",4,24],["O",13,24],["P",25,18],["O",36,24],["O",25,6],["",37,13]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4],[2,5]], charge:[1,"−",0,-7]},
+  boronate_O:    {atoms:[["M",4,23],["O",13,23],["B",25,17],["O",36,23],["",25,6]],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[2,4]], charge:[1,"−",0,-7]},
+  oxime_O:       {atoms:[["M",...MET],["O",16,15],["N",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2]], charge:[1,"−"]},
+  peroxy_O:      {atoms:[["M",...MET],["O",16,15],["O",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2],[2,3]], charge:[1,"−"]},
+  hydroxamate_O: {atoms:[["M",4,12],["O",15,12],["N",26,18],["",37,12],["O",47,18]],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[3,4,2]], charge:[1,"−"]},
+  nhydroxy_O:    {atoms:[["M",...MET],["O",16,15],["N",27,21],["",38,15],["",38,26]],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[2,4]], charge:[1,"−"]},
+  amine_N:       {atoms:[["M",...MET],["N",16,15],["H",24,5],["",28,21],["",39,15]],
+                  bonds:[[0,1,"d"],[1,2],[1,3],[3,4]]},
+  imine_N:       {atoms:[["M",...MET],["N",16,15],["",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2,2],[2,3]]},
+  nitrile_N:     {atoms:[["M",...MET],["N",17,15],["",29,15],["",40,15]],
+                  bonds:[[0,1,"d"],[1,2,3],[2,3]]},
+  amide_N:       {atoms:[["M",4,13],["N",16,13],["",27,19],["O",38,13],["",27,4]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[1,4]], charge:[1,"−",-4,-6]},
+  sulfonamide_N: {atoms:[["M",4,12],["N",15,12],["S",26,17],["O",37,12],["O",26,26],["",15,3]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2],[2,4,2],[1,5]], charge:[1,"−",-5.5,-1]},
+  thiolate_S:    {atoms:[["M",...MET],["S",16,15],["",27,21],["",38,15]],
+                  bonds:[[0,1,"d"],[1,2],[2,3]], charge:[1,"−"]},
+  thioether_S:   {atoms:[["M",...MET],["S",16,15],["",26,8],["",37,4],["",26,22],["",37,26]],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[1,4],[4,5]]},
+  thiophosphate_S:{atoms:[["M",...MET],["S",16,15],["P",27,20],["O",38,14]],
+                  bonds:[[0,1,"d"],[1,2],[2,3,2]], charge:[1,"−"]},
+  phosphine_P:   {atoms:[["M",...MET],["P",16,15],["",27,7],["",27,23],["",16,27]],
+                  bonds:[[0,1,"d"],[1,2],[1,3],[1,4]]},
+  pyridyl_N:     aromatic(31, 15, 9, 6, "N"),
+  phenolate_O:   {atoms:[["M",...MET],["O",15,15],...ring(37,15,8.5,6).map(p=>["",...p])],
+                  bonds:[[0,1,"d"],[1,2],[2,3],[3,4],[4,5],[5,6],[6,7],[7,2]],
+                  arom:[37,15,4.2], charge:[1,"−"]},
+  azolate_N:     aromatic(30, 15, 9, 5, "N", {charge:[1,"−"]}),
+};
+/* A type the table does not know still has to draw something true.  The suffix is the
+   donor ELEMENT by construction, so "M⋯X–R" is exactly as much as is actually known. */
+function donorFallback(sym){
+  return {atoms:[["M",...MET],[sym||"X",17,15],["R",31,15]], bonds:[[0,1,"d"],[1,2]]};
+}
+function donorSvg(spec){
+  const {atoms, bonds} = spec, parts = [];
+  if(spec.arom) parts.push(`<circle cx="${spec.arom[0]}" cy="${spec.arom[1]}" `
+    + `r="${spec.arom[2]}" class="bond" opacity=".45"/>`);
+  for(const [i, j, kind] of bonds){
+    const [li,x1,y1] = atoms[i], [lj,x2,y2] = atoms[j];
+    // Trim each end back to clear the atom's label; a bare carbon vertex has none, so
+    // the line runs all the way in and the two segments meet as a corner.
+    const dx = x2-x1, dy = y2-y1, len = Math.hypot(dx,dy) || 1;
+    const ux = dx/len, uy = dy/len, ri = li?4.2:0, rj = lj?4.2:0;
+    const ax = x1+ux*ri, ay = y1+uy*ri, bx = x2-ux*rj, by = y2-uy*rj;
+    const cls = kind === "d" ? "dative" : "bond";
+    const offs = kind === 2 ? [-1.4,1.4] : kind === 3 ? [-2,0,2] : [0];
+    for(const o of offs)
+      parts.push(`<line x1="${(ax-uy*o).toFixed(1)}" y1="${(ay+ux*o).toFixed(1)}" `
+        + `x2="${(bx-uy*o).toFixed(1)}" y2="${(by+ux*o).toFixed(1)}" class="${cls}"/>`);
+  }
+  for(const [label, x, y] of atoms) if(label)
+    parts.push(`<text x="${x}" y="${y}"${label==="M"?' class="m"':""}>${label}</text>`);
+  if(spec.charge){
+    const [i, sign, dx, dy] = spec.charge, [, x, y] = atoms[i];
+    parts.push(`<text x="${x+(dx??5.5)}" y="${y+(dy??-5)}" class="chg">${sign}</text>`);
+  }
+  return `<svg viewBox="0 0 58 30" aria-hidden="true">${parts.join("")}</svg>`;
+}
+/* `aqua_O` → "aqua" + a dim "O".  The suffix is the donor atom and is worth keeping
+   visible: `carboxylate_O` and a hypothetical `carboxylate_S` are different filters. */
+function donorParts(type){
+  const m = /^(.*?)_([A-Z][a-z]?)$/.exec(type);
+  return m ? {stem:m[1].replace(/_/g," "), sym:m[2]} : {stem:type.replace(/_/g," "), sym:""};
+}
+function donorChip(el, type){
+  const {stem, sym} = donorParts(type);
+  el.classList.add("donor");
+  el.title = type;
+  el.innerHTML = `<span>${esc(stem)} <span class="dsym">${esc(sym)}</span></span>`
+    + donorSvg(DONORS[type] || donorFallback(sym));
+}
+
+/* ── collapsible sections ─────────────────────────────────────
+   Open/closed is remembered, because a sidebar that reopens everything on every reload
+   is not a collapsible sidebar.  The badge is the safeguard: a section you have closed
+   is still filtering, and the count says so from the outside. */
+const SEC_KEY = "mofsbu.viewer.sections";
+function sections(){ return [...document.querySelectorAll("#sidebar details.sec")]; }
+function restoreSections(){
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SEC_KEY) || "{}"); } catch(e){ saved = {}; }
+  for(const d of sections()){
+    if(d.id in saved) d.open = !!saved[d.id];
+    d.addEventListener("toggle", () => {
+      const now = {};
+      for(const s of sections()) now[s.id] = s.open;
+      try { localStorage.setItem(SEC_KEY, JSON.stringify(now)); } catch(e){ /* private mode */ }
+    });
+  }
+}
+function sectionCounts(){
+  for(const d of sections()){
+    const badge = d.querySelector("summary .secn");
+    if(!badge) continue;                       // the database picker is not a filter
+    let n = d.querySelectorAll(".chip.on").length + d.querySelectorAll(".range.active").length;
+    for(const el of d.querySelectorAll("select, input[type=text], input[type=number]"))
+      if(el.id !== "db-pick" && el.value.trim() !== "") n++;
+    badge.textContent = n || "";
+    badge.classList.toggle("on", n > 0);
+    badge.title = `${n} active filter${n===1?"":"s"} in this section`;
+  }
+}
+
+/* ── two-thumb range filters ──────────────────────────────────
+   A bound is sent only when it is INSIDE the registry's own extremes.  That is the
+   whole contract: a bar left alone is not a filter, so switching registries or
+   resetting cannot leave a silent `charge_min` on the query.  "Inside" is decided with
+   a half-step tolerance rather than equality because a range input snaps its value to
+   the step grid, and on a float axis (energy) the top of that grid is not exactly the
+   maximum — comparing with `===` there would make the bar impossible to fully open. */
+function dualRange(hostId, opts){
+  const host = $(hostId);
+  host.innerHTML =
+    `<div class="range-head"><span>${opts.label}</span><span class="range-val"></span></div>`
+    + `<div class="range-slider"><div class="range-track"></div><div class="range-fill"></div>`
+    + `<input type="range" class="lo" aria-label="${opts.label}, lower bound">`
+    + `<input type="range" class="hi" aria-label="${opts.label}, upper bound"></div>`
+    + `<div class="range-note"></div>`;
+  const lo   = host.querySelector(".lo"),  hi   = host.querySelector(".hi"),
+        fill = host.querySelector(".range-fill"), out = host.querySelector(".range-val"),
+        note = host.querySelector(".range-note");
+  const fmt = opts.fmt || (v => String(v));
+  let dom = null;                       // {min,max,step} of the open registry, or null
+
+  const atMin = v => !dom || v <= dom.min + dom.step/2;
+  const atMax = v => !dom || v >= dom.max - dom.step/2;
+
+  function paint(){
+    if(!dom){ out.textContent = "—"; fill.style.width = "0"; return; }
+    const a = Number(lo.value), b = Number(hi.value), span = (dom.max - dom.min) || 1;
+    fill.style.left  = ((a - dom.min) / span * 100) + "%";
+    fill.style.width = Math.max(0, (b - a) / span * 100) + "%";
+    const full = atMin(a) && atMax(b);
+    out.textContent = full ? "any" : `${fmt(a)} – ${fmt(b)}`;
+    out.classList.toggle("full", full);
+    host.classList.toggle("active", !full);   // read back by the section badges
+  }
+  // The thumbs push each other rather than refusing to move: dragging the lower one
+  // past the upper is a request for a one-value window, not a mistake to be blocked.
+  function pushed(from){
+    const a = Number(lo.value), b = Number(hi.value);
+    if(a > b){ if(from === "lo") hi.value = lo.value; else lo.value = hi.value; }
+  }
+  // With pointer events off on the inputs, the track between the thumbs is dead unless
+  // this is here: a click on it sends the NEARER bound to where you clicked, which is
+  // how a single-thumb range behaves and the only way to cross the bar in one gesture.
+  host.querySelector(".range-slider").addEventListener("pointerdown", (e) => {
+    if(!dom || e.target === lo || e.target === hi) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const at = dom.min + (dom.max - dom.min) * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const el = Math.abs(at - Number(lo.value)) <= Math.abs(at - Number(hi.value)) ? lo : hi;
+    el.value = String(at); el.focus(); paint(); opts.onChange();
+  });
+  for(const [el, side] of [[lo,"lo"],[hi,"hi"]]){
+    el.addEventListener("input",  () => { pushed(side); paint(); });
+    el.addEventListener("change", () => { pushed(side); paint(); opts.onChange(); });
+  }
+
+  function setDomain(d){
+    const ok = d && d.min !== null && d.min !== undefined
+                 && d.max !== null && d.max !== undefined;
+    if(!ok || d.max < d.min){
+      dom = null; host.classList.add("off");
+      note.textContent = opts.emptyNote || "nothing recorded to filter on";
+      paint(); return;
+    }
+    if(d.max === d.min){
+      // One distinct value is not a range.  Showing a dead bar would invite dragging
+      // something that cannot move, so say the value instead.
+      dom = null; host.classList.add("off");
+      note.textContent = `every entry is ${fmt(d.min)}`;
+      paint(); return;
+    }
+    host.classList.remove("off"); note.textContent = "";
+    const step = opts.step || (d.max - d.min) / 200;
+    dom = {min: d.min, max: d.max, step};
+    for(const el of [lo, hi]){ el.min = d.min; el.max = d.max; el.step = step; el.disabled = false; }
+    lo.value = d.min; hi.value = d.max;
+    paint();
+  }
+  function reset(){ if(dom){ lo.value = dom.min; hi.value = dom.max; } paint(); }
+  function get(){
+    if(!dom) return {min:null, max:null};
+    const a = Number(lo.value), b = Number(hi.value);
+    return {min: atMin(a) ? null : a, max: atMax(b) ? null : b};
+  }
+  return {setDomain, reset, get};
+}
+const ranges = {};
+
 /* ── query construction ──────────────────────────────────────── */
 function chipValues(id){ return [...$(id).querySelectorAll(".chip.on")].map(c=>c.dataset.v); }
 function val(id){ const v=$(id).value.trim(); return v===""?null:v; }
@@ -252,15 +619,16 @@ function params(){
   const put = (k,v) => { if(v!==null && v!==undefined && v!=="") p.append(k,v); };
   put("q", val("f-q"));
   chipValues("f-metals").forEach(m=>p.append("metal",m));
-  put("n_metals_min", val("f-nmin")); put("n_metals_max", val("f-nmax"));
-  put("charge_min", val("f-qmin"));   put("charge_max", val("f-qmax"));
+  const nm = ranges.nmetals.get(), qq = ranges.charge.get(), ee = ranges.energy.get();
+  put("n_metals_min", nm.min);        put("n_metals_max", nm.max);
+  put("charge_min", qq.min);          put("charge_max", qq.max);
   put("multiplicity", val("f-mult"));
   chipValues("f-bridge").forEach(b=>p.append("max_bridge_class",b));
   put("has_metal_metal", val("f-mm"));
   chipValues("f-donor").forEach(d=>p.append("donor_type",d));
   put("n_open_sites_min", val("f-open"));
   put("fidelity_min", val("f-fid"));  put("converged", val("f-conv"));
-  put("energy_min", val("f-emin"));   put("energy_max", val("f-emax"));
+  put("energy_min", ee.min);          put("energy_max", ee.max);
   put("has_route", val("f-route"));   put("depth_max", val("f-depth"));
   put("tag", val("f-tag"));
   if(state.includeHidden) p.set("include_hidden", "1");
@@ -291,9 +659,17 @@ async function load(){
   state.total = data.total;
   state.pageIds = data.rows.map(r=>r.id);
   state.nHidden = data.n_hidden || 0;
+  // Two different questions, so two readings: which page of how many (where am I, how
+  // much further is there) and which rows of how many (what is actually on screen).
+  // The row range alone left "of 125" to be divided by the page size in your head.
+  const pages = Math.max(1, Math.ceil(data.total / state.limit));
+  const page  = Math.floor(state.offset / state.limit) + 1;
   const from = data.total ? state.offset+1 : 0;
-  $("count").textContent = `${from}–${Math.min(state.offset+data.rows.length, data.total)} of ${data.total}`
+  $("page-of").textContent = data.total ? `page ${page} of ${pages}` : "no results";
+  $("count").textContent = (data.total
+      ? `· ${from}–${Math.min(state.offset+data.rows.length, data.total)} of ${data.total}` : "")
     + (state.nHidden ? (state.includeHidden ? ` · ${state.nHidden} hidden shown` : ` · ${state.nHidden} hidden`) : "");
+  sectionCounts();
   $("prev").disabled = state.offset<=0;
   $("next").disabled = state.offset + state.limit >= data.total;
   const tb = $("rows"); tb.innerHTML="";
@@ -334,9 +710,9 @@ async function load(){
       selection moves, which is worse than either.
    2. The handler ignores anything originating in a form control, or typing "d" in the
       search box would jump the selection while you were still spelling a formula.
-   3. Movement is within the current page only.  Arrowing off the end does not silently
-      fetch the next page: pagination is a separate action with its own control, and a
-      key that sometimes triggers a query and sometimes does not is not predictable. */
+   3. The arrows move within the current page only.  Arrowing off the end does not
+      silently fetch the next page — that is what PgUp/PgDn are for, and those two keys
+      ALWAYS page, so each key means exactly one thing. */
 function isTyping(e){
   const t = e.target;
   return t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA"
@@ -360,16 +736,25 @@ function scrollSelectedIntoView(){
   // jump the table on every press even when the row was already perfectly visible.
   if(tr) tr.scrollIntoView({block:"nearest"});
 }
+/* PgUp/PgDn are the prev/next buttons, reached from the keyboard.  Landing on a row —
+   first going forward, last going back — is the point: paging without it would leave the
+   detail pane showing a structure that is no longer on screen, and the next ArrowDown
+   would jump back to the top of the page instead of continuing from where you were. */
+async function flipPage(dir){
+  const next = state.offset + dir * state.limit;
+  if(next < 0 || next >= state.total){ toast(dir > 0 ? "last page" : "first page"); return; }
+  state.offset = next;
+  await load();
+  if(state.pageIds.length)
+    select(state.pageIds[dir > 0 ? 0 : state.pageIds.length - 1]);
+}
 function onKey(e){
   if(isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
-  const page = Math.max(1, Math.floor($("results").clientHeight / 27) - 1);
   const moves = {
     ArrowDown: () => moveSelection(1),
     ArrowUp:   () => moveSelection(-1),
-    // A screenful, NOT a page of results: paginating is what prev/next do, and binding
-    // PageDown to it would make two different actions share one key.
-    PageDown:  () => moveSelection(page),
-    PageUp:    () => moveSelection(-page),
+    PageDown:  () => flipPage(1),
+    PageUp:    () => flipPage(-1),
     Home:      () => moveSelection(0, "first"),
     End:       () => moveSelection(0, "last"),
   };
@@ -635,11 +1020,12 @@ async function showGeometry(gid){
 }
 
 /* ── boot ────────────────────────────────────────────────────── */
-function chips(host, values, onChange){
+function chips(host, values, onChange, render){
   const el = $(host); el.innerHTML = "";
   for(const v of values){
     const c = document.createElement("span");
-    c.className = "chip"; c.dataset.v = v; c.textContent = v;
+    c.className = "chip"; c.dataset.v = v;
+    if(render) render(c, v); else c.textContent = v;
     c.onclick = () => { c.classList.toggle("on"); onChange(); };
     el.appendChild(c);
   }
@@ -647,42 +1033,105 @@ function chips(host, values, onChange){
 }
 function debounce(fn, ms){ let h; return (...a)=>{ clearTimeout(h); h=setTimeout(()=>fn(...a),ms); }; }
 
-async function boot(){
+const rerun = () => { state.offset = 0; load(); };
+
+/* The options below describe the registry that is open, so they are REBUILT rather
+   than appended to: `loadFilters` runs again after a database switch.  Option 0 is
+   the page's own "any" and stays; a selection survives if the new registry still
+   offers it. */
+function fillSelect(id, pairs){
+  const el = $(id), keep = el.value;
+  el.length = 1;
+  for(const [v, t] of pairs) el.add(new Option(t, v));
+  el.value = [...el.options].some(o => o.value === keep) ? keep : "";
+}
+
+async function loadFilters(){
   const f = await (await fetch("/api/filters")).json();
   state.filters = f;
-  const meta = await (await fetch("/api/meta")).json();
-  $("meta").textContent = `read-only · ${f.n_structures} structures · ${meta.db.split(/[\\/]/).pop()}`;
+  $("meta").textContent = `read-only · ${f.n_structures} structures`;
 
-  const rerun = () => { state.offset = 0; load(); };
   chips("f-metals", f.metals, rerun);
   chips("f-bridge", f.bridge_classes, rerun);
-  chips("f-donor",  f.donor_types, rerun);
-  for(const m of f.multiplicities) $("f-mult").add(new Option(String(m), String(m)));
-  for(const t of f.tags) $("f-tag").add(new Option(t, t));
-  for(const x of f.fidelities) $("f-fid").add(new Option(`${x} and above`, String(x)));
-  if(f.charge){ $("f-qmin").placeholder = f.charge.min; $("f-qmax").placeholder = f.charge.max; }
-  if(f.energy && f.energy.min!==null){
-    $("f-emin").placeholder = Number(f.energy.min).toFixed(1);
-    $("f-emax").placeholder = Number(f.energy.max).toFixed(1);
-  }
-  $("f-nmin").placeholder = f.n_metals.min; $("f-nmax").placeholder = f.n_metals.max;
+  // `donor_types` is a reserved column, so until M4 fills it the registry reports none
+  // and there is nothing to select.  Drawing the vocabulary anyway — dimmed, inert, and
+  // under the "reserved" note — shows what the axis will offer without pretending it is
+  // live: a click would build `donor_types LIKE …` against an empty column and return
+  // nothing, which looks like a bug rather than a milestone that has not landed.
+  const preview = !f.donor_types.length;
+  chips("f-donor", preview ? Object.keys(DONORS) : f.donor_types, rerun, donorChip);
+  $("f-donor").classList.toggle("preview", preview);
+  if(preview) for(const c of $("f-donor").children) c.onclick = null;
+  fillSelect("f-mult", f.multiplicities.map(m => [String(m), String(m)]));
+  fillSelect("f-tag",  f.tags.map(t => [t, t]));
+  fillSelect("f-fid",  f.fidelities.map(x => [String(x), `${x} and above`]));
+  // The bars describe the open registry, so a switch re-domains them — and re-domaining
+  // opens them fully, which is the same rule as the selects above: a bound that the new
+  // file cannot honour is dropped rather than carried across.
+  ranges.nmetals.setDomain(f.n_metals);
+  ranges.charge.setDomain(f.charge);
+  ranges.energy.setDomain(f.energy);
 
   // Reserved columns: keep the control visible but disabled, so the sidebar does not
   // change shape when M4/M8 fill them in.
   const inactive = new Set((f.reserved_inactive||[]).map(r=>r.column));
-  if(inactive.has("donor_types") && inactive.has("n_open_sites")) $("fs-donor").disabled = true;
-  if(inactive.has("depth")) $("fs-depth").disabled = true;
+  $("fs-donor").disabled = inactive.has("donor_types") && inactive.has("n_open_sites");
+  $("fs-depth").disabled = inactive.has("depth");
+}
+
+/* A structure id means nothing in the registry next door, so a switch drops the
+   selection rather than carrying it across and rendering the wrong molecule. */
+function clearSelection(){
+  state.selected = null; state.detail = null; state.geomId = null;
+  state.xyzCache.clear();
+  $("detail-body").hidden = true; $("detail-empty").hidden = false;
+}
+
+async function boot(){
+  restoreSections();
+  // Built before the first /api/filters call so `params()` can always ask them for a
+  // value; until a domain arrives they answer "no bound", which is the truth.
+  const int = v => String(Math.round(Number(v)));
+  ranges.nmetals = dualRange("f-nmetals", {label:"n metals", step:1, fmt:int, onChange:rerun,
+    emptyNote:"no metal counts recorded"});
+  ranges.charge  = dualRange("f-charge",  {label:"charge", step:1, onChange:rerun,
+    fmt:v => (Number(v) > 0 ? "+" : "") + int(v), emptyNote:"no charges recorded"});
+  ranges.energy  = dualRange("f-energy",  {label:"energy", onChange:rerun,
+    fmt:v => Number(v).toFixed(2), emptyNote:"no energies recorded yet"});
+
+  await loadFilters();
+  await mofsbuDb.mount({
+    select: $("db-pick"), note: $("db-note"),
+    noteText: (active) => `in ${active.folder || "—"} · read-only here; the builder`
+      + ` writes to the same file`,
+    onSwitch: async () => {
+      clearSelection();
+      state.offset = 0;
+      await loadFilters();
+      await load();
+      toast("switched registry");
+    },
+    onError: (e) => toast(`switch refused: ${e.message}`),
+  });
 
   $("f-q").oninput = debounce(rerun, 220);
-  for(const id of ["f-nmin","f-nmax","f-qmin","f-qmax","f-mult","f-mm","f-open","f-fid",
-                   "f-conv","f-emin","f-emax","f-route","f-depth","f-tag"])
+  for(const id of ["f-mult","f-mm","f-open","f-fid",
+                   "f-conv","f-route","f-depth","f-tag"])
     $(id).onchange = rerun;
   $("f-limit").onchange = () => { state.limit = Number($("f-limit").value); rerun(); };
-  $("prev").onclick = () => { state.offset = Math.max(0, state.offset-state.limit); load(); };
-  $("next").onclick = () => { state.offset += state.limit; load(); };
+  $("prev").onclick = () => flipPage(-1);
+  $("next").onclick = () => flipPage(1);
+  $("prev").title = "previous page (PgUp)";
+  $("next").title = "next page (PgDn)";
   $("reset").onclick = () => {
-    $("sidebar").querySelectorAll("input").forEach(i=>i.value="");
-    $("sidebar").querySelectorAll("select").forEach(s=>{ if(s.id!=="f-limit") s.value=""; });
+    // The database is not a filter: resetting the sidebar must not blank the one
+    // control on it that says which registry you are looking at.
+    // A range has no blank state — emptying its value would read back as its minimum
+    // and quietly pin the lower bound — so it is reopened to the full registry instead.
+    $("sidebar").querySelectorAll("input").forEach(i=>{ if(i.type!=="range") i.value=""; });
+    for(const r of Object.values(ranges)) r.reset();
+    $("sidebar").querySelectorAll("select").forEach(s=>{
+      if(s.id!=="f-limit" && s.id!=="db-pick") s.value=""; });
     $("sidebar").querySelectorAll(".chip.on").forEach(c=>c.classList.remove("on"));
     rerun();
   };

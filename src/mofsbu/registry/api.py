@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
+from mofsbu.assembly.choice import ChoiceVector
 from mofsbu.graph import BridgeClass, EdgeType, TypedGraph, canonical_order, certificate_digest
 from mofsbu.identity import block_id, hill_formula, l0_composition, l2_isomer_tag, wl_index
 from mofsbu.naming import compose_label, decompose
@@ -307,10 +308,17 @@ def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
 
     This is what makes a delete refusable with a reason rather than with a warning: the
     caller can show the other routes that would be severed.
+
+    `choice_vector_digest` and `atom_map_json` are in the projection because without them
+    two routes to one node come back looking identical apart from their id and note — and
+    "these are the same product reached two ways" is a claim a reader should be able to
+    check rather than take on trust. They are what makes the edges distinguishable, which
+    is the half of D2 that lives off the node.
     """
     out = []
     for row in reg.conn.execute(
-            "SELECT id, kind, intermediate, depth, note, created_at FROM reactions "
+            "SELECT id, kind, intermediate, depth, note, created_at, "
+            " choice_vector_digest, atom_map_json FROM reactions "
             "WHERE product_structure_id = ? ORDER BY id", (structure_id,)):
         item = dict(row)
         item["reagent_ids"] = [r[0] for r in reg.conn.execute(
@@ -354,7 +362,7 @@ def put_geometry(
     energy: float | None = None,
     converged: bool | None = None,
     relaxed_from: int | None = None,
-    choice_vector: dict | None = None,
+    choice_vector: ChoiceVector | dict | None = None,
     seed: int | None = None,
     qc: dict | None = None,
 ) -> Put:
@@ -362,7 +370,19 @@ def put_geometry(
 
     Fidelity is a property of the geometry, never of the structure (D4), so one
     identity can carry a raw construct, an xTB relaxation and a DFT relaxation at once.
+
+    The choice vector is DIGESTED here rather than read out of the dict.  This used to be
+    `(choice_vector or {}).get("digest")` and nothing in the tree has ever written that
+    key, so `choice_vector_digest` was NULL on all 191 stored geometries — 99 of which
+    carried a perfectly good vector in `choice_vector_json` — and `ix_geometries_choice`
+    indexed nothing.  Reading a key the producer may or may not have set is the wrong
+    shape for this: the digest is a property OF the vector, so the writer computes it and
+    no producer can forget to.  `seed` falls back to the one inside the vector (the
+    placer puts it there) because a stored geometry without its seed is not regenerable.
     """
+    cv = ChoiceVector.coerce(choice_vector)
+    if seed is None and cv is not None:
+        seed = cv.seed
     if fidelity is Fidelity.HEURISTIC:
         # HEURISTIC means "a table said so, nothing was computed about THIS structure".
         # There is no such thing as a geometry produced that way, and letting one in
@@ -399,8 +419,8 @@ def put_geometry(
             " qc_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
-         (choice_vector or {}).get("digest"),
-         json.dumps(choice_vector) if choice_vector else None,
+         cv.digest if cv is not None else None,
+         cv.to_json() if cv is not None else None,
              seed, json.dumps(qc) if qc else None, utcnow()),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
@@ -451,6 +471,53 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
             (row["id"], row["fidelity"], structure_id))
 
 
+def geometries_from_choice(reg: Registry, choice: ChoiceVector | dict | str,
+                           ) -> list[sqlite3.Row]:
+    """Every geometry built from one choice vector — the query the index exists for.
+
+    Returns a family, not a row, and that is the point (D11): one choice vector sampled
+    at several seeds is one L3 branch with stochastic duplicates in it, and collapsing
+    those duplicates is exactly what geometric clustering is for.  A digest string is
+    accepted so a caller holding a stored row can ask the question without rebuilding
+    the vector.
+    """
+    d = choice if isinstance(choice, str) else ChoiceVector.coerce(choice).digest
+    return list(reg.conn.execute(
+        "SELECT * FROM geometries WHERE choice_vector_digest = ? ORDER BY id", (d,)))
+
+
+def backfill_choice_digests(reg: Registry, *, dry_run: bool = False) -> int:
+    """Give stored geometries the digest their vector always implied.  Returns the count.
+
+    Strictly additive: it touches only rows where the digest is NULL and the vector is
+    present, and it does not rewrite `choice_vector_json` — a digest is a pure function
+    of the vector, so the stored text does not need to be canonicalised for the two to
+    agree.  Rows written before anything recorded a vector at all stay untouched, because
+    there is nothing to derive a key from and inventing one would be provenance fiction.
+
+    Not called by `migrate`.  Nothing about the schema is wrong, so this is a data
+    decision — M5/S0(b) — and it belongs to whoever owns the database.
+    """
+    rows = reg.conn.execute(
+        "SELECT id, choice_vector_json FROM geometries "
+        "WHERE choice_vector_digest IS NULL AND choice_vector_json IS NOT NULL").fetchall()
+    n = 0
+    for row in rows:
+        try:
+            cv = ChoiceVector.from_json(row["choice_vector_json"])
+        except (ValueError, MofsbuError):
+            continue        # a vector that cannot be parsed is reported by neither a
+            # crash nor a guess: it keeps its NULL and stays visibly un-keyed.
+        if not dry_run:
+            reg.conn.execute(
+                "UPDATE geometries SET choice_vector_digest=?, seed=COALESCE(seed, ?) "
+                "WHERE id=?", (cv.digest, cv.seed, row["id"]))
+        n += 1
+    if not dry_run:
+        reg.conn.commit()
+    return n
+
+
 # ── sites (M4) ───────────────────────────────────────────────────────────────
 
 def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None = None,
@@ -485,7 +552,17 @@ def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None
     algo = algo or f"perception/{ALGO_VERSIONS['perception']}"
     cmap = canonical_map(reg, structure_id)
     existing = get_sites(reg, structure_id)
-    stale = bool(existing) and any(r["algo_perception"] != algo for r in existing)
+    # Stale means OLDER, which is a comparison within one recipe — `perception/1` against
+    # `perception/2`.  A catalog from a different recipe entirely (`inherited/…`, written
+    # when an assembly step carried sites through an atom map) is not an out-of-date
+    # answer to this question, and treating it as one made the two paths take turns
+    # deleting each other's catalog, and each geometry's state with it.  D5's rule
+    # decides that case instead: the first catalog stands, and `catalog_drift` reports a
+    # disagreement rather than repairing it.
+    family = algo.split("/", 1)[0]
+    stale = bool(existing) and any(
+        r["algo_perception"] != algo and str(r["algo_perception"]).split("/", 1)[0] == family
+        for r in existing)
     if existing and not reperceive and not stale:
         return len(existing)
     reg.conn.execute("DELETE FROM site_catalog WHERE structure_id=?", (structure_id,))

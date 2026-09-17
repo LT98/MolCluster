@@ -328,6 +328,15 @@ Each **edge** is a `Reaction` (reagents, product, ΔG, optional barrier proxy, c
 atom_map); each **node** is a registry structure, so intermediates are first-class, storable,
 reusable, and their stored open sites say what can add next.
 
+**What writes those edges today.** A run with `spec.pathways` set plans, for every product it
+was asked for, the rung one ligand below it — the coordinatively unsaturated intermediate, not
+the co-ligand-filled complex, because only the former is reachable *by addition* — and performs
+the step with `assembly.join`. So a ligand-count sweep (`ligands_per_metal: "1~3"`) comes back
+as a chain of stored intermediates with real edges between them, which is Path B's shape for a
+mononuclear centre. Under D2 the step usually lands on the identity the direct construction
+already built: one node, two routes, and the second route is the one that says where it came
+from. Nothing here scores anything — the scoring below is still M8.
+
 **Pathway viability** = a function over the edge set:
 
 - rate-limiting step (max barrier / least-favorable ΔG),

@@ -11,10 +11,11 @@ will not spawn anything on an unconfigured laptop.
 from __future__ import annotations
 
 import itertools
+import json
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from mofsbu.config import compute_device, device_note, max_workers, parallel_enabled
 from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
@@ -102,50 +103,107 @@ def _compositions(kinds: list[dict[str, Any]], total: int,
     return out
 
 
-def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
-    """Create the run and its tasks.  Returns (run_id, n_tasks)."""
-    if spec.degree > 1:
-        from mofsbu.assembly.join import grow
+#: Ceiling on the intermediates `pathways` adds.  Same kind of guard rail as
+#: `MAX_COMPOSITIONS`: the ladder of a homoleptic sweep is short, the sub-multiset lattice
+#: of a mixed one is not, and hitting the ceiling is reported through the diagnostics
+#: rather than silently truncating the chain.
+MAX_PATHWAY_TASKS = 2000
 
-        grow(None, (), degree=spec.degree)      # raises NotBuiltYet, loudly and with why
+#: A step runs after every rung is built (`place` is 0) and before the relaxations: it
+#: builds nothing the place tasks do not build, and what it adds is the EDGE.
+PATHWAY_PRIORITY = -5
 
-    if spec.run_mode != "construct":
-        from mofsbu.energy.relax import mode_status
 
-        # Refuse before any work is queued rather than building structures and failing at
-        # the optimisation step, which would leave a half-done run to interpret.  Asking
-        # the backend whether it is installed is not the same question as whether the
-        # code exists, and the two get different answers on the laptop.
-        status = mode_status(spec.ml_model).get(spec.run_mode)
-        if status is None or not status["available"]:
-            note = (status or {}).get("note") or f"run mode {spec.run_mode!r} cannot execute"
-            # An unwired mode is a missing BODY, not a missing install, and the two get
-            # different exceptions (ground rule 8).  Getting this backwards is what let a
-            # 500-structure ml_go run report success while never leaving RAW.
-            if status is not None and status.get("backend_available") and not status.get("wired"):
-                from mofsbu.assembly.join import NotBuiltYet
+@dataclass(frozen=True)
+class PlannedTask:
+    """One task, before it has an id.
 
-                raise NotBuiltYet(f"{spec.run_mode}: {note}")
-            raise EnergyBackendUnavailable(f"{spec.run_mode}: {note}")
+    `task_refs` names payload keys whose value is an INDEX into the plan rather than a
+    task id — the only thing enumeration cannot know, because ids exist once the rows do.
+    `plan` rewrites them on the way in, and every reference points BACKWARD, so a task's
+    parent is always already written when its turn comes.
+    """
 
-    run_id = create_run(reg, spec)
-    n = 0
+    kind: str
+    payload: dict[str, Any]
+    priority: int = 0
+    task_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlannedRun:
+    """What a spec would queue, and why it would not queue more.
+
+    Enumeration is separated from writing so that the page can ASK — "how big is this
+    run?" is a question you want answered while still editing the spec, and answering it
+    by planning a throwaway run would put rows in the registry for a question.  `plan` and
+    `estimate` are then the same enumeration, which is the only way the number the page
+    shows can be trusted to be the number you get.
+    """
+
+    tasks: tuple[PlannedTask, ...] = ()
+    diagnostics: tuple[dict[str, Any], ...] = ()
+    n_kinds: int = 0
+
+    def by_kind(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for task in self.tasks:
+            out[task.kind] = out.get(task.kind, 0) + 1
+        return out
+
+
+def _payload_key(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True)
+
+
+def _used_vertices(components: Sequence[dict[str, Any]]) -> int:
+    return sum(int(c["denticity"]) * int(c["count"]) for c in components)
+
+
+def _parent_payloads(payload: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """`(parent payload, the component one copy of which the join adds)`, one per kind.
+
+    The parent is this product with one ligand copy removed and the vertices that copy
+    occupied left EMPTY — not filled with a co-ligand.  That is what makes the step an
+    addition rather than a substitution, and it is the only version of the parent a
+    `join` can actually turn into this product.
+    """
+    out = []
+    for i, comp in enumerate(payload["components"]):
+        rest = [dict(c) for j, c in enumerate(payload["components"]) if j != i]
+        if int(comp["count"]) > 1:
+            rest.insert(i, dict(comp, count=int(comp["count"]) - 1))
+        parent = dict(payload, components=rest)
+        parent["n_vacant"] = int(payload["cn"]) - int(payload["n_co"]) - _used_vertices(rest)
+        out.append((parent, dict(comp, count=1)))
+    return out
+
+
+def enumerate_plan(spec: BuildSpec) -> PlannedRun:
+    """Every task this spec implies, with no registry in sight.
+
+    Pure enumeration: the same function answers "plan this run" and "how big would this
+    run be", so the estimate on the page cannot drift from what submitting actually does.
+    """
+    tasks: list[PlannedTask] = []
     skipped: dict[str, dict[str, Any]] = {}
 
     def skip(reason: str, hint: str) -> None:
         entry = skipped.setdefault(reason, {"reason": reason, "hint": hint, "count": 0})
         entry["count"] += 1
+
     kinds: list[dict[str, Any]] = []
+    ligand_task: dict[tuple[int, tuple[int, ...]], int] = {}
     for mol_ix, molecule in enumerate(spec.molecules):
         base = mol_from_smiles(molecule.smiles)
         protomers = enumerate_protomers(base, max_deprotonations=molecule.max_deprotonations,
                                         multiplicity=molecule.multiplicity)
         for proto in protomers:
-            n += 1
-            add_task(reg, run_id, "ligand", {
+            ligand_task[(mol_ix, tuple(proto.representative))] = len(tasks)
+            tasks.append(PlannedTask("ligand", {
                 "molecule": mol_ix, "selection": list(proto.representative),
                 "charge": proto.charge, "label": proto.label,
-            }, priority=10)                      # ligands first: complexes reference them
+            }, priority=10))                     # ligands first: complexes reference them
 
         if not spec.metals:
             continue
@@ -170,6 +228,18 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
                     "denticity": len(donors),
                 })
 
+    place_at: dict[str, int] = {}
+
+    def place(payload: dict[str, Any]) -> int:
+        """Queue a coordination sphere once, however many ladders reach it."""
+        key = _payload_key(payload)
+        index = place_at.get(key)
+        if index is None:
+            index = place_at[key] = len(tasks)
+            tasks.append(PlannedTask("place", payload))
+        return index
+
+    requested: list[int] = []
     for metal_ix in range(len(spec.metals)):
         for total_n, cn in itertools.product(spec.ligands_per_metal, spec.coordination):
             compositions = _compositions(kinds, total_n, spec.max_distinct_ligands)
@@ -180,7 +250,7 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
                      f"({spec.max_distinct_ligands})")
                 continue
             for combo in compositions:
-                used = sum(c["denticity"] * c["count"] for c in combo)
+                used = _used_vertices(combo)
                 n_co = cn - used
                 if n_co < 0:
                     skip(f"{used} donor sites exceed CN {cn}",
@@ -213,18 +283,156 @@ def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
                             f"apply to CN {cn}" if spec.geometries else ""))
                     continue
                 for geometry in candidates:
-                    n += 1
-                    add_task(reg, run_id, "place", {
+                    requested.append(place({
                         "metal": metal_ix, "components": combo,
                         "n_co": n_co, "cn": cn, "geometry": geometry,
                         "n_vacant": n_vacant,
-                    })
+                    }))
+
+    if spec.pathways and spec.metals:
+        _plan_pathways(tasks, place, requested, ligand_task, skip)
     if not spec.metals:
         skip("no metal centres in the spec",
              "molecular-only construction: activation states and sites are produced; "
              "joining molecule to molecule is M5")
-    set_diagnostics(reg, run_id, list(skipped.values()))
-    return run_id, n
+    return PlannedRun(tuple(tasks), tuple(skipped.values()), len(kinds))
+
+
+def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
+                   ligand_task: dict[tuple[int, tuple[int, ...]], int], skip) -> None:
+    """Add the intermediates each product is reached from, and the steps between them.
+
+    Walked breadth first from the products the spec asked for, one ligand copy at a time,
+    down to the centre carrying none.  Every rung is a real, coordinatively unsaturated
+    species — the thing `allow_unsaturated` names — and the `grow` task between two rungs
+    is the addition itself: it re-places the parent, joins one ligand onto the vertices
+    that copy will occupy, and stores the product with the parent as a reagent.
+
+    The chain is walked even when the spec asked for only one count, because "what is this
+    complex assembled from" is the same question at every rung.
+    """
+    seen: set[tuple[int, int]] = set()
+    frontier = list(requested)
+    while frontier:
+        nxt: list[int] = []
+        for child_ix in frontier:
+            child = tasks[child_ix].payload
+            for parent_payload, component in _parent_payloads(child):
+                if len(tasks) >= MAX_PATHWAY_TASKS:
+                    skip(f"pathway intermediates stopped at {MAX_PATHWAY_TASKS} tasks",
+                         "the ladder below this product is not planned; narrow the "
+                         "composition (max_distinct_ligands) or the ligand-count range")
+                    return
+                parent_ix = place(parent_payload)
+                if (parent_ix, child_ix) in seen:
+                    continue
+                seen.add((parent_ix, child_ix))
+                nxt.append(parent_ix)
+                tasks.append(PlannedTask("grow", {
+                    "parent_task": parent_ix, "child_task": child_ix,
+                    "ligand_task": ligand_task.get(
+                        (component["molecule"], tuple(component["selection"]))),
+                    "component": component, "metal": child["metal"],
+                    "cn": child["cn"], "geometry": child["geometry"],
+                }, priority=PATHWAY_PRIORITY,
+                    task_refs=("parent_task", "child_task", "ligand_task")))
+        frontier = [ix for ix in nxt if tasks[ix].payload["components"]]
+
+
+def estimate(spec: BuildSpec) -> dict[str, Any]:
+    """How big this run would be, without queueing any of it.
+
+    The same enumeration `plan` uses, so the number is the number — an estimate computed
+    by a second, simpler formula is a number that goes wrong exactly when a spec gets
+    interesting, which is when it is being read.
+
+    A spec this machine could not execute is reported rather than raised: the page asks
+    this question WHILE the spec is being edited, and half-finished is the normal state of
+    the thing being measured.
+    """
+    try:
+        _refuse_unrunnable(spec)
+    except MofsbuError as exc:
+        return {"ok": False, "reason": str(exc), "refusal": type(exc).__name__}
+    planned = enumerate_plan(spec)
+    by_kind = planned.by_kind()
+    builds = sum(by_kind.get(k, 0) for k in ("ligand", "place", "grow"))
+    # One relaxation per thing built, at most: `queue_relax` skips a structure this
+    # registry has already relaxed at this level of theory, and this function has no
+    # registry to ask.  Stated as a ceiling rather than quietly counted as certain.
+    relaxations = builds if spec.run_mode != "construct" else 0
+    return {
+        "ok": True, "tasks": len(planned.tasks), "by_kind": by_kind,
+        "relaxations": relaxations, "total": len(planned.tasks) + relaxations,
+        "ligand_kinds": planned.n_kinds,
+        "diagnostics": [dict(d) for d in planned.diagnostics],
+        "run_mode": spec.run_mode, "pathways": spec.pathways,
+    }
+
+
+def _refuse_unrunnable(spec: BuildSpec) -> None:
+    """Refuse a spec this build or this machine cannot execute, BEFORE anything is queued.
+
+    Both refusals are about the run as a whole, so they belong ahead of enumeration:
+    building half a run and failing at the optimisation step leaves a half-done run to
+    interpret, which is worse than a refusal with a reason.
+    """
+    if spec.degree > 1:
+        from mofsbu._types import NotBuiltYet
+
+        # This used to CALL `grow(None, (), degree=...)` purely to borrow the exception it
+        # raised.  That was fine while grow was a stub and became a lie the moment M5/S4
+        # built it: the tripwire would have thrown an AttributeError on the None seed
+        # instead of explaining anything.  The refusal is stated directly now, and it
+        # refuses something different from what it used to — not "growth is not written"
+        # but "the RUN PIPELINE does not drive it yet".
+        raise NotBuiltYet(
+            f"degree {spec.degree}: the branch tree and `assembly.grow` are built (M5/S4), "
+            "but planning a multi-step construction as TASKS is not — that is S4.1, where "
+            "the enumerator becomes what the builder drives. Call "
+            "`assembly.construct.enumerate_constructions` directly in the meantime. A run "
+            "that quietly queued degree-1 work instead would be the wrong answer wearing "
+            "the right count.")
+
+    if spec.run_mode != "construct":
+        from mofsbu.energy.relax import mode_status
+
+        # Refuse before any work is queued rather than building structures and failing at
+        # the optimisation step, which would leave a half-done run to interpret.  Asking
+        # the backend whether it is installed is not the same question as whether the
+        # code exists, and the two get different answers on the laptop.
+        status = mode_status(spec.ml_model).get(spec.run_mode)
+        if status is None or not status["available"]:
+            note = (status or {}).get("note") or f"run mode {spec.run_mode!r} cannot execute"
+            # An unwired mode is a missing BODY, not a missing install, and the two get
+            # different exceptions (ground rule 8).  Getting this backwards is what let a
+            # 500-structure ml_go run report success while never leaving RAW.
+            if status is not None and status.get("backend_available") and not status.get("wired"):
+                from mofsbu.assembly.join import NotBuiltYet
+
+                raise NotBuiltYet(f"{spec.run_mode}: {note}")
+            raise EnergyBackendUnavailable(f"{spec.run_mode}: {note}")
+
+
+def plan(reg: Registry, spec: BuildSpec) -> tuple[int, int]:
+    """Create the run and its tasks.  Returns (run_id, n_tasks)."""
+    _refuse_unrunnable(spec)
+    planned = enumerate_plan(spec)
+    run_id = create_run(reg, spec)
+    ids: list[int] = []
+    for task in planned.tasks:
+        payload = task.payload
+        if task.task_refs:
+            # Plan-time indices become task ids here.  Every reference points backward,
+            # so the row it names is already written; a forward one would silently store
+            # an id that does not exist yet.
+            payload = dict(payload)
+            for key in task.task_refs:
+                index = payload.get(key)
+                payload[key] = ids[index] if isinstance(index, int) else None
+        ids.append(add_task(reg, run_id, task.kind, payload, priority=task.priority))
+    set_diagnostics(reg, run_id, list(planned.diagnostics))
+    return run_id, len(ids)
 
 
 # ── execution ────────────────────────────────────────────────────────────────
@@ -411,7 +619,7 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     # geometry built despite a marginal clash would end up in the registry looking exactly
     # like one that never had a problem — and after `MARGINAL_OVERLAP` this is no longer
     # hypothetical, it is the intended path for hundreds of structures.
-    after = _post_relax_qc(graph, result.symbols, result.positions)
+    after = _clash_qc(graph, result.symbols, result.positions)
     geom = put_geometry(
         reg, structure_id, result.to_xyz(graph.name or ""), fidelity=result.fidelity,
         method=result.method, energy=result.energy, converged=result.converged,
@@ -432,13 +640,17 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     return Outcome(structure_id, geom.id, None, geom.created, detail)
 
 
-def _post_relax_qc(graph: TypedGraph, symbols, positions) -> qc_mod.QCReport:
-    """Clash check on relaxed coordinates, using the graph for what is bonded.
+def _clash_qc(graph: TypedGraph, symbols, positions) -> qc_mod.QCReport:
+    """Clash check on coordinates nothing measured a bond length against.
 
-    Clashes only, deliberately.  The construct's M-L bond lengths were a check on what
-    the PLACER built; after a relaxation the bond lengths are the optimiser's answer, not
-    a target that was missed, and flagging them as `bad_bonds` would report a converged
-    minimum as a construction defect.
+    Clashes only, deliberately, and for the same reason at both call sites.  After a
+    relaxation the bond lengths are the optimiser's answer rather than a target that was
+    missed, and flagging them would report a converged minimum as a construction defect.
+    After a join they were SET from `geometry.distances` — the donor is placed at its
+    metal-donor distance by construction — so a bond-length check there asks a question
+    whose answer the placement already guaranteed, while the overlaps between the incoming
+    ligand and the ones already on the centre are the real question and are what this
+    reports.
     """
     import numpy as np
 
@@ -497,6 +709,378 @@ def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
     return report
 
 
+@dataclass(frozen=True)
+class _Built:
+    """One placed coordination sphere, before anything is stored.
+
+    Shared by the two tasks that need one.  `place` stores what comes out of here;
+    `grow` needs the PARENT rung as something to join onto, and re-places it rather
+    than reading its coordinates back — construction is a deterministic function of the
+    payload and the seed (D13), so the rebuilt parent IS the stored parent, and the
+    product of joining onto it is therefore the product `place` builds for the next rung:
+    one identity, two routes (D2), which is the whole point of recording the step.
+    """
+
+    metal: Any
+    mol: Any
+    graph: TypedGraph
+    result: Any
+    name: str
+    molecule_names: list[str]
+    components: list[dict[str, Any]]
+    charge: int
+    multiplicity: int
+    detail: dict[str, Any]
+
+
+def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
+    """Place one coordination sphere from a `place` payload.  Writes nothing."""
+    metal = spec.metals[payload["metal"]]
+    detail = {}
+    components = _components(payload)
+    # One embed per COMPONENT, and every copy of a component shares that one
+    # conformer.  Two copies of a ligand are two placements of the same molecule, not
+    # two independent embeddings of it — re-embedding each copy would make a
+    # homoleptic complex's ligands silently non-identical and put stochastic
+    # conformer noise inside a single structure.
+    ligands: list[LigandPlacement] = []
+    parts: list[str] = []
+    ligand_charge = 0
+    multiplicities: list[int] = []
+    for comp in components:
+        cmol, cmolecule, cembed = _protomer_mol(spec, comp)
+        detail.setdefault("embed", cembed)
+        csites = perceive(cmol)
+        by_idx = {s.atom_idx: s for s in csites}
+        cdonors = tuple(comp["donors"])
+        missing = [i for i in cdonors if i not in by_idx]
+        if missing:
+            # The donor indices were chosen at PLAN time against a conformer embedded
+            # then; if perception no longer sees them the two halves have diverged and
+            # placing atom 9 because the payload says 9 would bind whatever now
+            # happens to sit there.
+            raise _Rejected(
+                f"donor index/indices {missing} are no longer perceived on "
+                f"{cmolecule.name}; the plan and this executor disagree about the "
+                f"molecule", code="donor_index_stale",
+                detail={"component": comp, "perceived": sorted(by_idx)})
+        cname = f"{cmolecule.name}{comp['label'] if comp['selection'] else ''}"
+        parts.append(f"{cname}x{comp['count']}" if comp["count"] > 1 else cname)
+        ligand_charge += int(comp["charge"]) * int(comp["count"])
+        multiplicities += [cmolecule.multiplicity] * int(comp["count"])
+        ligands += [LigandPlacement(
+            mol=cmol, donor_idxs=cdonors,
+            donor_types=tuple(by_idx[i].donor_type for i in cdonors),
+            mode=BindingMode(comp["mode"]), name=cname)
+            for _ in range(int(comp["count"]))]
+    name = "+".join(parts)
+    molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
+    if payload["n_co"]:
+        co, co_embed = embed_with_report(mol_from_smiles(spec.co_ligand), seed=3)
+        detail["co_ligand_embed"] = co_embed
+        co_sites = perceive(co)
+        if not co_sites:
+            # This used to be `perceive(co)[0]` and an IndexError, reported as a
+            # crash with a traceback — for what is a plain statement about the
+            # co-ligand: nothing in it can bind.  `[SiH4]` and `CC` reach here, and
+            # so does any donor type perception does not yet cover.
+            raise _Rejected(
+                f"co-ligand {spec.co_ligand!r} has no perceivable donor atom, so it "
+                f"cannot occupy a coordination site",
+                code="co_ligand_no_donor",
+                detail={"co_ligand": spec.co_ligand,
+                        "hint": "give the co-ligand as the species that actually "
+                                "binds — '[I-]' rather than 'I2', 'O' for water, "
+                                "'[OH-]' for hydroxide — or add its donor type to "
+                                "sites.perception"})
+        co_site = co_sites[0]
+        detail["co_ligand"] = {"smiles": spec.co_ligand,
+                               "donor_type": co_site.donor_type,
+                               "donor_element":
+                                   co.GetAtomWithIdx(co_site.atom_idx).GetSymbol(),
+                               "n": payload["n_co"]}
+        ligands += [LigandPlacement(mol=co, donor_idxs=(co_site.atom_idx,),
+                                    donor_types=(co_site.donor_type,),
+                                    name=spec.co_ligand)
+                    for _ in range(payload["n_co"])]
+
+    try:
+        # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
+        # was asked for and reports its empty vertices, instead of being silently
+        # rebuilt as a smaller, differently-shaped complex.
+        result = place_mononuclear(metal.symbol, ligands,
+                                   geometry=payload["geometry"],
+                                   cn=payload.get("cn"))
+    except ValueError as exc:
+        # The placer refusing a request is an ANSWER, not a breakage: a bidentate
+        # ligand cannot span a linear two-coordinate centre, and saying so is the
+        # correct behaviour.  Reporting it as `failed` would make a run full of sound
+        # chemistry look like a run full of bugs.
+        raise _Rejected(str(exc), code="placer_refused",
+                        detail={**detail, "geometry": payload["geometry"],
+                                "cn": payload["cn"]}) from exc
+    detail["distances"] = [x.to_dict() for x in result.donor_distances]
+    if not result.ok:
+        # A NEAR MISS is not a refusal.  A rigid placement that lands a hydrogen
+        # 0.06 A inside its limit has not made a chemical mistake — it has made a
+        # geometric one that an optimiser undoes in a few steps, and throwing the
+        # construct away means never finding that out.  So a marginal report is
+        # built and stored, and the relaxation this run is going to do anyway
+        # becomes the thing that decides.  `geometry.qc.MARGINAL_OVERLAP` documents
+        # where the threshold came from.
+        #
+        # Two guards on that leniency.  It only applies when there IS a relaxation
+        # coming: under `construct` there is no optimiser to appeal to, so the
+        # construct stays rejected and the code says a GO mode would have retried
+        # it.  And a marginal geometry is never stored looking clean — its QC
+        # report travels with it and `_execute_relax` re-checks it afterwards.
+        if not (result.report.marginal and spec.run_mode != "construct"):
+            # The QC report is stored STRUCTURED, not just stringified: which atoms,
+            # which elements, how far inside which limit, and where each target M-L
+            # distance came from.  That is the difference between "2 clash(es),
+            # closest 1.40 A" — which is what a whole run used to collapse into —
+            # and a finding you can group, sort and act on.
+            code = result.report.code
+            extra = {}
+            if result.report.marginal:
+                code = "qc_clash_marginal_no_go"
+                extra = {"hint": "this is a near miss, within "
+                                 f"{qc_mod.MARGINAL_OVERLAP} A. A run mode that "
+                                 "relaxes (ml_go, xtb_go) would have built it and "
+                                 "let the optimiser try to resolve the overlap."}
+            raise _Rejected(str(result.report), code=code,
+                            detail={**detail, "qc": result.report.to_dict(),
+                                    **extra,
+                                    "geometry": payload["geometry"],
+                                    "cn": payload["cn"]})
+        detail["built_despite_qc"] = {
+            "reason": "marginal clash, retried under a relaxation",
+            "worst_overlap": result.report.to_dict()["worst_overlap"],
+            "threshold": qc_mod.MARGINAL_OVERLAP}
+    complex_mol = to_rdkit(metal.symbol, ligands, result)
+    # Summed over components, so a mixed sphere gets the charge it actually carries:
+    # [Mg(dtBK)(Cl)] is +1, not the +2 a neutral-ligand assumption would give or the
+    # 0 that two chlorides would.  Each component contributes `charge x count`.
+    charge = metal.oxidation_state + ligand_charge
+    # The complex's multiplicity is the metal centre's own (from its spin_class,
+    # not a stale literal) combined with EVERY ligand's — unpaired electrons add,
+    # multiplicities don't.  See `spin_class_multiplicity`/`combined_multiplicity`.
+    metal_multiplicity = spin_class_multiplicity(
+        metal.symbol, metal.oxidation_state, metal.spin_class)
+    multiplicity = combined_multiplicity(metal_multiplicity, *multiplicities)
+    g = from_rdkit(complex_mol, charge=charge, multiplicity=multiplicity,
+                   oxidation_states={0: metal.oxidation_state},
+                   spin_classes={0: metal.spin_class}, name="")
+    detail["composition"] = {
+        "ligands": [{"molecule": spec.molecules[c["molecule"]].name,
+                     "label": c["label"], "charge": c["charge"],
+                     "mode": c["mode"], "count": c["count"]} for c in components],
+        "n_distinct": len(components), "ligand_charge": ligand_charge,
+        "n_co": payload["n_co"], "n_vacant": payload.get("n_vacant", 0)}
+
+    return _Built(metal=metal, mol=complex_mol, graph=g, result=result, name=name,
+                  molecule_names=molecule_names, components=components, charge=charge,
+                  multiplicity=multiplicity, detail=detail)
+
+
+def _sphere_block(built: _Built, structure_id: int | None = None):
+    """A placed sphere AS a building block: donors, empty vertices, and their state.
+
+    Everything `assembly.join` needs and nothing the registry needs.  The vacancies come
+    from the placer, which is the only thing that knows the polyhedron was bigger than the
+    ligand set; the states come from `refresh_state`, because a block whose state is
+    unknown refuses to answer "what is open" rather than guessing (and it is right to).
+    """
+    import numpy as np
+
+    from mofsbu.assembly.join import BuildingBlock
+
+    conf = built.mol.GetConformer()
+    coords = np.array([[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
+                        conf.GetAtomPosition(i).z]
+                       for i in range(built.mol.GetNumAtoms())])
+    sites = perceive(built.mol)
+    if built.result.vacancies:
+        sites = sites + vacancy_sites(built.result.metal_idx,
+                                      coords[built.result.metal_idx],
+                                      built.result.vacancies)
+    symbols = [atom.GetSymbol() for atom in built.mol.GetAtoms()]
+    states = refresh_state(sites, coords, graph=built.graph, symbols=symbols,
+                           fidelity=Fidelity.RAW)
+    return BuildingBlock(graph=built.graph, sites=tuple(sites), geometry=coords,
+                         state={(s.atom_idx, s.slot): s for s in states},
+                         structure_id=structure_id)
+
+
+def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None = None):
+    """The component as a joinable block, plus the donor sites the plan chose."""
+    from mofsbu.assembly.construct import ligand_block
+
+    cmol, cmolecule, embed_report = _protomer_mol(spec, comp)
+    name = f"{cmolecule.name}{comp['label'] if comp['selection'] else ''}"
+    block = ligand_block(cmol, charge=int(comp["charge"]), name=name,
+                         multiplicity=cmolecule.multiplicity)
+    # The blocks name themselves, so the choice vector records WHICH stored structures
+    # were joined rather than two nulls.
+    block = replace(block, structure_id=structure_id)
+    by_idx = {s.atom_idx: s for s in block.sites}
+    missing = [i for i in comp["donors"] if i not in by_idx]
+    if missing:
+        # Same disagreement `place` refuses: the donor indices were chosen at plan time
+        # against a conformer embedded then, and binding atom 9 because the payload says
+        # 9 would bind whatever now happens to sit there.
+        raise _Rejected(
+            f"donor index/indices {missing} are no longer perceived on {name}; the plan "
+            f"and this executor disagree about the molecule",
+            code="donor_index_stale",
+            detail={"component": comp, "perceived": sorted(by_idx)})
+    return block, [by_idx[i] for i in comp["donors"]], name
+
+
+def _rung(reg: Registry, task_id: Any, which: str) -> tuple[int, dict[str, Any]]:
+    """The structure a previous task built, and the payload that built it."""
+    row = None if task_id is None else reg.conn.execute(
+        "SELECT status, structure_id, payload_json FROM tasks WHERE id=?",
+        (task_id,)).fetchone()
+    if row is None:
+        raise _Rejected(f"this step records no {which} rung to start from",
+                        code="pathway_parent_missing", detail={"task": task_id})
+    if row["status"] != "done" or row["structure_id"] is None:
+        raise _Rejected(
+            f"the {which} rung was not built ({row['status']}), so there is nothing to "
+            f"join onto. The step is not wrong — the rung below it is missing, and "
+            f"whatever rejected that task says why",
+            code="pathway_parent_missing",
+            detail={"task": task_id, "status": row["status"]})
+    return int(row["structure_id"]), json.loads(row["payload_json"])
+
+
+def _vertex_pair(block, donors: Sequence[Any], vacancies: Sequence[Any], metal: str,
+                 elements: Sequence[str]):
+    """The two vertices a chelating ligand should span, and the verdict that chose them.
+
+    Every pair is judged and the least strained feasible one wins — which is how cis
+    beats trans without anything naming either: a ligand whose donors sit 3 A apart
+    subtends about 90 degrees at its bonds' own length and cannot stretch across 180.
+    Ranked by the SAME verdict that will place it (`chelate_reach`), because ranking on
+    one criterion and placing under another is how a step picks the pair it then cannot
+    build.  Ties break on slot order so a replay picks the same pair.
+    """
+    from mofsbu.assembly.join import chelate_reach
+
+    best, best_verdict, worst = None, None, None
+    for first, second in itertools.combinations(vacancies, 2):
+        verdict = chelate_reach(donors, [first, second], partner=metal,
+                                donor_elements=elements)
+        if verdict.feasible and (best_verdict is None or verdict.strain < best_verdict.strain):
+            best, best_verdict = (first, second), verdict
+        if worst is None:
+            worst = verdict
+    return best, (best_verdict or worst)
+
+
+def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
+    """Add one ligand to the rung below and record the step as a route to the product.
+
+    This is the pathway half of a run.  `place` builds M(L) and M(L)2 as two independent
+    constructions and nothing in the registry says the second is the first plus a ligand;
+    this performs that addition — `assembly.join` onto the parent's own empty vertices —
+    so the relationship is a `reactions` edge that was actually carried out rather than an
+    inference from two formulas.
+
+    Under D2 the product is usually an identity the run already has, and that is the
+    RESULT, not a wasted task: one node, two routes, and the second route is the one that
+    explains where the node came from.  The structure row is shared, a second geometry
+    hangs off it, and the edge carries the choice vector that regenerates the step.
+    """
+    import numpy as np
+
+    from mofsbu.assembly.join import IncompatibleJoin, join, join_chelate
+    from mofsbu.assembly.persist import store_block
+
+    payload = task.payload
+    parent_sid, parent_payload = _rung(reg, payload.get("parent_task"), "parent")
+    ligand_sid = None
+    if payload.get("ligand_task") is not None:
+        row = reg.conn.execute("SELECT structure_id FROM tasks WHERE id=?",
+                               (payload["ligand_task"],)).fetchone()
+        ligand_sid = None if row is None else row["structure_id"]
+
+    parent = _build_sphere(spec, parent_payload)
+    block = _sphere_block(parent, structure_id=parent_sid)
+    comp = payload["component"]
+    ligand, donors, name = _ligand_for(spec, comp, structure_id=ligand_sid)
+    metal = parent.metal
+    elements = [ligand.graph.label(s.atom_idx).element for s in donors]
+    detail: dict[str, Any] = {"step": {
+        "adds": name, "mode": comp["mode"], "from_structure": parent_sid,
+        "from_task": payload.get("parent_task"), "ligand_structure": ligand_sid}}
+
+    vacancies = sorted(block.open_vacancies(), key=lambda s: s.slot)
+    if len(vacancies) < len(donors):
+        raise _Rejected(
+            f"the rung below offers {len(vacancies)} open vertex/vertices and this step "
+            f"needs {len(donors)}; the parent is coordinatively saturated, so reaching "
+            f"this product from it is a SUBSTITUTION, not an addition, and a join cannot "
+            f"express one",
+            code="pathway_no_open_vertex", detail=detail)
+    try:
+        if len(donors) == 2:
+            pair, verdict = _vertex_pair(block, donors, vacancies, metal.symbol, elements)
+            if pair is None:
+                raise _Rejected(verdict.reason, code="chelate_cannot_span",
+                                detail={**detail, "strain": round(verdict.strain, 4)})
+            result = join_chelate(block, ligand, list(pair), donors, seed=spec.seed)
+        elif len(donors) == 1:
+            result = join(block, ligand, vacancies[0], donors[0], mode=comp["mode"],
+                          seed=spec.seed)
+        else:
+            raise _Rejected(
+                f"{len(donors)} donors at once: one donor is `join`, two are "
+                f"`join_chelate`, and three (fac/mer tridentate) is not built",
+                code="pathway_denticity_unbuilt", detail=detail)
+    except IncompatibleJoin as exc:
+        # A refusal from the site pair is an ANSWER about the chemistry, the same way the
+        # placer's is, and it is reported as a rejection rather than a failure.
+        raise _Rejected(exc.verdict.reason, code="join_refused",
+                        detail={**detail, "strain": round(exc.verdict.strain, 4)}) from exc
+
+    graph = result.block.graph
+    coords = np.asarray(result.block.geometry)
+    symbols = [graph.label(i).element for i in graph.nodes()]
+    report = _clash_qc(graph, symbols, coords)
+    if not report.ok and not (report.marginal and spec.run_mode != "construct"):
+        raise _Rejected(str(report), code=report.code,
+                        detail={**detail, "qc": report.to_dict()})
+
+    stored = store_block(
+        reg, result.block, choice_vector=result.choice_vector,
+        # The reagents ARE the pathway: the rung below and the free ligand that was added.
+        reagent_ids=[i for i in (parent_sid, ligand_sid) if i is not None],
+        depth=sum(int(c["count"]) for c in parent.components) + 1,
+        note=f"+{name} onto structure {parent_sid}",
+        tags=[*sorted({*parent.molecule_names, spec.molecules[comp["molecule"]].name}),
+              "complex", metal.symbol],
+        seed=spec.seed, qc=report.to_dict(),
+        # The L2 tag is left where the `place` path leaves it — unset.  Computing one here
+        # would put this product in a DIFFERENT structures row from the rung the run's own
+        # place task built, and the edge would then point at a node nothing else reached
+        # (B2 is the seam; both paths move when it is closed, together).
+        l2="")
+    detail["join"] = {
+        "strain": round(result.strain, 4), "mode": comp["mode"],
+        "reaction": stored.reaction_id, "choice_vector": stored.choice_digest,
+        "product": stored.structure_id,
+        "reached_existing": not stored.structure_created,
+        "note": ("the step reached a structure this registry already had — one node, two "
+                 "routes (D2); the edge is the new information"
+                 if not stored.structure_created else
+                 "this product is new: no place task built it")}
+    detail["qc"] = report.to_dict()
+    return Outcome(stored.structure_id, stored.geometry_id, stored.structure_created,
+                   stored.geometry_created, detail)
+
+
 def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Run one task.  Returns what it produced AND what it took to produce it."""
     payload = task.payload
@@ -519,161 +1103,26 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":
-        metal = spec.metals[payload["metal"]]
-        detail = {}
-        components = _components(payload)
-        # One embed per COMPONENT, and every copy of a component shares that one
-        # conformer.  Two copies of a ligand are two placements of the same molecule, not
-        # two independent embeddings of it — re-embedding each copy would make a
-        # homoleptic complex's ligands silently non-identical and put stochastic
-        # conformer noise inside a single structure.
-        ligands: list[LigandPlacement] = []
-        parts: list[str] = []
-        ligand_charge = 0
-        multiplicities: list[int] = []
-        for comp in components:
-            cmol, cmolecule, cembed = _protomer_mol(spec, comp)
-            detail.setdefault("embed", cembed)
-            csites = perceive(cmol)
-            by_idx = {s.atom_idx: s for s in csites}
-            cdonors = tuple(comp["donors"])
-            missing = [i for i in cdonors if i not in by_idx]
-            if missing:
-                # The donor indices were chosen at PLAN time against a conformer embedded
-                # then; if perception no longer sees them the two halves have diverged and
-                # placing atom 9 because the payload says 9 would bind whatever now
-                # happens to sit there.
-                raise _Rejected(
-                    f"donor index/indices {missing} are no longer perceived on "
-                    f"{cmolecule.name}; the plan and this executor disagree about the "
-                    f"molecule", code="donor_index_stale",
-                    detail={"component": comp, "perceived": sorted(by_idx)})
-            cname = f"{cmolecule.name}{comp['label'] if comp['selection'] else ''}"
-            parts.append(f"{cname}x{comp['count']}" if comp["count"] > 1 else cname)
-            ligand_charge += int(comp["charge"]) * int(comp["count"])
-            multiplicities += [cmolecule.multiplicity] * int(comp["count"])
-            ligands += [LigandPlacement(
-                mol=cmol, donor_idxs=cdonors,
-                donor_types=tuple(by_idx[i].donor_type for i in cdonors),
-                mode=BindingMode(comp["mode"]), name=cname)
-                for _ in range(int(comp["count"]))]
-        name = "+".join(parts)
-        molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
-        if payload["n_co"]:
-            co, co_embed = embed_with_report(mol_from_smiles(spec.co_ligand), seed=3)
-            detail["co_ligand_embed"] = co_embed
-            co_sites = perceive(co)
-            if not co_sites:
-                # This used to be `perceive(co)[0]` and an IndexError, reported as a
-                # crash with a traceback — for what is a plain statement about the
-                # co-ligand: nothing in it can bind.  `[SiH4]` and `CC` reach here, and
-                # so does any donor type perception does not yet cover.
-                raise _Rejected(
-                    f"co-ligand {spec.co_ligand!r} has no perceivable donor atom, so it "
-                    f"cannot occupy a coordination site",
-                    code="co_ligand_no_donor",
-                    detail={"co_ligand": spec.co_ligand,
-                            "hint": "give the co-ligand as the species that actually "
-                                    "binds — '[I-]' rather than 'I2', 'O' for water, "
-                                    "'[OH-]' for hydroxide — or add its donor type to "
-                                    "sites.perception"})
-            co_site = co_sites[0]
-            detail["co_ligand"] = {"smiles": spec.co_ligand,
-                                   "donor_type": co_site.donor_type,
-                                   "donor_element":
-                                       co.GetAtomWithIdx(co_site.atom_idx).GetSymbol(),
-                                   "n": payload["n_co"]}
-            ligands += [LigandPlacement(mol=co, donor_idxs=(co_site.atom_idx,),
-                                        donor_types=(co_site.donor_type,),
-                                        name=spec.co_ligand)
-                        for _ in range(payload["n_co"])]
-
-        try:
-            # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
-            # was asked for and reports its empty vertices, instead of being silently
-            # rebuilt as a smaller, differently-shaped complex.
-            result = place_mononuclear(metal.symbol, ligands,
-                                       geometry=payload["geometry"],
-                                       cn=payload.get("cn"))
-        except ValueError as exc:
-            # The placer refusing a request is an ANSWER, not a breakage: a bidentate
-            # ligand cannot span a linear two-coordinate centre, and saying so is the
-            # correct behaviour.  Reporting it as `failed` would make a run full of sound
-            # chemistry look like a run full of bugs.
-            raise _Rejected(str(exc), code="placer_refused",
-                            detail={**detail, "geometry": payload["geometry"],
-                                    "cn": payload["cn"]}) from exc
-        detail["distances"] = [x.to_dict() for x in result.donor_distances]
-        if not result.ok:
-            # A NEAR MISS is not a refusal.  A rigid placement that lands a hydrogen
-            # 0.06 A inside its limit has not made a chemical mistake — it has made a
-            # geometric one that an optimiser undoes in a few steps, and throwing the
-            # construct away means never finding that out.  So a marginal report is
-            # built and stored, and the relaxation this run is going to do anyway
-            # becomes the thing that decides.  `geometry.qc.MARGINAL_OVERLAP` documents
-            # where the threshold came from.
-            #
-            # Two guards on that leniency.  It only applies when there IS a relaxation
-            # coming: under `construct` there is no optimiser to appeal to, so the
-            # construct stays rejected and the code says a GO mode would have retried
-            # it.  And a marginal geometry is never stored looking clean — its QC
-            # report travels with it and `_execute_relax` re-checks it afterwards.
-            if not (result.report.marginal and spec.run_mode != "construct"):
-                # The QC report is stored STRUCTURED, not just stringified: which atoms,
-                # which elements, how far inside which limit, and where each target M-L
-                # distance came from.  That is the difference between "2 clash(es),
-                # closest 1.40 A" — which is what a whole run used to collapse into —
-                # and a finding you can group, sort and act on.
-                code = result.report.code
-                extra = {}
-                if result.report.marginal:
-                    code = "qc_clash_marginal_no_go"
-                    extra = {"hint": "this is a near miss, within "
-                                     f"{qc_mod.MARGINAL_OVERLAP} A. A run mode that "
-                                     "relaxes (ml_go, xtb_go) would have built it and "
-                                     "let the optimiser try to resolve the overlap."}
-                raise _Rejected(str(result.report), code=code,
-                                detail={**detail, "qc": result.report.to_dict(),
-                                        **extra,
-                                        "geometry": payload["geometry"],
-                                        "cn": payload["cn"]})
-            detail["built_despite_qc"] = {
-                "reason": "marginal clash, retried under a relaxation",
-                "worst_overlap": result.report.to_dict()["worst_overlap"],
-                "threshold": qc_mod.MARGINAL_OVERLAP}
-        complex_mol = to_rdkit(metal.symbol, ligands, result)
-        # Summed over components, so a mixed sphere gets the charge it actually carries:
-        # [Mg(dtBK)(Cl)] is +1, not the +2 a neutral-ligand assumption would give or the
-        # 0 that two chlorides would.  Each component contributes `charge x count`.
-        charge = metal.oxidation_state + ligand_charge
-        # The complex's multiplicity is the metal centre's own (from its spin_class,
-        # not a stale literal) combined with EVERY ligand's — unpaired electrons add,
-        # multiplicities don't.  See `spin_class_multiplicity`/`combined_multiplicity`.
-        metal_multiplicity = spin_class_multiplicity(
-            metal.symbol, metal.oxidation_state, metal.spin_class)
-        multiplicity = combined_multiplicity(metal_multiplicity, *multiplicities)
-        g = from_rdkit(complex_mol, charge=charge, multiplicity=multiplicity,
-                       oxidation_states={0: metal.oxidation_state},
-                       spin_classes={0: metal.spin_class}, name="")
-        detail["composition"] = {
-            "ligands": [{"molecule": spec.molecules[c["molecule"]].name,
-                         "label": c["label"], "charge": c["charge"],
-                         "mode": c["mode"], "count": c["count"]} for c in components],
-            "n_distinct": len(components), "ligand_charge": ligand_charge,
-            "n_co": payload["n_co"], "n_vacant": payload.get("n_vacant", 0)}
-        put = put_structure(reg, g, tags=[*molecule_names, "complex", metal.symbol],
+        built = _build_sphere(spec, payload)
+        detail = built.detail
+        put = put_structure(reg, built.graph,
+                            tags=[*built.molecule_names, "complex", built.metal.symbol],
                             provenance=Provenance(kind="assembly", depth=1,
                                                   note=payload["geometry"]))
-        geom = put_geometry(reg, put.id, result.to_xyz(name), fidelity=Fidelity.RAW,
-                            method=BUILD, choice_vector=result.choice_vector,
-                            seed=spec.seed, qc=result.report.to_dict())
+        geom = put_geometry(reg, put.id, built.result.to_xyz(built.name),
+                            fidelity=Fidelity.RAW, method=BUILD,
+                            choice_vector=built.result.choice_vector,
+                            seed=spec.seed, qc=built.result.report.to_dict())
         # The placer's empty vertices travel with the complex: metal at index 0,
         # which is how `to_rdkit` lays the centre out.
-        detail["sites"] = _record_sites(reg, put.id, geom.id, complex_mol, g,
-                                        Fidelity.RAW, vacancies=result.vacancies,
-                                        metal_idx=result.metal_idx)
-        detail["qc"] = result.report.to_dict()
+        detail["sites"] = _record_sites(reg, put.id, geom.id, built.mol, built.graph,
+                                        Fidelity.RAW, vacancies=built.result.vacancies,
+                                        metal_idx=built.result.metal_idx)
+        detail["qc"] = built.result.report.to_dict()
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
+
+    if task.kind == "grow":
+        return _execute_grow(reg, task, spec)
 
     raise MofsbuError(f"no executor for task kind {task.kind!r}")
 
@@ -788,7 +1237,7 @@ def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[s
         import multiprocessing as mp
 
         db, store = str(reg.db_path), str(reg.store.root)
-        procs = [mp.Process(target=_worker_process, args=(db, store, spec.to_json(None), run_id))
+        procs = [mp.Process(target=_worker_process, args=(db, store, spec.to_json(indent=None), run_id))
                  for _ in range(n_workers)]
         for proc in procs:
             proc.start()

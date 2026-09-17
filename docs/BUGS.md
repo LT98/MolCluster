@@ -20,6 +20,13 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B5](#b5) | undecided | `ui/static/builder.html` | The builder posts `spec_version: 1` and no test covers the migration it relies on |
 | [B6](#b6) | undecided | `ui/static/index.html` | The registry page never refreshes, so its counts go stale silently |
 | [B7](#b7) | blocked | `scripts/ingest.py` | The legacy `.xyz` corpus cannot be ingested: no charge, no multiplicity |
+| [B8](#b8) | correctness | `descriptors/ease.py` | Every sp3 amine donor reads as sterically blocked, so no amine can be joined |
+| [B9](#b9) | correctness | `identity/conformers.py` | The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable |
+| [B10](#b10) | undecided | `identity/isomers.py` | Δ/Λ is self-consistent but its absolute assignment is unverified |
+| [B11](#b11) | cosmetic | `sites/model.py` | `vacancy_sites` normalises by hand, differently from `_linalg.unit` |
+| [B12](#b12) | correctness | `assembly/construct.py` | `metal_block` gives a metal a formal charge nothing else does, so one species gets two L1 hashes |
+| [B13](#b13) | correctness | `sites/perception.py` | A bare hydroxide perceives **zero** donors, so µ2-OH cannot be built |
+| [B14](#b14) | correctness | `sites/perception.py` | Pyrazolate's two equivalent N type differently, and one of them cannot bridge |
 
 ---
 
@@ -142,3 +149,206 @@ discarded, so meaning still does not live in filenames going forward.
 Until this is called, M3's real-data test is the fixture round-trip instead, and the
 duplicate-collapse count that ingesting the corpus would have produced — itself a result
 worth having — does not exist.
+
+---
+
+## B8
+
+**Every sp3 amine donor reads as sterically blocked, so no amine can be joined.**
+`correctness` · `descriptors/ease.py`
+
+`occlusion` counts a donor's own covalently bonded neighbours as walls, so `refresh_state`
+marks amines `BLOCKED` and `BuildingBlock.open_donors()` excludes them entirely.
+
+Measured 2026-09-15:
+
+| donor | open donors | `buried_vol` |
+|---|---|---|
+| ammonia | **0 / 1** | 0.86 |
+| methylamine | **0 / 1** | 0.84 |
+| ethylenediamine | **0 / 2** | 0.88, 0.86 |
+| water | 1 / 1 | 0.41 |
+| pyridine | 1 / 1 | 0.56 |
+| 2,2'-bipyridine | 2 / 2 | 0.58, 0.61 |
+| acetate | 2 / 2 | 0.28, 0.30 |
+
+**Structural, not a threshold to retune.** A ray leaving the donor at angle θ passes within
+`d·sin(|θ_neighbour − θ|)` of a neighbour at distance `d`. With an N–H bond of 1.02 Å and
+vdW(H) = 1.20 Å that is under the radius for angular separations up to **~73°**, so a bonded
+neighbour occludes a ±73° wedge *regardless of where it points*. Ammonia's hydrogens sit
+**112.8° off the lone-pair axis** and still block **86%** of the 75° cone. For a terminal
+donor the number largely measures "does this donor have neighbours".
+
+**Costs now:** ethylenediamine, the textbook chelator, has zero open donors; Pt(NH₃)₂Cl₂
+cannot be assembled, so `tests/test_isomers.py` and `tests/test_m5_exit_gates.py` stand in
+aqua and chloride.
+
+**`BLOCKED_OCCLUSION`'s calibration note is part of the same bug.** It documents "a bare aqua
+O sits near 0.0"; aqua measures **0.41**. The carboxylate figure (0.2–0.4) still holds. A
+threshold whose stated calibration is wrong cannot be safely moved, so re-measure the whole
+panel and rewrite the note from the new numbers as part of the fix.
+
+**Fixing it moves stored values:** `buried_vol` lives in `site_state`, feeds the ease model's
+steric term and decides `n_open_sites`. Bump `ALGO_VERSIONS["site_state"]` (now `"1"`) and
+possibly `"ease_model"`. Under D19 the existing rows keep their own version's answer.
+
+**Likely fix:** exclude atoms covalently bonded to the donor from the ray test — they are what
+*defines* the axis and cannot be in the way of it — or damp their radius by distance.
+
+Tracked as [#13](https://github.com/LT98/MolCluster/issues/13) and
+[#14](https://github.com/LT98/MolCluster/issues/14).
+
+---
+
+## B9
+
+**The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable.**
+`correctness` · `identity/conformers.py`
+
+`rotatable()` reuses `sites.model`'s rule — single, acyclic, non-aromatic — so that "rigid"
+means one thing across the codebase. That rule is order-blind by design (D15 keeps bond order
+out of identity), so it cannot tell a carboxylate's delocalised C–O from an ether's, and cuts
+both.
+
+So the rigid core of an acetate complex stops at the coordinating oxygen and excludes the
+carboxylate carbon, and an acetate torsion registers as **exactly zero** core RMSD. That
+agrees with design §4.2's worked examples — a non-coordinating carboxyl torsion is explicitly
+a *trivial* conformer — but it is right by accident, and the same cut would hide real motion
+in an amide or an ester.
+
+**What it currently blocks:** the L3 energy window. Over 12 xTB-relaxed structures the Kind-A
+*energy* spread reached **16.6 kcal/mol** between samples whose cores agreed to 0.03 Å, all of
+it motion outside the core. A window calibrated from those numbers would bake this defect into
+a stored threshold, so `DEFAULT_ENERGY_WINDOW is None` until this is fixed. θ_geom beside it
+**is** calibrated (0.15 Å) and unaffected.
+
+**Error direction is safe:** a smaller core makes the comparison more permissive, never less —
+it can fail to split two conformers and can never merge two that differ elsewhere.
+
+Tracked as [#20](https://github.com/LT98/MolCluster/issues/20) and
+[#19](https://github.com/LT98/MolCluster/issues/19).
+
+---
+
+## B10
+
+**Δ/Λ is self-consistent but its absolute assignment is unverified.** `undecided` ·
+`identity/isomers.py`
+
+`_chirality` assigns Δ to the right-handed propeller, from IUPAC's definition of Δ as the
+right-handed helix plus the geometric fact that a right-handed helix turns anticlockwise about
+its axis as it advances.
+
+**Tested:** mirror images get opposite labels; rotations do not move the label; the answer does
+not depend on which end of the C3 axis you look from (flipping it swaps which donor counts as
+"upper" *and* negates the axis — the sign changes cancel).
+
+**Not tested:** that the label on a real Δ complex is `Delta` and not `Lambda`. A systematic
+inversion would be invisible to every test here and visible in every report. One check against
+a known crystal structure settles it. Until then the discrimination is trustworthy and the
+absolute assignment is provisional.
+
+Tracked as [#17](https://github.com/LT98/MolCluster/issues/17).
+
+---
+
+## B11
+
+**`vacancy_sites` normalises by hand, differently from `_linalg.unit`.** `cosmetic` ·
+`sites/model.py`
+
+It divides by `max(norm, 1e-9)`; `geometry._linalg.unit` falls back to the z axis. Identical
+for any real input, different for a zero-length direction vector — one returns a near-infinite
+vector, the other a valid axis.
+
+Left out of the `_linalg` consolidation deliberately: swapping it is a behaviour change in the
+degenerate case, not a de-duplication. Worth deciding which answer is wanted rather than
+leaving two.
+
+Tracked as [#22](https://github.com/LT98/MolCluster/issues/22).
+
+---
+
+## B12
+
+**`metal_block` gives a metal a formal charge nothing else does, so one species gets two L1
+hashes.** `correctness` · `assembly/construct.py`
+
+`graph.from_mol.from_rdkit` sets a metal's `formal_charge` to **0** — D15 puts charge on the
+graph, not on the atom — and `examples.py` writes its metals the same way.
+`assembly.construct.metal_block` writes `formal_charge=oxidation_state`.
+
+That string is not decoration: `NodeLabel.key()` emits `element/formal_charge/oxidation_state/
+spin_class` for a metal, and `graph.canon._cert_entries` hashes it. Measured 2026-09-16 on a
+two-Cu fragment identical but for that field:
+
+| metal label | L1 |
+|---|---|
+| `Cu/+0/+2/hs` | `ef2229b65dcd3f97…` |
+| `Cu/+2/+2/hs` | `b63727cfed06a87a…` |
+
+So the same species reached through the runner (placer → `to_rdkit` → `from_rdkit`) and through
+the enumerator (`metal_block`) lands on two different nodes. **That is D2's central claim — one
+node, two routes — broken at the producer.** It has not bitten yet only because nothing has
+built the same species both ways.
+
+**Fix is to make `metal_block` write 0**, matching D15 and both other producers; the oxidation
+state is already carried in its own field, so nothing is lost and the charge stops being counted
+twice (atom, *and* `TypedGraph.charge`).
+
+**It moves identities, and the cost is the one already accepted for [B2](#b2).** Rows written
+under the current behaviour keep their stored hash and are never re-derived (ground rule 6 /
+D19), so the same species can occupy two rows across the change.
+
+Forced by M6, whose exit gate compares placer output against fixtures written the other way —
+see [`WORKPLAN_M6.md`](WORKPLAN_M6.md) §8(f).
+
+---
+
+## B13
+
+**A bare hydroxide perceives zero donors, so µ2-OH cannot be built.** `correctness` ·
+`sites/perception.py`
+
+Measured 2026-09-16:
+
+| molecule | donors perceived |
+|---|---|
+| `[OH-]` | **none** |
+| `C[O-]` methoxide | `alkoxide_O` |
+| `CO` methanol | `alkoxide_O` |
+
+Methoxide and methanol perceive normally, so the rule is dropping `[OH-]` specifically — it has
+no heavy neighbour. A hydroxide bridge is one of the commonest motifs in polynuclear chemistry
+and the M6 battery needs it, so this is not a curiosity.
+
+Note the neighbouring limitation, which is *not* this bug and is M6 scope rather than a defect:
+a donor with two neighbours (a bridging aqua) gets a single determined axis from `site_frame`,
+so both torsion wells return the same direction and its implied M···M is **0.000 Å**. One atom
+pointing at two metals needs the bridging atom treated as a centre in its own right —
+[`WORKPLAN_M6.md`](WORKPLAN_M6.md) §4.
+
+---
+
+## B14
+
+**Pyrazolate's two equivalent nitrogens type differently, and one of them cannot bridge.**
+`correctness` · `sites/perception.py`
+
+Measured 2026-09-16:
+
+| molecule | donors |
+|---|---|
+| pyrazole `c1cc[nH]n1` | `azolate_N`, `pyridyl_N` |
+| pyrazolate `c1cc[n-]n1` | **`amide_N`**, **`pyridyl_N`** |
+
+The pyrazolate anion's two nitrogens are equivalent by resonance — the charge is delocalised
+around the ring — so typing them as two different donor types is the same defect `cff47a8`
+fixed for oxo-acids under the heading *perception is resonance-invariant, an oxo-acid is one
+donor group*. Azolates were not covered by that change.
+
+**What it costs:** `pyridyl_N` declares `mono` only, so a pyrazolate N,N bridge is refused on
+one end whatever the other end offers. Pyrazolate-bridged dimers are the standard
+non-carboxylate test of a bridging model, so M6 has no way to check that mechanism A generalises
+beyond carboxylates until this is fixed.
+

@@ -103,19 +103,27 @@ def wl_index(g: TypedGraph) -> str:
 def l2_isomer_tag(g: TypedGraph, geom: Any | None = None) -> str:
     """Configurational isomer tag: cis/trans, fac/mer, Delta/Lambda (D10).
 
-    STUB until M5.  Signature is final: it takes the graph plus an optional geometry,
-    because the distinction L2 draws is spatial and invisible to the graph alone.
+    It takes the graph plus an optional geometry because the distinction L2 draws is
+    spatial and invisible to the graph alone — so **no geometry means no tag**, and `""`
+    is the right answer rather than a degraded one.  `identity.isomers` is the classifier;
+    read its docstring for what gets compared and why L2 is therefore not a pure function
+    of a structure row.
     """
-    return L2_UNSET
+    from mofsbu.identity.isomers import isomer_tag
+
+    return isomer_tag(g, geom)
 
 
 def l3_conformer_id(choice_vector: Any | None = None, geom: Any | None = None) -> str:
     """Conformer id — provenance-primary, geometry-verifier (D11).
 
-    STUB until M5.  The label is the construction choice-vector; geometric clustering
-    only collapses stochastic duplicates and reconciles divergence/convergence.
+    The label is the construction choice-vector's digest and nothing else; geometric
+    clustering (`identity.conformers.cluster`) only collapses stochastic duplicates and
+    reconciles divergence/convergence, and never names anything.
     """
-    return L3_UNSET
+    from mofsbu.identity.conformers import l3_conformer_id as _impl
+
+    return _impl(choice_vector, geom)
 
 
 def block_id(l0: str, l1: str, l2: str = L2_UNSET, l3: str = L3_UNSET) -> str:
