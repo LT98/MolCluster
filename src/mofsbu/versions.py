@@ -57,7 +57,18 @@ ALGO_VERSIONS: dict[str, str] = {
     #    occupied, and the bond that formed had no row to be recorded against.  A `1`
     #    catalog on a metal-bearing structure is therefore incomplete rather than merely
     #    old, which is why `put_sites` replaces one instead of keeping it.
-    "perception":       "2",       # which atoms are donors, and of what type
+    # 3: a site records EVERY lone pair, not just the first.  An sp2 donor has two
+    #    in-plane lobes and `site_frame` always knew it; `perceive` kept one, so a stored
+    #    carboxylate pointed its metal at the syn lobe and the anti lobe existed nowhere.
+    #    Same donors and same types as `2` — what changed is the frame record, and it
+    #    changed in the one way that is not safely readable as "absent": a `2` frame has
+    #    no `lone_pairs` key and therefore reads as a donor with exactly ONE lobe, which
+    #    is the correct answer for an aqua and the wrong one for a carboxylate.  A bridge
+    #    judged against a `2` catalog would refuse, for a reason that is an artifact of
+    #    when the row was written rather than a fact about the chemistry.  Old rows keep
+    #    their own answer and are rewritten the next time anything touches the structure
+    #    (D19), which is how the `2` bump behaved too.
+    "perception":       "3",       # which atoms are donors, of what type, and their lobes
     "site_state":       "1",       # status rule + buried-volume convention (M4)
     # 2: pinning a donor and its outward axis leaves two rotations undetermined — the
     #    ligand's spin about the M-L axis, and the metal's swing out of the donor's
