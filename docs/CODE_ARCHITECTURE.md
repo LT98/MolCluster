@@ -34,6 +34,7 @@ charge, spin — travels with it in a `methods` row.
 | `_types.py` | `Fidelity` ladder, `MethodSpec`, exception hierarchy | ✅ |
 | `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v7). Counts accept ranges (`"1~3"`), expanded at construction | ✅ |
 | `runner.py` | `enumerate_plan` enumerates, `plan` writes tasks, `work` executes them. The two never assume one process | ✅ |
+| ↳ `execute_run` | the only place the worker pool is built — CLI and page share it. `plan_workers` divides the declared workers between the build queue and the relax queue (spawn, never fork: CUDA) | ✅ |
 | ↳ `estimate` | the same enumeration with no registry — what the builder page shows before you submit | ✅ |
 | ↳ `grow` tasks | `spec.pathways`: the rung below each product, and the `join` between them | ✅ |
 | `config.py` | Data root, machine profile, device, ML model — all **declared, never detected** | ✅ |
@@ -59,9 +60,9 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
 | `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot | ✅ |
-| ↳ `place_multicentre` | inter-centre constraints. `Center`/`Join`/`InterCentreConstraint` are settled; exit-gate tests are written and strict-xfailed in `test_placer_multicentre.py` | 🔴 **stub → M6** |
+| ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
-| ↳ `check_intercentre` | centre-centre distance; `qc()` alone cannot see a squeezed node | 🔴 **stub → M6** |
+| ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
 | `geometry/distances.py` | M–L target distance as a property of the *pair* | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
 | `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
@@ -79,6 +80,7 @@ charge, spin — travels with it in a `methods` row.
 | `registry/db.py` | Connection + additive migration (schema file is not a migration) | ✅ |
 | `registry/store.py` | Content-addressed blob store for .xyz | ✅ |
 | `registry/jobs.py` | Runs/tasks queue, claim/complete/cancel/resume | ✅ |
+| ↳ `run_liveness` | is a process still behind this run? pid (proof, same host) + heartbeat (only when nothing is claimed). `sweep_interrupted` acts on it when a process takes the database over | ✅ |
 | `registry/verify.py` | Does every stored row still agree with its recipe? | ✅ |
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
 | `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
@@ -97,6 +99,9 @@ structures      one row per IDENTITY (L0/L1/L2).  UNIQUE(l0, l1, l2_isomer_tag)
   reactions     provenance edges INTO a product.  atom_map_json, choice_vector_digest
 methods         what produced a number.  Referenced by every stored value
 runs / tasks    the queue.  plan() writes, work() drains
+                a run has FOUR endings: done, failed, cancelled (asked for) and
+                interrupted (the process stopped existing — derived, never written
+                by the process it happened to)
 ```
 
 **Identity on the node, sequence on the edges** (D2). One structure reachable two ways is
@@ -110,7 +115,9 @@ one row with two incoming `reactions` edges — 441 such products exist today.
    cursor to write.
 2. **No bare floats.** Every stored number carries a `MethodSpec` + `Fidelity`.
 3. **Declared, never detected.** Device (`MOFSBU_DEVICE`), workers (`MOFSBU_PROFILE`/
-   `MOFSBU_WORKERS`), ML model (`MOFSBU_ML_MODEL`). A build never seizes hardware on its own.
+   `MOFSBU_WORKERS`, split by `MOFSBU_RELAX_WORKERS`), ML model (`MOFSBU_ML_MODEL`). A build
+   never seizes hardware on its own — but a declared count is *used*, including one passed
+   as `workers=`, and it is divided between the two queues rather than exceeded.
 4. **Ambiguity branches, it does not default.** CN, protonation, spin — enumerate the
    alternatives as separate calls.
 5. **A stub never returns a plausible value.** `NotBuiltYet` = missing body;

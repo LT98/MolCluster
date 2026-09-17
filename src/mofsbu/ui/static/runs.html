@@ -133,8 +133,24 @@ const LIVE_MS = 4000, QUIET_MS = 15000, QUIET_AFTER = 3;
 // report.  Polling it forever is the whole of the "the server log scrolls with no user
 // action" complaint, seen from the server side: three requests per tick, ~45 log lines a
 // minute, from an idle tab someone left open.
-const TERMINAL = ['done', 'failed', 'cancelled'];
-const isTerminal = r => TERMINAL.includes(r.status) && r.thread !== 'running';
+const TERMINAL = ['done', 'failed', 'cancelled', 'interrupted'];
+const isTerminal = r => (TERMINAL.includes(r.status) || isStranded(r)) && r.thread !== 'running';
+
+// What a run's status MEANS once you also know whether a process is still behind it.
+// The row is written by a process, so a process that is killed leaves the last thing it
+// managed to say — `pending` — and the page believed it, polling a dead run for ever and
+// showing it as ongoing. `liveness` is computed per request (`run_liveness`): `live` and
+// `interrupted` are claims, `unknown` means the worker is somewhere this server cannot
+// ask about, and is shown as such rather than resolved to either.
+const statusOf = r =>
+  r.thread === 'running' ? 'running'
+  : r.liveness && r.liveness.verdict === 'interrupted' ? 'interrupted'
+  : r.liveness && r.liveness.verdict === 'unknown' ? r.status + ' (unverified)'
+  : r.status;
+// Stopped, and not by anyone's decision — so the way back is offered, not a stop button.
+const isStranded = r =>
+  r.status === 'interrupted' ||
+  (r.liveness && r.liveness.verdict === 'interrupted' && r.thread !== 'running');
 
 // Cheap, order-sensitive digest.  It only has to answer "is this byte-for-byte what I
 // rendered last time"; a collision would cost one skipped repaint, and the manual
@@ -156,7 +172,7 @@ async function loadRuns(){
   $('#runs').innerHTML = runs.map(r => `
     <li data-run="${r.id}" class="${r.id === state.runId ? 'sel' : ''}">
       <b>run ${r.id}</b>
-      <span class="muted">${esc(r.thread === 'running' ? 'running' : r.status)}</span><br>
+      <span class="muted">${esc(statusOf(r))}</span><br>
       <span class="mono muted">${r.n_done}/${r.n_tasks} done${r.n_rejected ? ' · ' + r.n_rejected + ' rej' : ''}${r.n_failed ? ' · ' + r.n_failed + ' fail' : ''}</span>
       ${r.note ? `<br><span class="muted" style="font-size:11px">${esc(r.note)}</span>` : ''}
     </li>`).join('');
@@ -239,9 +255,11 @@ async function render(force){
   $('#detail').innerHTML = `
     <h1>run ${run.run.id}
       <span class="muted" style="font-weight:400">
-        ${esc(run.run.thread === 'running' ? 'running' : run.run.status)} ·
+        ${esc(statusOf(run.run))} ·
         ${esc(run.run.created_at || '')}</span></h1>
     ${run.run.note ? `<div class="muted">${esc(run.run.note)}</div>` : ''}
+    ${run.run.liveness && run.run.liveness.verdict !== 'live'
+      ? `<div class="muted" style="font-size:11.5px">${esc(run.run.liveness.reason)}</div>` : ''}
     ${run.run.device ? `<div class="muted" style="font-size:11.5px">device
       <span class="mono">${esc(run.run.device)}</span>${run.run.workers
         ? ` · ${run.run.workers} worker(s)` : ''}</div>` : ''}
@@ -259,7 +277,9 @@ async function render(force){
     <div class="live">${waiting === 0
       ? 'every task has an answer — a rejection is one of them'
       : `${waiting} of ${totalTasks} still waiting`}${
-        isTerminal(run.run) ? ' · not polling: this run is finished' : ''}</div>
+        !isTerminal(run.run) ? ''
+          : isStranded(run.run) ? ' · not polling: nothing is working on this run'
+          : ' · not polling: this run is finished'}</div>
 
     <div class="cards">${cards.map(([k, n, cls]) =>
       `<div class="card"><div class="n ${cls ? 'b-x' : ''}" style="${cls === 'b-bad' ? 'color:var(--bad)' : cls === 'b-warn' ? 'color:var(--warn)' : cls === 'b-good' ? 'color:var(--good)' : cls === 'b-info' ? 'color:var(--accent)' : ''}">${n ?? 0}</div>
@@ -378,7 +398,8 @@ function restoreOpen(){
 function rowSignature(id){
   const r = (state.runRows || {})[id];
   if(!r) return 'gone';
-  return [r.status, r.thread, r.n_tasks, r.n_done, r.n_rejected, r.n_failed].join('/');
+  return [r.status, r.thread, (r.liveness || {}).verdict,
+          r.n_tasks, r.n_done, r.n_rejected, r.n_failed].join('/');
 }
 
 function schedule(run){
@@ -419,9 +440,14 @@ function note(msg, bad){
 }
 
 function stopButton(run){
-  // Live if the run still has work that could be claimed.  A finished run gets nothing
-  // rather than a dead control, and a cancelled one gets the way back.
+  // Live if the run still has work that could be claimed AND something is claiming it.
+  // A finished run gets nothing rather than a dead control; a cancelled one gets the way
+  // back; and a run whose process is gone gets the same way back rather than a stop
+  // button that would ask a process that no longer exists to please stop.
   const live = ['pending','running','cancelling'].includes(run.status);
+  if(isStranded(run))
+    return `<button id="resumerun" title="return the stranded tasks to the queue">resume run</button>
+            <span id="runnote" class="b b-warn">interrupted — no process is working on this</span>`;
   if(run.status === 'cancelled')
     return `<button id="resumerun" title="put the remaining tasks back in the queue">resume run</button>
             <span id="runnote" class="b b-warn">cancelled</span>`;

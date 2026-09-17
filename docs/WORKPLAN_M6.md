@@ -140,10 +140,10 @@ paddlewheel never needs it, and Fe₃-oxo and Zn₄O cannot be built without it.
 ## 6. The battery — partly built
 
 M5's cheapest move was fixtures before code, and a parallel session did that half already:
-**`data/reference/node_cases.tsv` is the interface for adding an M6 test case**, read by
-`tests/node_cases.py` and checked by `tests/test_placer_multicentre.py`, with `examples.zn4o`
-and its golden hashes landed alongside. Add a row and the whole set is re-checked; nothing in
-the test module needs changing. Same arrangement as `ligand_cases.tsv` one layer down.
+**`data/reference/node_cases.tsv` is the interface for adding an M6 case**, read by
+`tests/node_cases.py` and checked by `tests/test_m6_battery.py`, with `examples.zn4o` and its
+golden hashes landed alongside. Add a row and the whole set is re-checked; nothing in the test
+module needs changing. Same arrangement as `ligand_cases.tsv` one layer down.
 
 Two things about that table to keep in view. Its numbers are **typical of the named compound
 class, not a refinement of one deposited structure** — no CIF was consulted — which is why

@@ -404,21 +404,20 @@ class ChoiceVector:
 def construct(spec, *, seed) -> ConstructResult            # deterministic; emits choice_vector
 def enumerate_constructs(spec) -> Iterator[ConstructSpec]  # Kind-B/C branch tree, live-DOF gated
 
-# geometry/placer.py — the multicentre half -> M6.  SIGNATURES NOW IN THE CODE (bodies raise);
-# these are exact as of the M6 test-case prep, which is what forced each of them.
-@dataclass                    # `cn`/`local_geometry` have NO defaults: that is the Kind-C branch
+# geometry/placer.py — reconciliation (S3) -> M6.  SIGNATURES NOW IN THE CODE, bodies raise.
+@dataclass                    # element is NOT always a metal: a bridging atom is a centre (§4)
 class Center: element; cn; local_geometry; charge=0; oxidation_state=None; spin_class=None
-@dataclass                    # a BRIDGE is two Joins naming the same block — D14, nothing tags it
-class Join: center; block: LigandPlacement; site: int; mode; torsion_well
 @dataclass
 class InterCentreConstraint:                                   # note the British spelling
-    centres; mm_distance; mm_lo; mm_hi; bridge_bite_deg; metal_metal_bond
+    centres; mm_distance; mm_lo; mm_hi; bridge_bite_deg; metal_metal_bond   # the last = C10
     def window(self, *, tol=0.15) -> tuple[float, float] | None
 def place_multicentre(centers, joins, constraints, *, seed=0) -> PlacementResult
-def to_rdkit_multicentre(centers, joins, constraints, result) -> Chem.Mol
-# geometry/qc.py
-class BadIntercentre(NamedTuple): centres; distance; lo; hi; symbols; source
+#   `joins` is still UNTYPED.  WORKPLAN_M6 §7 lists `Join` as named-but-undefined, and what
+#   the placer receives from the join path is S3's call — so it stays undefined, not guessed.
+# geometry/qc.py — S6, in BadBond's shape one level up
+class BadIntercentre(NamedTuple): centres; distance; target; tol; symbols; source
 def check_intercentre(coords, constraints, *, metal_idxs, symbols=None) -> list[BadIntercentre]
+# multi-metal `to_rdkit` is S7 and is a WIDENING of the existing one, not a second function
 
 # geometry/templates.py — NOT WRITTEN.  M6's declared plan B (see §4)
 def node_template(name) -> TemplateNode          # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
@@ -530,8 +529,17 @@ section used to carry is done — both CN-5 polyhedra are in `site_vectors` and 
 **Ground-truth targets:** a battery, not one motif — paddlewheel, under-bridged Cu₂(µ-O₂CH)₂,
 its benzoate analogue, a pyrazolate dimer, Cu₂(µ-OH)₂, Fe₃(µ₃-O) in both valence patterns, and
 Zn₄O. Between them: both mechanisms, nuclearity 2/3/4, with and without an M–M bond,
-carboxylate and not, symmetric and mixed-valence. **Most of it has to be built** —
-`examples.ALL` holds 16 entries and Zn₄O is not among them (see §6).
+carboxylate and not, symmetric and mixed-valence. **Most of it has to be built** — see
+`WORKPLAN_M6.md` §6 for the row-by-row state.
+
+**The battery's targets are written down, and the first row of it is built** (S0(b)):
+`data/reference/node_cases.tsv` holds each cluster's mechanism, local geometry, M···M and the
+window it must land in. It is the interface for adding a case — add a row, no code changes —
+and `tests/test_m6_battery.py` checks the rows against each other and against the fixture
+graphs *before* anything builds them, so a typo in a target is not discovered as a clash out of
+a placer that is working correctly. `zn4o` is now in `examples.ALL`, which closes the one
+fixture §6 named as missing. The remaining battery rows, and the perception fixes
+[B13](BUGS.md#b13) and [B14](BUGS.md#b14) they depend on, are still S0(b) work.
 
 **Exit gate — the strong one:** the **sequential** route (Cu₂(µ-HCOO) + HCOO) and the
 **nucleus-first** route (declare the dimer, add bridges) reach **one** node with **two**

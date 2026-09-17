@@ -195,6 +195,34 @@ DEPTH_EXPR = ("(SELECT MIN(r.depth) FROM reactions r "
 
 # ── app ──────────────────────────────────────────────────────────────────────
 
+def sweep_stale_runs(db_path: Path, store_root: Path) -> list[dict]:
+    """Close out runs whose process is gone, once, as this server takes the database over.
+
+    A server starting is the clearest possible statement that the previous one is not
+    running any more, and a run it left mid-flight is the thing this page would otherwise
+    show as ongoing for ever.  Writing, so it happens HERE and not on the read path: the
+    viewer's contract is that a page load never writes, and a listing that repaired the
+    database as a side effect of being looked at would break it.
+
+    Failures are swallowed on purpose — this is housekeeping, and a registry that cannot
+    be swept (read-only file, a lock held elsewhere) is still a registry worth serving.
+    """
+    from mofsbu.registry import Registry
+    from mofsbu.registry.jobs import sweep_interrupted
+
+    try:
+        with Registry(Path(db_path), BlobStore(store_root)) as reg:
+            swept = sweep_interrupted(reg)
+    except Exception as exc:                                             # noqa: BLE001
+        print(f"  (could not check for interrupted runs: {type(exc).__name__}: {exc})")
+        return []
+    for item in swept:
+        print(f"  run {item['run_id']} is {item['now']} — {item['reason']}"
+              + (f"; {item['returned_claims']} task(s) returned to the queue"
+                 if item["returned_claims"] else ""))
+    return swept
+
+
 def create_app(db_path: Path, store_root: Path,
                active: "ActiveDatabase | None" = None) -> FastAPI:
     """Build the viewer app.  No server is started; tests use ``TestClient``.
@@ -214,6 +242,7 @@ def create_app(db_path: Path, store_root: Path,
     db_path = ensure_registry(Path(db_path), "created empty at viewer startup")
     active = active or ActiveDatabase(db_path)
     store = BlobStore(store_root)
+    sweep_stale_runs(db_path, store_root)
 
     app = FastAPI(
         title="mofsbu viewer",

@@ -319,7 +319,14 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         if not path.exists():
             raise HTTPException(404, f"{path} does not exist yet")
         active.switch(path)
-        return {"database": str(path), "name": path.name, "switched": True}
+        # Switching onto a database is this server taking it over, which is the same
+        # moment `create_app` sweeps for — a run left mid-flight by a process that is
+        # gone should not read as ongoing just because it is in the second database.
+        from mofsbu.ui.app import sweep_stale_runs
+
+        swept = sweep_stale_runs(path, store_path)
+        return {"database": str(path), "name": path.name, "switched": True,
+                "swept": swept}
 
     @router.post("/api/molecule/preview")
     def preview(payload: dict = Body(...)) -> dict[str, Any]:
@@ -483,9 +490,14 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         time, and the work happens on a thread here) AND written to the run row, so a
         stored run still says which hardware produced it.  A page that only applied it
         would leave every result unattributable.
+
+        The work is handed to `runner.execute_run`, which is the one place a worker pool
+        is built — so the count declared right above the submit button reaches the work
+        and not only the run row, and a run started from the page has the same shape as
+        the same spec started from a shell.
         """
         from mofsbu.registry import BlobStore, Registry
-        from mofsbu.runner import plan, work
+        from mofsbu.runner import execute_run, plan, plan_workers
 
         spec = _parse(payload.get("spec") or {})
         device = payload.get("device") or None
@@ -519,9 +531,13 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
 
             try:
                 with Registry(run_db, BlobStore(store_path)) as r2:
-                    work(r2, spec, run_id)
-                    relabel_all(r2)
-                    finish_run(r2, run_id)
+                    try:
+                        execute_run(r2, spec, run_id)
+                    finally:
+                        # Even a run whose workers died gets closed out, or the page
+                        # polls a row that says `running` for ever.
+                        relabel_all(r2)
+                        finish_run(r2, run_id)
                 running.pop(run_id, None)
             except Exception as exc:                               # noqa: BLE001
                 running[run_id] = f"{type(exc).__name__}: {exc}"
@@ -530,8 +546,11 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         threading.Thread(target=execute, daemon=True, name=f"mofsbu-run-{run_id}").start()
         from mofsbu.config import compute_device
 
+        pool = plan_workers(relaxes=spec.run_mode != "construct")
         return JSONResponse({"run_id": run_id, "tasks": n_tasks, "digest": spec.digest,
                              "database": run_db.name, "device": compute_device(),
+                             "workers": pool.total, "build_workers": pool.build,
+                             "relax_workers": pool.relax, "worker_note": pool.describe(),
                              "diagnostics": diagnostics}, status_code=202)
 
     def _ro():
@@ -563,6 +582,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                 spec = None
             item["diagnostics"] = json.loads(item.pop("diagnostics_json", "[]") or "[]")
             item["thread"] = running.get(run_id, "")
+            item["liveness"] = _liveness(shim, item)
             return {"run": item, "spec": spec,
                     "summary": outcome_summary(shim, run_id),
                     "planner_skips": get_diagnostics(shim, run_id)}
@@ -597,9 +617,15 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
 
     @router.post("/api/runs/{run_id}/resume")
     def resume_run_route(run_id: int) -> dict[str, Any]:
-        """Put a cancelled run's remaining tasks back in the queue."""
+        """Put a stopped run's remaining tasks back in the queue.
+
+        Sweeps this run first, so a run whose process died is resumable from the page
+        without waiting for the next server start: the sweep is what turns "claimed by a
+        pid that no longer exists" back into "pending", and a resume that skipped it
+        would revive a run whose in-flight tasks nobody can claim.
+        """
         from mofsbu.registry import BlobStore, Registry
-        from mofsbu.registry.jobs import resume_run
+        from mofsbu.registry.jobs import resume_run, sweep_interrupted
 
         from mofsbu.registry.jobs import task_counts
 
@@ -608,12 +634,13 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                                    (run_id,)).fetchone()
             if was is None:
                 raise HTTPException(404, f"no run {run_id}")
+            swept = sweep_interrupted(reg, run_id=run_id)
             revived = resume_run(reg, run_id)
             pending = task_counts(reg, run_id).get("pending", 0)
         note = (f"{pending} task(s) waiting — resubmit the spec to execute them"
                 if pending else "nothing left to do in this run")
         return {"run_id": run_id, "revived": revived, "was": was["status"],
-                "pending": pending, "note": note}
+                "swept": swept, "pending": pending, "note": note}
 
     @router.get("/api/runs/{run_id}/tasks")
     def get_run_tasks(run_id: int, status: str | None = None,
@@ -638,6 +665,27 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             return {"run_id": run_id, "total": total, "returned": len(rows), "tasks": rows}
         finally:
             con.close()
+
+    def _liveness(shim: "_ReadOnlyRegistry", item: dict[str, Any]) -> dict[str, Any] | None:
+        """Whether anything is still working on this run — computed, never stored.
+
+        Read-only, so it belongs on the read path: asking a pid whether it exists writes
+        nothing.  That matters because the alternative to asking is what the page used to
+        do, which is to believe the row — and a row is written by a process that is, by
+        definition, no longer able to correct it.
+
+        `None` for a run that has finished: there is nothing to be live about, and a
+        verdict on every row would make the ones that matter harder to see.
+        """
+        from mofsbu.registry.jobs import TERMINAL_RUN_STATUSES, run_liveness
+
+        if item.get("status") in TERMINAL_RUN_STATUSES:
+            return None
+        try:
+            return run_liveness(shim, int(item["id"]))
+        except Exception:                                            # noqa: BLE001
+            # An older registry with no heartbeat column must still list its runs.
+            return None
 
     @router.get("/api/runs")
     def list_runs(limit: int = 20) -> dict[str, Any]:
@@ -666,10 +714,12 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             out = []
             import json as _json
 
+            shim = _ReadOnlyRegistry(con)
             for row in rows:
                 item = dict(row)
                 item["thread"] = running.get(row["id"], "")
                 item["diagnostics"] = _json.loads(item.pop("diagnostics_json", "[]") or "[]")
+                item["liveness"] = _liveness(shim, item)
                 out.append(item)
             return {"runs": out}
         finally:

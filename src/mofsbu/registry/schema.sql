@@ -279,7 +279,13 @@ CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY,
     spec_digest TEXT NOT NULL,
     spec_json   TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed
+    status      TEXT NOT NULL DEFAULT 'pending',
+                    -- pending|running|done|failed|cancelling|cancelled|interrupted
+                    -- `interrupted` = no process is working on this any more and none
+                    -- said so: the shell was closed, the machine slept, the power went.
+                    -- Distinct from `cancelled` (asked for) and from `failed` (the work
+                    -- was done and the answer was bad), and unlike either it is the one
+                    -- status that means "this can simply be continued".
     note        TEXT NOT NULL DEFAULT '',
     host        TEXT NOT NULL DEFAULT '',
     -- Which accelerator this run was submitted under.  Ground rule 6 applied to
@@ -293,6 +299,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- outcome and must never be silent: "your filter matched nothing" and "it worked"
     -- have to look different from the outside.
     diagnostics_json TEXT NOT NULL DEFAULT '[]',
+    -- The last time a worker touched this run.  A run row cannot say whether anything is
+    -- still working on it — a process killed outright writes no ending — and "claimed 40
+    -- minutes ago" reads the same for a dead worker and for an xTB task that is genuinely
+    -- still running.  Stamped at every claim and every completion; NULL on rows written
+    -- before the column existed, which is honest rather than back-dated.
+    heartbeat_at TEXT,
     created_at  TEXT NOT NULL,
     finished_at TEXT
 );

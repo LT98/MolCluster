@@ -661,13 +661,19 @@ def to_rdkit(metal: str, ligands: list[LigandPlacement], result: PlacementResult
 
 @dataclass
 class Center:
-    """One coordination centre of a polynuclear node.
+    """One centre of a polynuclear node — and `element` is not always a metal.
+
+    A BRIDGING ATOM IS A CENTRE whose vertices are metal positions (WORKPLAN_M6 §4).  That
+    is the whole of mechanism B: a mu3-oxo has no covalent neighbour and so no lone-pair
+    axis to point at a second metal, but `trigonal` vertices at 1.90 A put three metals
+    3.291 A apart, which is the literature number.  Nothing here is metal-specific, which
+    is why this dataclass can carry both halves of a node.
 
     `cn` and `local_geometry` have no defaults on purpose (ground rule 5): which
-    polyhedron a metal sits in is precisely the ambiguity that has to branch rather than
-    be guessed, and a default here would be the guess.  The remaining fields are the
-    per-centre labels D12 insists on — a mixed-valence Fe3 node is three centres with
-    different `oxidation_state`, not one node with an average.
+    polyhedron a centre sits in is precisely the ambiguity that has to branch rather than
+    be guessed, and a default here would be the guess.  The rest are the per-centre labels
+    D12 insists on — a mixed-valence Fe3 node is three centres with different
+    `oxidation_state`, not one node with an average.
     """
 
     element: str
@@ -678,64 +684,33 @@ class Center:
     spin_class: str | None = None
 
 
-@dataclass
-class Join:
-    """One ligand donor attached to one centre.
-
-    A bridge is TWO of these naming the same `block` and different centres, which is what
-    keeps D14 true through the placer: nothing tags a ligand as bridging, its mu-ness is
-    counted from how many centres its joins reach.
-    """
-
-    center: int                                   # index into `centers`
-    block: LigandPlacement                        # the ligand being attached
-    #: Which of `block.donor_idxs` this join uses — a POSITION in that tuple, not an atom
-    #: index.  A bridging formate is `site=0` on one centre and `site=1` on the other.
-    site: int = 0
-    mode: BindingMode = BindingMode.MONODENTATE
-    torsion_well: int = 0
-
-
-def place_multicentre(centers: list[Center], joins: list[Join],
+def place_multicentre(centers: list[Center], joins: list,
                       constraints: list["InterCentreConstraint"], *, seed: int = 0):
-    """Place several coordination centres with inter-centre constraints.  NOT IMPLEMENTED.
+    """Reconcile the centres of a polynuclear node.  NOT IMPLEMENTED.
 
-    Ground rule 7: settled signature, scheduled body (M6, the plan's declared headline
-    cost).  `place_mononuclear` above is the N=1 path of exactly this operation — there is
-    no separate mononuclear code path to reconcile, which is the point of D12.
+    Ground rule 7: settled signature, scheduled body (M6, slice S3).
 
-    Needs: M-M distance and bridge bite-angle constraints solved jointly with each centre's
-    local geometry, plus `geometry.qc.check_intercentre`.
+    **This is not where a polynuclear node comes from (D20).**  A node is what a sequence
+    of joins produces, and M-M distance is an output to validate, not an input to impose:
+    a Cu paddlewheel builds QC-clean from well-1 site frames and `_linalg.kabsch` with no
+    solver anywhere.  What this function is for is the case where TWO determinants fix the
+    same M...M and disagree — an oxo-centred cluster, where the bridging centre asks for
+    3.291 A and the syn-syn carboxylate offers 2.696.  That is one scalar per edge, not a
+    general constrained optimisation, and the reconciliation is explicit policy with the
+    residual reported as strain, never a hidden average.
+
+    A skeleton that is DETERMINED is built, not searched.  An under-determined set must
+    raise `AmbiguousSpecError` naming what is missing rather than falling into a minimiser.
+
+    `joins` is deliberately untyped: what the placer receives from the join path is S3's
+    call, and WORKPLAN_M6 §7 lists the `Join` name in this signature as undefined.  It is
+    still undefined rather than guessed.
     """
     from mofsbu.assembly.join import NotBuiltYet
 
     raise NotBuiltYet(
         f"geometry.placer.place_multicentre ({len(centers)} centres) — M6. "
         "Use place_mononuclear for a single centre."
-    )
-
-
-def to_rdkit_multicentre(centers: list[Center], joins: list[Join],
-                         constraints: list["InterCentreConstraint"],
-                         result: PlacementResult) -> Chem.Mol:
-    """A placed polynuclear node as one RDKit mol.  NOT IMPLEMENTED.
-
-    The multi-centre counterpart of `to_rdkit`, and the reason it is a separate settled
-    signature rather than something M6 improvises: the exit gate is that a placed node
-    hashes to the hand-written fixture, and a hash needs a typed graph, so the placer is
-    only half of what the gate measures.  Going back through RDKit keeps that second half
-    on the same single conversion path everything else uses.
-
-    `constraints` is an argument here and not in `to_rdkit` because a METAL_METAL edge is
-    a CHEMICAL claim that no coordinate can supply: the Cu2 paddlewheel carries one at
-    2.62 A and the Fe3 trimer carries none at 3.29 A, and the two fixtures differ at L1
-    because of it.  See `InterCentreConstraint.metal_metal_bond`.
-    """
-    from mofsbu.assembly.join import NotBuiltYet
-
-    raise NotBuiltYet(
-        f"geometry.placer.to_rdkit_multicentre ({len(centers)} centres) — M6. "
-        "Use to_rdkit for a single centre."
     )
 
 
@@ -752,10 +727,12 @@ class InterCentreConstraint:
     mm_lo: float | None = None
     mm_hi: float | None = None
     bridge_bite_deg: float | None = None
-    #: Does this pair carry a METAL_METAL edge?  Not inferable from `mm_distance`: a
-    #: paddlewheel's Cu-Cu at 2.62 A is an edge and an Fe3-oxo trimer's Fe...Fe at 3.29 A
-    #: is not, and the two hand-written fixtures differ at L1 by exactly that edge.  A
-    #: placer that guessed it from distance would be guessing the identity of its product.
+    #: Does this pair carry a METAL_METAL edge?  **C10 is open** and this field is the
+    #: "declare" half of its leaning (branch or declare, never default).  Not inferable
+    #: from `mm_distance`: a paddlewheel's Cu-Cu at 2.62 A is an edge and an Fe3-oxo
+    #: trimer's Fe...Fe at 3.29 A is not, and the two hand-written fixtures differ at L1 by
+    #: exactly that edge.  `EdgeType.METAL_METAL` is in the certificate, so a placer that
+    #: guessed it from a distance threshold would be guessing the identity of its product.
     metal_metal_bond: bool = False
 
     def window(self, *, tol: float = 0.15) -> tuple[float, float] | None:

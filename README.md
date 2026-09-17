@@ -227,8 +227,18 @@ Three more things are **declared, never detected**, so a build cannot decide on 
 seize hardware or to switch theories:
 
     MOFSBU_PROFILE   laptop | workstation        # how many workers may run
+    MOFSBU_WORKERS   N                           # or say exactly how many
     MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP runs
     MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0     # WHICH MLIP; default mace-mp-0
+
+A run holds two kinds of work and they do not want the same hardware: construction
+(enumerate, embed, perceive, place, hash) scales with cores, while an ML relaxation on one
+card is one device's worth of work however many processes ask for it. So the declared
+workers are **divided**, not multiplied — on a declared accelerator one of them feeds the
+card and the rest keep building, which is what lets the two halves of a run overlap
+instead of queueing behind each other. On CPU there is no split: relaxation is core work
+like everything else. `MOFSBU_RELAX_WORKERS=N` states the division outright (`0` shares one
+pool, `2` for a second card). The builder page shows the division it will actually use.
 
 `ml_go` names a rung of the fidelity ladder, not a theory. **MACE-MP-0** (Materials
 Project) is blind to formal charge and spin, so the reference scheme refuses it on any
@@ -237,6 +247,23 @@ and spin multiplicity and is accepted. Their energies are on different scales an
 never subtracted from one another — the `methods` row records which model produced each
 number, and nothing compares energies across method rows. A spec may pin the model
 (`ml_model`), and that beats the environment. MACE-OMOL-0 needs `mace-torch>=0.3.14`.
+
+### A run that was killed rather than stopped
+
+A run row is written by a process, so the one thing it cannot record is that the process
+stopped existing — closing the terminal, `kill`, a crash and a flat battery all skip
+whatever cleanup was written for them. Such a run used to keep saying `pending` and the
+inspector had to believe it, while the tasks its worker held stayed claimed and could
+never be taken by anything else.
+
+So the state is **derived** instead. When a process takes a database over — a server
+starting, a run starting, a resume — anything nobody is working on any more is closed
+out: `interrupted` if there is work left (its stranded tasks go back in the queue and the
+run can be resumed), `done`/`failed` if the work was all finished and only the closing
+write was lost. "Nobody is working on it" means the processes that claimed its tasks are
+gone, checked by pid on the host that wrote them; where that cannot be checked — another
+machine, or Windows — the run is reported as unverified rather than assumed dead, and a
+run with a task genuinely in flight is never touched.
 
 ## Two-machine workflow (git is the bridge)
 
