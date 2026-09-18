@@ -72,7 +72,7 @@ charge, spin — travels with it in a `methods` row.
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
 | **assembly/** | | |
 | `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow`. A join takes `lone_pair=` — which lobe of an sp2 donor binds is worth 2.8 Å of M···M and has no default in the chemistry | ✅ |
-| ↳ `join_bridge` | one ligand across vertices of **different** metals in one move — the nucleus-first route. The sequential route needs no such thing (D20) | 🔴 **stub → M6 S1** |
+| ↳ `bridge_compatible` / `join_bridge` | one ligand across vertices of **different** metals in one move. Verdict is a **distance** (no common origin to subtend an angle at) and is necessary-not-sufficient — where the mismatch lands depends on the vertex axes, so `qc` is the arbiter | ✅ |
 | `assembly/choice.py` | `ChoiceVector`, canonical form, version-prefixed digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
 | `assembly/persist.py` | Stores an assembled block: L2 from its geometry, sites by inheritance, provenance. **Writes nothing itself** — orchestrates `registry.api` | ✅ |

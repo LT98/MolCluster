@@ -184,9 +184,9 @@ non-carboxylate, symmetric and mixed-valence.
 |---|---|
 | ~~`sites/model.py::perceive`~~ | ✅ **landed (S1)** — every lone pair is stored, `frame` is still lobe 0 byte for byte, and the rest travel under `frame["lone_pairs"]` with no schema change. `perception` bumped to `3` |
 | ~~`sites/frames.py::torsion_wells`~~ | ✅ **landed (S1)** — `_TWO_POINT_MODES` covers chelate and both bridges: a mode whose roll is an *output* of the fit must not branch over it, or it emits siblings with identical coordinates |
-| `sites/model.py::vacancy_sites` | a vacancy offers `mono` only, so `compatible` refuses `mu2` on the metal side |
-| `assembly/join.py::chelate_compatible` | refuses the two-different-metals case **by name** — that refusal is the new `bridge_compatible` |
-| `assembly/join.py::join_chelate` | hardcodes `vacancies[0].atom_idx` for both bonds, i.e. one metal. The µ2 bridge is the same body with two |
+| `sites/model.py::vacancy_sites` | a vacancy offers `mono` only. **Not blocking** — `bridge_compatible` checks the donors' modes, as `chelate_compatible` does — but `compatible` still refuses `mu2` by blaming the vacancy instead of naming `bridge_compatible` |
+| ~~`assembly/join.py::chelate_compatible`~~ | ✅ **landed (S1)** — `bridge_compatible` exists and refuses the same-metal case back, by name, pointing at `join_chelate`. Its verdict is a **distance**, and it is necessary-not-sufficient: qc stays the arbiter |
+| ~~`assembly/join.py::join_chelate`~~ | ✅ **landed (S1)** — `join_bridge` is that body with the two vertices on different metals: one DATIVE per donor to its OWN metal, no bisector slide, both lobes recorded |
 | ~~`assembly/join.py::join`~~ | ✅ **landed (S1)** — the `n_metals > 1` guard is gone under D20, and `lone_pair=` is a recorded coordinate. A bridged dimer now builds from two one-contact joins at 2.673 Å. `choice_vector` → `cv2` |
 | `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
@@ -309,12 +309,39 @@ carries — so nothing about a second centre makes the pose undetermined, and th
 output. `choice_vector` bumped to `cv2`: a key over a larger set of coordinates is a different
 key, and that is true even though lobe 0 replays every `cv1` path byte-identically.
 
-**Still owed:** `join_bridge` — one ligand across two vertices of *different* metals in **one**
-move, which is what a nucleus-first route needs and what the sequential route above does not.
-`chelate_compatible`'s named refusal becomes `bridge_compatible`, keeping the verdict shape but
-comparing a **distance** (donor-to-donor against vertex-to-vertex) rather than an angle, since
-the two vertices no longer share an origin to subtend one at. `vacancy_sites` has to offer
-`mu2` on the metal side before `compatible` will consider it.
+**`bridge_compatible` and `join_bridge` (landed third).** One ligand across two vertices of
+*different* metals in one move. The verdict keeps `chelate_compatible`'s shape but compares a
+**distance** — the donors' own separation against the separation the two target points require
+— because two vertices on two centres have no common origin to subtend an angle at.
+
+**Three things the building turned up, none of them in the plan:**
+
+* **The mismatch does not land where the chelate's does, and the tolerance had to be
+  re-derived because of it.** A chelate slides along its bisector so the residual goes into the
+  bite angle and the M–D bonds keep their length — deliberate, because bond lengths are what QC
+  checks. A bridge has no bisector, so where the residual goes falls out of the two vertex
+  axes. Measured: a **0.380 Å** span mismatch on a square-planar dimer produced Cu–O bonds of
+  **1.989 Å against a 1.980 target** — 0.009 Å, not the 0.190 a per-bond split predicts. It
+  went into the angles. So `MAX_BRIDGE_SPAN_MISMATCH_A` is QC's own bond tolerance used as a
+  **bound** ("a mismatch bigger than the slack one bond gets has nowhere to go"), not as a
+  derivation, and the constant says so.
+* **The verdict is necessary and not sufficient.** On a CN-6 dimer the *smallest* mismatch in
+  the whole candidate set — 0.183 Å, better than the square-pyramidal pair that builds cleanly
+  — puts the ligand's carbon 1.41 Å from the far metal and its far oxygen 0.76 Å from it. A
+  span test cannot see that, so a caller ranks on the verdict and then runs `qc`, which is
+  exactly what `chelate_reach` says one layer down. Pinned as a test rather than a caveat.
+* **The second bridge is not blocked after all — the earlier reading of the vertex-orientation
+  measurement was wrong.** A second formate places across a sequentially-built dimer and the
+  product is **QC-clean** at square-planar and square-pyramidal, two µ2 bridges on the graph.
+  What the arbitrary vertex orientation costs is not feasibility but *quality and choice*: the
+  usable pairs are accidents of where `site_vectors` happened to point, most cross-metal pairs
+  are refused, and nothing arranges four bridges at 90° around the M···M axis. That is still
+  S4's job; it is a worse paddlewheel rather than no second bridge.
+
+**Still owed:** `vacancy_sites` offers `mono` only. `bridge_compatible` does not consult it —
+it checks the donors' modes, as `chelate_compatible` does — so this is not blocking, but
+`compatible` still refuses `mu2` with "the vacancy does not bind it" where it should say that a
+bridge is two contacts on two metals and name `bridge_compatible`.
 
 **The two-point join is not invented here, it is generalised.** `join_chelate` already places
 one ligand across two vertices with one rigid move, absorbing the residual into the bite angle
@@ -328,9 +355,9 @@ vertex-to-vertex distance.
 *Exit:* ✅ the three bridging modes are separately enumerable and reproduce 2.67 / 5.15 /
 5.52 Å **through the assembly path**, not only from the frames; ✅ replay from the emitted
 vector is bit-identical; ✅ `join_chelate`'s own tests pass unchanged, because a chelate is the
-case where the two vertices happen to share a metal. Still owed with `join_bridge`: the
-paddlewheel and its benzoate analogue building QC-clean, and a span that cannot reach the
-vertices refusing **by name**.
+case where the two vertices happen to share a metal; ✅ a span that cannot reach the vertices
+refuses **by name and with its number**. Still owed: the **whole** paddlewheel and its benzoate
+analogue QC-clean — two bridges build, four need S4's vertex arrangement.
 
 ### S2 — mechanism B: the bridging atom as a centre · **M**
 
@@ -359,8 +386,22 @@ Two halves of one idea: **the caller says what the starting geometry leaves open
 Vacancy↔vacancy becomes a `METAL_METAL` join instead of a refusal. Its placement needs an M–M
 distance, which is a legitimate **input** here because a nucleus is being declared:
 `metal_metal_distance(m1, m2, *, motif) -> Distance` in `geometry/distances.py`, following
-`metal_donor_distance` exactly — curated table, covalent-radii fallback that marks itself
-`estimated` and says so in `source`.
+`metal_donor_distance`'s shape.
+
+**Called, 2026-09-18: there is no curated M–M table, and the caller states the number.** The
+two tempting sources both fail on inspection. `node_cases.tsv`'s Cr/Rh/Mo rows say in their own
+notes that they exist for this table — but that file's header says its `d_mm` values are
+*literature-typical for a compound class*, no CIF consulted, which is why every row carries a
+window; they are what a built node is measured **against**, and driving a placer from them
+would close the loop and make gate 4 compare a number with itself. A second curated TSV
+duplicating them would only move the problem and add two files to keep in step.
+
+So `metal_metal_distance` returns a covalent-radii estimate that marks itself `estimated`, and
+**raises rather than inventing a motif-specific number** — a quadruply-bonded Mo₂ at 2.09 Å and
+a Cu₂ paddlewheel at 2.62 Å are not the same question, and nothing in the elements distinguishes
+them. That is consistent rather than restrictive: D20 says a distance is an input only where it
+is *declared*, and a declaration comes from the caller, not from a table the caller did not
+write.
 
 And `place_mononuclear` learns to take **which vertices to reserve**. It currently fills them in
 its own order, so a CN-6 centre carrying four co-ligands comes back with its two vacancies
