@@ -197,21 +197,33 @@ def test_an_out_of_range_well_wraps_rather_than_failing(acetate):
 
 # ── the seam, and the refusals ───────────────────────────────────────────────
 
-def test_a_second_metal_completes_the_graph_and_stops_at_the_geometry(acetate):
-    """The paddlewheel's GRAPH is reachable from the assembly path before M6's placer is."""
+def test_a_second_metal_completes_the_graph_AND_the_geometry(acetate):
+    """D20: the bridged dimer EMERGES from two one-contact joins — nothing solved for it.
+
+    This used to be the M5/M6 seam and it raised here, on the premise that a two-centre
+    product needs a constrained placer. It does not. One donor onto one vertex is one
+    contact, and one contact is satisfied by a rigid move of the donor's block whatever
+    either block already contains, so the pose is determined and the M···M that falls out
+    is a measurement rather than an input.
+
+    `with_geometry=False` still works and still yields a graph-only product — that is the
+    caller who wants an identity without paying for coordinates, not a fallback.
+    """
     bridging = first_join(acetate, metal_block(cn=4, geometry="tetrahedral")).block
     free_donor = bridging.open_donors()[0]
     second = metal_block("Cu", 2, 4, "square_planar")
 
-    with pytest.raises(NotBuiltYet, match="place_multicentre"):
-        join(bridging, second, free_donor, second.open_vacancies()[0])
-
-    result = join(bridging, second, free_donor, second.open_vacancies()[0],
-                  with_geometry=False)
+    result = join(bridging, second, free_donor, second.open_vacancies()[0])
     assert len(result.block.graph.metals()) == 2
-    assert result.block.geometry is None
+    assert result.block.geometry is not None
     assert l1_graph_hash(result.block.graph)                 # an identity is derivable
     assert result.choice_vector["op"] == "join"
+
+    graph_only = join(bridging, second, free_donor, second.open_vacancies()[0],
+                      with_geometry=False)
+    assert graph_only.block.geometry is None
+    assert (l1_graph_hash(graph_only.block.graph)
+            == l1_graph_hash(result.block.graph))
 
 
 def test_a_graph_only_product_refuses_to_call_its_sites_open(acetate):

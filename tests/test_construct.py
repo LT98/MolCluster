@@ -9,13 +9,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mofsbu._types import AmbiguousSpecError, NotBuiltYet
+from mofsbu._types import AmbiguousSpecError
 from mofsbu.assembly.construct import (
     GEOMETRIES_FOR_CN, construct, enumerate_constructions, geometry_branches,
     ligand_block, metal_block, metal_block_branches, replayable, resolve_geometry)
 from mofsbu.assembly.join import grow
 from mofsbu.geometry.embed import embed_molecule
-from mofsbu.graph.from_mol import mol_from_smiles
+from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.identity.keys import l1_graph_hash
 
 
@@ -78,6 +78,21 @@ def test_multiplicity_is_derived_from_the_spin_class_not_defaulted():
     """A high-spin Fe(III) is a sextet. A module that preaches "do not guess" may not."""
     assert metal_block("Fe", 3, cn=6, spin_class="hs").graph.multiplicity == 6
     assert metal_block("Fe", 3, cn=6, spin_class="ls").graph.multiplicity == 2
+
+
+def test_a_metal_is_labelled_the_same_way_by_every_producer():
+    """B12: charge is graph-level (D15), so a metal's per-atom `formal_charge` is 0.
+
+    `NodeLabel.key()` emits that field and the certificate hashes it, so a producer that
+    wrote the oxidation state there instead gave one species a second L1 — D2's "one node,
+    two routes" broken at the producer rather than at the join.
+    """
+    block = metal_block("Cu", 2, cn=4, geometry="square_planar", spin_class="hs")
+    read = from_rdkit(mol_from_smiles("[Cu+2]"), charge=2, multiplicity=2,
+                      oxidation_states={0: 2}, spin_classes={0: "hs"})
+    assert block.graph.label(0).key() == read.label(0).key() == "Cu/+0/+2/hs"
+    assert l1_graph_hash(block.graph) == l1_graph_hash(read)
+    assert block.graph.charge == 2          # the +2 is still there, once, on the graph
 
 
 def test_a_ligand_with_no_conformer_is_refused():
@@ -157,12 +172,28 @@ def test_degree_beyond_one_needs_geometry(zn, aqua):
         enumerate_constructions(zn, [aqua], degree=2, with_geometry=False)
 
 
-def test_growth_onto_a_second_centre_still_waits_for_the_placer(zn, acetate):
-    """The S3 seam is not softened by being reached through the enumerator."""
+def test_growth_onto_a_second_centre_builds_and_the_separation_is_an_output(zn, acetate):
+    """D20: a second centre is reached, not refused — and nothing imposed its distance.
+
+    This is the seam M5 drew and M6 moved. One donor onto one vertex is ONE contact, and
+    one contact is satisfied by a rigid move of the donor's block however many metals
+    either block already carries, so the geometry is determined and the Zn···Cu that comes
+    out is a *measurement of what the joins did*. What still needs `place_multicentre` is
+    the case this path does not take: two contacts at once across centres whose separation
+    two determinants disagree about.
+    """
     second = metal_block("Cu", 2, cn=4, geometry="square_planar")
     bridged = enumerate_constructions(zn, [acetate], degree=1).leaves[0].block
-    with pytest.raises(NotBuiltYet, match="place_multicentre"):
-        enumerate_constructions(bridged, [second], degree=1)
+    tree = enumerate_constructions(bridged, [second], degree=1)
+    assert tree.leaves, f"every branch was refused: {tree.refusals}"
+
+    product = tree.leaves[0].block
+    g, coords = product.graph, product.geometry
+    metals = [i for i in g.nodes() if g.label(i).is_metal]
+    assert len(metals) == 2
+    rows = {node: k for k, node in enumerate(g.nodes())}
+    d = float(np.linalg.norm(coords[rows[metals[0]]] - coords[rows[metals[1]]]))
+    assert d > 2.0, f"the two centres came out {d:.2f} A apart, which is not a geometry"
 
 
 # ── replay ───────────────────────────────────────────────────────────────────

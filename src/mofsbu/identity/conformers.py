@@ -40,7 +40,7 @@ from mofsbu.geometry._linalg import kabsch
 # ── C2, called ───────────────────────────────────────────────────────────────
 #
 # Measured, not chosen: 12 xTB-relaxed structures over 4 choice vectors x 3 embedding
-# seeds, pairwise core-RMSD, `docs/WORKPLAN_M5.md` S6 for the full table.  RAW constructs
+# seeds, pairwise core-RMSD; D21 in the design ledger carries the table.  RAW constructs
 # could not set this number — a join is deterministic, so their Kind-A spread is
 # identically zero and there is no peak to sit above.  Relaxation is what re-introduces
 # it: two samples of one choice vector walk to almost, not exactly, one minimum.

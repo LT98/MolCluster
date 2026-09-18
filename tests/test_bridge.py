@@ -9,6 +9,12 @@ The numbers here are the calibration, not decoration: the four lobe combinations
 formate's two oxygens are the three textbook carboxylate bridging modes, and they are
 separated by more than a bond length.  A test that only asserted "there are two lobes"
 would pass on two lobes that pointed the same way.
+
+Two layers, measured separately and required to agree.  What the FRAMES imply is the
+first half; what two ordinary `join` calls actually BUILD is the second, and they land on
+the same four numbers.  That agreement is D20 in its smallest form — a bridged dimer is
+not placed by a solver, it is what a sequence of one-contact joins leaves behind, and its
+M...M is an output to validate rather than an input to impose.
 """
 from __future__ import annotations
 
@@ -17,9 +23,11 @@ import json
 import numpy as np
 import pytest
 
-from mofsbu.assembly.join import _transform_frame
+from mofsbu.assembly.construct import construct, ligand_block, metal_block
+from mofsbu.assembly.join import _transform_frame, compatible, join
 from mofsbu.geometry._linalg import axis_rotation
 from mofsbu.geometry.distances import metal_donor_distance
+from mofsbu.geometry.embed import embed_molecule
 from mofsbu.sites.frames import BindingMode, LiveDOF, live_dof, lone_pair_frames, torsion_wells
 from mofsbu.sites.model import frame_lobes, perceive
 from mofsbu.graph.from_mol import mol_from_smiles
@@ -167,6 +175,114 @@ def test_a_rigid_move_carries_every_lobe_with_it(formate):
     def angle(frames):
         return float(np.dot(np.array(frames[0]["axis"]), np.array(frames[1]["axis"])))
     assert angle(after) == pytest.approx(angle(before), abs=1e-12)
+
+
+# ── the same three modes, reached through the assembly path ──────────────────
+#
+# The section above measures what the FRAMES imply.  This one measures what two ordinary
+# `join` calls actually build, and the two agreeing is the point: a bridge is not a new
+# operation, it is a sequence of one-contact joins whose M...M is an output (D20).
+
+
+def bridged_dimer(lobe_a: int, lobe_b: int, smiles: str = "[O-]C=O"):
+    """Formate onto one Cu, then its free oxygen onto a second.  Two ordinary joins."""
+    ligand = ligand_block(embed_molecule(mol_from_smiles(smiles), seed=7),
+                          charge=-1, name="bridge")
+    donors = sorted((s for s in ligand.open_donors()
+                     if s.donor_type == "carboxylate_O"), key=lambda s: s.atom_idx)
+    first_metal = metal_block("Cu", 2, cn=4, geometry="square_planar")
+    first = join(ligand, first_metal, donors[0], first_metal.open_vacancies()[0],
+                 lone_pair=lobe_a)
+
+    free = next(s for s in first.block.open_donors()
+                if s.atom_idx == first.atom_map[donors[1].atom_idx])
+    second_metal = metal_block("Cu", 2, cn=4, geometry="square_planar")
+    return join(first.block, second_metal, free, second_metal.open_vacancies()[0],
+                lone_pair=lobe_b)
+
+
+def metal_separation(block) -> float:
+    g, coords = block.graph, block.geometry
+    rows = {node: k for k, node in enumerate(g.nodes())}
+    m1, m2 = g.metals()
+    return float(np.linalg.norm(coords[rows[m1]] - coords[rows[m2]]))
+
+
+@pytest.mark.parametrize("lobes, expected, mode", [
+    ((1, 1), 2.673, "syn-syn"),
+    ((0, 1), 5.148, "syn-anti"),
+    ((1, 0), 5.148, "anti-syn"),
+    ((0, 0), 5.516, "anti-anti"),
+])
+def test_the_assembly_path_reaches_every_bridging_mode(lobes, expected, mode):
+    """Separately enumerable, and each one lands where its frames said it would.
+
+    Nothing here imposes a Cu···Cu. The two joins each satisfy one contact by a rigid
+    move, and the separation is read off the product afterwards — which is what makes it
+    a validation rather than a constraint (D20).
+    """
+    result = bridged_dimer(*lobes)
+    assert len(result.block.graph.metals()) == 2
+    assert metal_separation(result.block) == pytest.approx(expected, abs=1e-3), mode
+
+
+def test_the_syn_syn_route_lands_on_the_paddlewheel_separation():
+    """The one measurement M6 exists to reach, against the literature and with margin."""
+    syn_syn = metal_separation(bridged_dimer(1, 1).block)
+    others = [metal_separation(bridged_dimer(*w).block)
+              for w in ((0, 0), (0, 1), (1, 0))]
+    assert abs(syn_syn - PADDLEWHEEL_CU_CU) < 0.10, (
+        f"syn-syn built Cu...Cu {syn_syn:.3f} A against a literature {PADDLEWHEEL_CU_CU}")
+    assert min(others) - syn_syn > 2.0
+
+
+def test_the_lobe_is_recorded_so_a_replay_reproduces_it_rather_than_the_default():
+    """A choice that did not travel in the vector would silently replay as lobe 0 —
+    which is a different structure wearing the original's provenance, and 2.8 A away."""
+    result = bridged_dimer(1, 1)
+    assert result.choice_vector["donor"]["lone_pair"] == 1
+
+    ligand = ligand_block(embed_molecule(mol_from_smiles("[O-]C=O"), seed=7),
+                          charge=-1, name="bridge")
+    metal = metal_block("Cu", 2, cn=4, geometry="square_planar")
+    donor = sorted((s for s in ligand.open_donors()
+                    if s.donor_type == "carboxylate_O"), key=lambda s: s.atom_idx)[0]
+    step = dict(join(ligand, metal, donor, metal.open_vacancies()[0],
+                     lone_pair=1).choice_vector, partner=0)
+    again = construct(ligand, [metal], [step])
+    assert again.steps[0]["donor"]["lone_pair"] == 1
+    assert np.array_equal(
+        again.block.geometry,
+        join(ligand, metal, donor, metal.open_vacancies()[0], lone_pair=1).block.geometry)
+
+
+def test_a_donor_with_one_lobe_ignores_the_index_rather_than_failing():
+    """An aqua has one direction, so `lone_pair=1` is not an error — it is the same bond.
+
+    The index wraps over what the donor ACTUALLY offers, so a caller enumerating lobes
+    uniformly across a mixed donor set does not have to special-case the determined ones.
+    """
+    water = ligand_block(embed_molecule(mol_from_smiles("O"), seed=7), charge=0,
+                         name="aqua")
+    donor = water.open_donors()[0]
+    metal = metal_block("Zn", 2, cn=4, geometry="tetrahedral")
+    a = join(water, metal, donor, metal.open_vacancies()[0], lone_pair=0)
+    b = join(water, metal, donor, metal.open_vacancies()[0], lone_pair=1)
+    assert np.array_equal(a.block.geometry, b.block.geometry)
+    assert b.choice_vector["donor"]["lone_pair"] == 0
+    assert a.compatibility.lone_pairs == 1
+
+
+def test_the_verdict_says_a_choice_is_being_made():
+    """Two real lobes and no default: the verdict reports the branch rather than hiding
+    it behind whichever one `perceive` happened to store first."""
+    ligand = ligand_block(embed_molecule(mol_from_smiles("[O-]C=O"), seed=7),
+                          charge=-1, name="formate")
+    metal = metal_block("Cu", 2, cn=4, geometry="square_planar")
+    donor = next(s for s in ligand.open_donors() if s.donor_type == "carboxylate_O")
+    verdict = compatible(donor, metal.open_vacancies()[0], partner="Cu", donor_element="O")
+    assert verdict.lone_pairs == 2
+    assert "lone_pair" in verdict.reason
 
 
 # ── a two-point mode does not branch its torsion ─────────────────────────────

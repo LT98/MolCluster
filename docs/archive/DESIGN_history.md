@@ -10,6 +10,109 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
+- *(M6/S0)* **D20, D24 and D25 — the polynuclear calls, made before the placer exists.**
+  Three decisions M6 could not start without, and the first of them reverses the plan's own
+  estimate of where the milestone's cost lives.
+
+  * **D20 — the multi-centre placer is not the headline cost.** §6.1 had said it was, in the
+    same breath as "done right the first time", so it had been carried unexamined since the
+    schema was drawn. Measured against the battery, a Cu paddlewheel builds QC-clean and
+    matches its M2 fixture at both L0 and L1 with **no solver anywhere** — the sp2 donor's
+    second lone-pair well, `kabsch`, the curated distance table and the existing `qc` are
+    the whole of it. What the battery *did* turn up is narrower and was not in the plan at
+    all: there are **two bridge mechanisms** and only the multi-atom one was supported, and
+    for oxo-centred clusters two independent determinants fix the same M···M and disagree by
+    about half an ångström. So `place_multicentre` survives for a reason that can be
+    measured (Fe₃ 0.595 Å, Zn₄O 0.491 Å) rather than for a reason that was assumed, and it
+    is one scalar per edge, not a constrained optimisation. The superseded text is the last
+    bullet of §6.1, struck there rather than deleted.
+
+    The reframing has a cost and it is stated in the ledger rather than discovered later:
+    the rigid-ligand model is **wrong by ~0.5 Å** on oxo-centred clusters. Real structures
+    close that gap in the ligand — the O–C–O angle opens — and a rigid one cannot, so the
+    residual is reported as strain and left for relaxation. Averaging the two determinants
+    was specifically refused: it would store a number neither of them asked for, and it
+    would make a known limitation invisible.
+
+  * **D24 (C9) — multiplicity is stated.** Found by the two ground-truth fixtures
+    disagreeing: `cu_paddlewheel` declares 1 where `combined_multiplicity` gives 3, and
+    `fe3_mu3_oxo` declares 16 where it agrees. The tempting read is that one fixture is
+    wrong. The right read is that **the rule has a precondition** — unpaired electrons add
+    when the centres are independent — and two d⁹ Cu(II) 2.6 Å apart are not. Coupling is
+    not recoverable from the centres, so it is a Kind-C declaration, and the multicentre
+    path requires it the way `from_rdkit` already does. Both fixtures then come out correct.
+
+  * **D25 (C10) — an M–M edge is declared.** Reached twice, independently, which is the
+    strongest evidence a gate is real: from the code side, because `EdgeType.METAL_METAL` is
+    in the certificate and a threshold applied silently is a guessed identity; and from the
+    data side, by the parallel session that built `node_cases.tsv` and gave `mm_bond` its own
+    column with the note that it is "a chemical decision, NOT derivable from d_mm". The Fe₃
+    trimer has no edge at 3.29 Å and the paddlewheel has one at 2.62 Å, and the fixtures
+    differ at L1 by exactly that.
+
+  Two things about the battery worth keeping. Its targets are **typical of the named
+  compound class, not a refinement of a deposited structure** — no CIF was consulted — which
+  is why every row carries a window and the tests treat them as a shape check; narrowing one
+  against the CSD is a separate, per-row job. And the reference table and the `@m6` gates
+  arrived from a parallel session *before* any placer existed, which is what made D20
+  callable on measurements instead of on the estimate it replaced.
+
+- *(M6/S0)* **B12 closed: `metal_block` labelled a metal differently from every other
+  producer.** Details in [`BUGS_resolved.md`](BUGS_resolved.md). The part worth recording
+  here is what it says about coverage rather than about the bug: the fix moved **no test and
+  no golden hash**, because every stored hash descends from `examples.py` and nothing had
+  ever asserted on an identity that came out of the enumerator. D2's claim — one node, two
+  routes — was being tested along one route. The fix therefore ships with a
+  producer-agreement test pinning the label string itself, which is the assertion that would
+  have caught it.
+
+- *(M5 closeout)* **D21, D22, D23 — the three calls M5 made in code and never wrote down.**
+  Recorded when M6 started, because M6 adds ledger entries and a ledger that is behind the
+  code is worse than no ledger.
+
+  * **D21 — θ_geom = 0.15 Å.** The calibration's first result is that it **could not be done
+    where the plan said to do it**: at RAW the Kind-A spread is identically zero over 105
+    pairs, because a join is a deterministic function of its choice vector and absorbs the
+    ligand's embedding noise completely. There is no stochastic peak to sit above, and a
+    threshold placed there would be calibrated against no noise. Relaxation re-introduces it
+    and the valley is then 0.61 Å wide with nothing in it. The number is the geometric mean
+    of the two bounds, and both bounds ship as named constants beside it so the threshold
+    cannot drift away from the data that set it.
+
+    **The calibration paid for itself by finding a defect instead of a number.** The first
+    run put Kind A at a median of 1.20 Å — wider than most of Kind B, which would have made
+    the exercise meaningless. One product pair had its pyridine ring carbons 2.3 Å apart
+    while the coordinating N moved 0.15 Å: the ligand was bound in the right place and
+    *rotated about the M–N axis*. `_place_donor_block` was matching axes and discarding the
+    frames' `ref` vectors, so the roll was settled by `rotation_between`'s minimal rotation,
+    which depends on how the ligand happened to be oriented in its own coordinate file.
+    Re-embedding rotates a ligand rigidly, so one choice vector gave different rolls. That is
+    precisely what `sites/frames.py` opens by saying a lone outward vector cannot do — the
+    join was using the vector half of the frame it was handed. Frame onto frame through an
+    orthonormal triad: Kind-A spread 1.56 Å → 0.0000 Å.
+
+    C2's energy half stays open on purpose. The Kind-A *energy* spread reached 16.6 kcal/mol
+    between samples whose cores agreed to 0.03 Å, all of it outside the core, because the
+    rigid-core rule cuts a delocalised carboxylate C–O as rotatable (B9). Setting a window
+    from that would bake a known defect into a stored threshold.
+
+  * **D22 — where a tag is derived, and what is never backfilled.** The blocking version of
+    this question dissolved on inspection: `put_structure` calls `l2_isomer_tag(g)` with no
+    coordinates and nothing in `src/` passed `l2=`, so building the classifier split
+    nothing and the corpus was untouched. What survives is smaller and real — the builder
+    holds the coordinates, so it derives the tag, and `store_block`'s `l2=` override exists
+    for the run pipeline, which passes `""` deliberately so its products land on the same
+    node every other route reaches. Also folded in: the choice-vector digest is **not**
+    backfilled either, and the contrast with L2 is the point — a digest is an annotation
+    nothing points at, an identity is an address the provenance DAG points at. Re-derive
+    annotations; version addresses.
+
+  * **D23 — `MAX_BITE_MISMATCH_DEG = 40°`.** What makes this not folklore is that the two
+    populations it separates are far apart and are *themselves* pinned by a test: the common
+    chelators sit within 12° of an octahedral cis pair and every one of them misses a trans
+    pair by 88° or more. Anything from ~35 to ~60 draws the same line, so the constant is
+    reported as taken from the low half of a wide interval rather than as a measurement.
+
 - *(M4 follow-up)* **Perception is resonance-invariant; the `site_catalog` seam below is
   closed.** The filed job was to stop perception reading bond order, and the shape of the
   fix is that **a delocalised oxo-acid is one donor, not several oxygens**:

@@ -39,6 +39,7 @@ import pytest
 
 import fixtures as fx
 from mofsbu.assembly.join import NotBuiltYet
+from mofsbu.energy.backends import combined_multiplicity
 from mofsbu.geometry.distances import BASE_MO, base_distance
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.geometry.placer import Center, InterCentreConstraint, place_multicentre, site_vectors
@@ -283,6 +284,26 @@ def test_the_fe3_target_is_held_together_without_a_metal_metal_edge():
     assert len(g.metals()) == 3
     assert not any(t is EdgeType.METAL_METAL for _i, _j, t in g.edges())
     assert g.max_bridge_class().value == "mu3"
+
+
+def test_multiplicity_is_declared_because_coupling_is_not_derivable(golden_path):
+    """D24: two centres' unpaired electrons add only if the centres are independent.
+
+    The two fixtures disagree about the additive rule and both are right — which is the
+    whole of the decision. Whether two d⁹ Cu(II) give a singlet or a triplet is exchange
+    coupling, and it is not recoverable from the centres, so the multicentre path requires
+    a stated multiplicity instead of computing one. Multiplicity is in L0, so deriving it
+    would file the paddlewheel under a key its own fixture does not have.
+    """
+    golden = json.loads(golden_path.read_text())["l0"]
+
+    assert combined_multiplicity(2, 2) == 3            # two doublet d⁹ centres, if free
+    assert fx.cu_paddlewheel().multiplicity == 1       # AF-coupled, and declared
+    assert golden["cu_paddlewheel"].endswith("_s1|Cu(+2,hs),Cu(+2,hs)")
+
+    fe3 = fx.fe3_mu3_oxo((3, 3, 3))                    # three sextets, and additive
+    assert combined_multiplicity(6, 6, 6) == fe3.multiplicity == 16
+    assert "_s16|" in golden["fe3_mu3_oxo_333"]
 
 
 def test_the_zn4o_target_reaches_four_metals_through_one_oxygen():

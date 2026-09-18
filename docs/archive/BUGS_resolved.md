@@ -12,6 +12,49 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B12 — `metal_block` gave a metal a formal charge nothing else does ✅
+
+**`correctness` · `assembly/construct.py` · found while planning M6, fixed in S0.**
+
+`graph.from_mol.from_rdkit` sets a metal's `formal_charge` to **0** — D15 puts charge on the
+graph, not on the atom — and `examples.py` writes its metals the same way.
+`assembly.construct.metal_block` wrote `formal_charge=oxidation_state`.
+
+That string is not decoration: `NodeLabel.key()` emits `element/formal_charge/oxidation_state/
+spin_class` for a metal, and `graph.canon._cert_entries` hashes it. Measured 2026-09-16 on a
+two-Cu fragment identical but for that field:
+
+| metal label | L1 |
+|---|---|
+| `Cu/+0/+2/hs` | `ef2229b65dcd3f97…` |
+| `Cu/+2/+2/hs` | `b63727cfed06a87a…` |
+
+So the same species reached through the runner (placer → `to_rdkit` → `from_rdkit`) and through
+the enumerator (`metal_block`) landed on two different nodes. **That is D2's central claim — one
+node, two routes — broken at the producer**, and it had not bitten only because nothing had yet
+built the same species both ways.
+
+**Fixed** by making `metal_block` write 0. The oxidation state is already carried in its own
+label field, so nothing is lost and the charge stops being counted twice (atom, *and*
+`TypedGraph.charge`). Gate:
+`tests/test_construct.py::test_a_metal_is_labelled_the_same_way_by_every_producer` pins the
+label string itself — `Cu/+0/+2/hs` — against `from_rdkit`'s, so the two producers cannot
+drift apart again silently.
+
+**What the fix turned up: the whole suite was blind to it.** 683 tests passed before and
+after, and no golden hash moved, because every stored hash descends from `examples.py` and
+nothing asserted on a `metal_block` identity. A correctness bug that no test can see is a
+correctness bug that will be reintroduced, which is why the fix ships with a producer-agreement
+test rather than with a hash update.
+
+**It moves identities, and the cost is the one already accepted for [B2](../BUGS.md#b2).** Rows
+written under the old behaviour keep their stored hash and are never re-derived (ground rule 6
+/ D19), so the same species can occupy two rows across the change. In practice the cost was not
+paid: `metal_block` has no caller in `src/` or `scripts/` — the enumerator is reached from tests
+only — so no stored row descends from it.
+
+---
+
 ## Runner, issue #32 — a GPU relaxed while one core built for it ✅
 
 **Reported as** "process utilization unoptimized": with a GPU declared for the ML rung, the

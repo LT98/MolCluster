@@ -1,7 +1,7 @@
 {
   "algo_versions": {
     "canonical_order": "ir1",
-    "choice_vector": "cv1",
+    "choice_vector": "cv2",
     "descriptor_tables": "1",
     "ease_model": "floor1",
     "energy_backends": "2",
@@ -9,7 +9,7 @@
     "l0_composition": "1",
     "l1_certificate": "cert1",
     "l2_isomer_tag": "iso1",
-    "l3_conformer_id": "0-stub",
+    "l3_conformer_id": "conf1",
     "perception": "3",
     "placement": "2",
     "reference_scheme": "balanced1",

@@ -71,8 +71,9 @@ charge, spin — travels with it in a `methods` row.
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
 | **assembly/** | | |
-| `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow` | ✅ |
-| `assembly/choice.py` | `ChoiceVector`, canonical form, `cv1:` digest, JSON round trip | ✅ |
+| `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow`. A join takes `lone_pair=` — which lobe of an sp2 donor binds is worth 2.8 Å of M···M and has no default in the chemistry | ✅ |
+| ↳ `join_bridge` | one ligand across vertices of **different** metals in one move — the nucleus-first route. The sequential route needs no such thing (D20) | 🔴 **stub → M6 S1** |
+| `assembly/choice.py` | `ChoiceVector`, canonical form, version-prefixed digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
 | `assembly/persist.py` | Stores an assembled block: L2 from its geometry, sites by inheritance, provenance. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
 | **registry/** | | |
@@ -167,12 +168,12 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 
 ## 6. Known seams
 
-Three places where the code is internally consistent and still reports something misleading.
+Two places where the code is internally consistent and still reports something misleading.
 Full diagnosis and current measurements in `BUGS.md`; one line each here.
 
 | | Seam | Bites when |
 |---|---|---|
-| [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` everywhere, so cis and trans are one `structures` row | M5 fills it in and **splits identities** — decide backfill-vs-version first |
+| [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` on every stored row, so cis and trans are one `structures` row | the classifier exists and `store_block` derives a tag where it has coordinates, but the run pipeline passes `l2=""` **on purpose** (D22) so its products land on the node every other route reaches. Both paths tag together or neither |
 | [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
 
 *Closed, and both worth reading before touching perception: `site_catalog` was not a pure

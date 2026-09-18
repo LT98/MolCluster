@@ -27,13 +27,24 @@ ALGO_VERSIONS: dict[str, str] = {
     # the cis/trans split sits.  Structures tagged under a different version are not
     # comparable at L2 and are never re-labelled (ground rule 6).
     "l2_isomer_tag":   "iso1",    # M5/S5 — cis/trans, fac/mer, Delta/Lambda (D10)
-    "l3_conformer_id": "0-stub",  # M5
+    # The L3 label is provenance-primary (D11): the choice vector names the conformer and
+    # geometry only verifies.  So this version covers both halves — what `core_atoms` calls
+    # the rigid core, and theta_geom, the clustering threshold that collapses stochastic
+    # duplicates (D21).  Rows written under `0-stub` carry no label at all rather than a
+    # different one, so they are not comparable and are never re-derived (ground rule 6).
+    "l3_conformer_id": "conf1",   # M5/S6 — choice-vector label + geometric verifier
     # How a choice vector becomes a key: what is dropped (seed, a self-referential
     # digest), how floats are quantised, how it serialises.  It prefixes the digest it
     # produces rather than living in a column, because a choice digest is not part of an
     # address — see `assembly.choice`.  Bump it and every later digest stops comparing
     # equal to the ones already stored, which is the intended and only honest outcome.
-    "choice_vector":   "cv1",     # M5/S1 — the L3 label's producer (D11, D13)
+    # 2: a join records WHICH LONE PAIR the metal bound.  An sp2 donor has two in-plane
+    #    lobes and they are 2.8 A apart in the M...M they imply, so the same recorded path
+    #    under `cv1` is a path that did not say which one it took — it took lobe 0 because
+    #    that was the only one selectable, which replays correctly and is not the same
+    #    statement as choosing it.  Every digest moves, which is the honest outcome: a key
+    #    over a larger set of coordinates is a different key.
+    "choice_vector":   "cv2",     # M6/S1 — the L3 label's producer (D11, D13)
     # 2: the MACE backends became a family (MP-0 / OMOL-0).  A method row now records
     #    `training_set`, and `spin_blind` alongside `charge_blind`, so a stored ML number
     #    says which foundation model made it instead of only "mace".  Old rows keep
