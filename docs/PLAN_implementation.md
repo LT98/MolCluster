@@ -21,7 +21,7 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 | | |
 |---|---|
 | **Done** | M0 rails · M1 descriptors · M2 graph + identity · M3 registry · M3.5 viewer · M4 sites · **M5 assembly** |
-| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped. Route-level evaluation and the policy deciding what gets QM are not built, and the regression gate has no recorded result. [`WORKPLAN_M7.md`](WORKPLAN_M7.md) carries the slice-level detail |
+| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped. Route-level evaluation is not built, nothing decides what is worth computing, and the regression gate has no recorded result. [`WORKPLAN_M7.md`](WORKPLAN_M7.md) carries the slice-level detail |
 | **Next** | **M6** polynuclear nodes — the first milestone that builds a real SBU. `WORKPLAN_M6.md` carries the slice-level detail |
 | **Then** | M8 pathways (the actual contribution) · M9 folded in opportunistically |
 
@@ -557,16 +557,20 @@ while recording that the risk it guards has largely retired.
 
 ---
 
-### M7 — Energy backends, route evaluation, and what to spend QM on · **M–L remaining**
+### M7 — Energy over a route, with the decision points left open · **M remaining**
 
 **Re-scoped — see [`WORKPLAN_M7.md`](WORKPLAN_M7.md).** This section described what is left
 as an exit gate: re-run two archived datasets and record the result. That is a test, not a
-capability. Two capabilities are missing. Energies can be evaluated for one reaction at a
-time and nothing walks a route, so there is no way to ask what a *route* costs. And
-`runner.queue_relax` relaxes everything that was built — `estimate` reports
-`relaxations = builds` — so nothing decides which candidates are worth quantum mechanics.
-The archived Ni/Fe BTC work becomes the labelled set those capabilities are measured
-against. The "S remaining" size below applies to the gate alone and is superseded.
+capability. What is missing is route-level evaluation — `reaction_balanced_energy` scores one
+reaction and nothing composes steps, so there is no way to ask what a *route* costs — and
+anywhere to decide what is worth computing: `runner.queue_relax` relaxes everything that was
+built, and `estimate` reports `relaxations = builds`.
+
+**M7 builds the evaluation and only the seams for the decisions.** Everything is still
+evaluated: no pruning, no ranking, four named decision points with naive defaults that
+reproduce today's behaviour. What a real policy reads and how it scores is deferred until
+there is something to measure it against; barrier proxy, sink detection and ranking stay M8
+(C6, C7). The "S remaining" size below applies to the gate alone and is superseded.
 
 **Built already** (revs 16, 19, 20, 22) — `energy/backends.py` (xTB via tblite, MACE-MP-0,
 MACE-OMOL-0, Null) behind one protocol; a `MethodSpec` on every stored number;
@@ -662,7 +666,7 @@ resolved only in your head is how the two documents drift apart.
 |---|---|
 | *(today)* | store, dedupe, query and **see** every structure built; ask a stored structure what sites it has, which are open, and which are worth spending QM on; build a mononuclear structure from stored blocks and rebuild it exactly from its provenance (M5) |
 | M6 | build real SBUs — paddlewheels, µ₃-oxo trimers, Zn₄O — not just mononuclear nodes, and be told which formation route cannot reach one |
-| M7 | ask what a whole **route** costs, not just one reaction, and have the run spend its QM on the candidates worth it rather than on all of them |
+| M7 | ask what a whole **route** costs, not just one reaction — with the decision points for spending QM selectively in place, and every one of them still answering "compute it" |
 | M8 | compare two synthesis routes to the same product and say which is more viable, and why |
 
 ---
