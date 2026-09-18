@@ -21,7 +21,7 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 | | |
 |---|---|
 | **Done** | M0 rails · M1 descriptors · M2 graph + identity · M3 registry · M3.5 viewer · M4 sites · **M5 assembly** |
-| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped; the regression exit gate has a harness and no recorded result |
+| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped; the regression exit gate has a harness and no recorded result. [`WORKPLAN_M7.md`](WORKPLAN_M7.md) carries the slice-level detail |
 | **Next** | **M6** polynuclear nodes — the first milestone that builds a real SBU. `WORKPLAN_M6.md` carries the slice-level detail |
 | **Then** | M8 pathways (the actual contribution) · M9 folded in opportunistically |
 
