@@ -1,4 +1,4 @@
-# Completed plan — milestones M0–M4, decided architecture, and the full changelog
+# Completed plan — milestones M0–M5, decided architecture, and the full changelog
 
 **Archive.** Nothing here is scheduled work. `PLAN_implementation.md` is the active plan
 (remaining milestones, open gates, live risks); this file is where a milestone goes once its
@@ -8,7 +8,7 @@ Read this when you need to know *what was already decided and why* — the groun
 §0 of the active plan are the short version, and these are the receipts.
 
 **Contents**
-1. [Completed milestones](#1-completed-milestones) — M0, M1, M2, M3, M3.5, M4
+1. [Completed milestones](#1-completed-milestones) — M0, M1, M2, M3, M3.5, M4, M5
 2. [Interface architecture](#2-interface-architecture-decided-and-built) — the inputs/outputs split
 3. [Salvage ledger](#3-salvage-ledger--what-happened-to-legacy)
 4. [Changelog](#4-changelog) — rev 1 → rev 23
@@ -185,6 +185,67 @@ the wrong question here". C7 deliberately left open — the floor is partner-fre
   and perception is per ATOM. Both are right and they are different layers — whether two donors
   can chelate is a property of the **pair**, which is the pocket layer's question, not the
   donor's.
+
+---
+
+### M5 — Recursive assembly (N=1 path of the general operation) · **L**
+
+**Work** — `assembly/block.py`, `join.py` (frame-alignment compatibility + join), `choice.py`
+(ChoiceVector, digest, replay), `construct.py` (deterministic construct + branch-tree enumerator),
+atom-map site inheritance, and `identity/l2_isomer_tag` filled in for real.
+
+**Decision gate: C2** — θ_geom (RMSD on rigid core + coordination sphere) and the energy window.
+This is the first milestone that actually *manufactures* conformers, so it is the first point the
+numbers are forced. Suggested way to set them rather than guess: build the fixture set, plot the
+pairwise core-RMSD distribution, and put θ_geom in the valley between the stochastic-duplicate peak
+(Kind A) and the real-branch peak (Kind B) — i.e. calibrate from data you now have.
+
+**Exit gate — the three headline validations:**
+1. ✅ **One node, two routes:** a structure built in two different orders lands on **one** L1 node
+   with two incoming provenance edges. (This is the D2 claim, tested.)
+2. ✅ **cis/trans survive:** anthrarufin–Cu cis and trans persist as distinct records carrying
+   different choice-vectors, and are **not** merged by geometric clustering even when
+   near-degenerate (this is D10/D11 tested — the discriminator is relevance, not ΔE).
+3. ✅ **Replay:** reconstructing from a stored `(choice_vector, seed)` reproduces coordinates
+   within tolerance. If this fails, stored conformers are frozen coordinates, not regenerable
+   objects.
+
+Plus: `construct` on an ambiguous spec (CN not determined) **raises/branches** rather than
+defaulting.
+
+**Status: met.** S1–S7 built, all three gates pass in `tests/test_m5_exit_gates.py`.
+
+**C2 came out half-called, and the half that was refused is the more interesting one.** θ_geom
+= 0.15 Å (**D21**), calibrated on xTB-relaxed geometries because RAW constructs turned out to
+have *no* stochastic spread to calibrate against — a join is a deterministic function of its
+choice vector. The energy window is deliberately unset: the only measurement available is
+contaminated by the rigid-core defect ([B9](../BUGS.md#b9)), and a window set from it would
+bake that defect into a stored threshold.
+
+**Its bookkeeping landed late, at M6/S0** — D21, D22 and D23 written up, and
+`ALGO_VERSIONS["l3_conformer_id"]` taken off `"0-stub"` to `conf1`. Recorded here because it
+is the one process failure this milestone had: the code was right and the ledger was a
+milestone behind it, which is exactly the drift the two-document split exists to prevent.
+
+**Carried out of M5 — unbuilt, so not bugs (see `BUGS.md`'s scope note). M6 owns the last
+two:**
+
+* **The L3 energy window is unset.** Half of C2. Blocked on `BUGS.md` B9 rather than on missing
+  data.
+* **Symmetry collapse in the enumerator.** 405 leaves over 5 distinct L1 at CN 6 degree 2. The
+  enumerator deliberately does not merge leaves sharing an L1 (cis and trans share one too); now
+  that L2 and θ_geom both exist, the collapse they were waiting for is buildable.
+* **Driving the enumerator from the run pipeline** for `degree > 1` (S4.1). `runner.plan` still
+  refuses it, now because the pipeline does not drive the *tree* rather than because the tree
+  does not exist. The **ladder** is driven: `spec.pathways` plans the rung below each product
+  and joins the step between them, which is S4.1 for the one shape a mononuclear sweep makes.
+* **Which vertices an intermediate leaves empty is not chosen.** `place_mononuclear` fills
+  vertices in its own order, so a CN-6 centre carrying four co-ligands comes back with its two
+  empty vertices **trans** — and a chelating ligand that subtends ~90° cannot reach them, so
+  that rung's step is refused (`chelate_cannot_span`) with the measurement in the task row. The
+  ladder therefore connects the unsaturated series but not the co-ligand-saturated one. The fix
+  is for the placer to take the vertices to reserve, which is placer work, not pathway work —
+  and it is M6/S4, where a bridge needs the same thing for the same reason.
 
 ---
 

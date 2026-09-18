@@ -20,8 +20,13 @@ Where the milestone stands:
   vertices of one centre.  DONE.  The verdict it places under is distance geometry (can a
   rigid ligand reach both vertices at their own bond lengths) rather than the pocket's
   frame-implied bite, and the difference matters — see `chelate_reach`.
-* `geometry.placer.place_multicentre` — inter-centre constraints (M-M distance, bridge
-  bite angle).  The plan's declared headline cost (M6).
+* `geometry.placer.place_multicentre` — RECONCILIATION, for the edges where two
+  determinants fix one M...M and disagree (D20).  Not a prerequisite for a polynuclear
+  product: a one-contact join is a rigid move however many metals either block carries,
+  so a bridge EMERGES from a sequence of them and its M...M is an output to validate.
+* `bridge_compatible()` / `join_bridge()` — one ligand across vertices of DIFFERENT
+  metals in one move.  DONE (M6/S1).  Its verdict is a DISTANCE where the chelate's is an
+  angle, because two vertices on two centres have no common origin to subtend one at.
 """
 from __future__ import annotations
 
@@ -35,13 +40,14 @@ from mofsbu._types import AmbiguousSpecError, AtomMap, MofsbuError, NotBuiltYet
 from mofsbu.energy.backends import combined_multiplicity
 from mofsbu.graph._types import EdgeType, TypedGraph
 from mofsbu.geometry.distances import metal_donor_distance
+from mofsbu.geometry.qc import METAL_BOND_TOL as QC_METAL_BOND_TOL
 from mofsbu.geometry._linalg import (
     angle_between as _angle_deg, axis_rotation as _axis_rotation,
     rotation_between as _rotation_between, unit as _unit,
 )
 from mofsbu.sites.frames import BindingMode, torsion_wells
 from mofsbu.sites.inherit import inherit_sites, merge_inherited
-from mofsbu.sites.model import Site
+from mofsbu.sites.model import Site, frame_lobes
 from mofsbu.sites.state import refresh_state
 
 
@@ -50,8 +56,8 @@ from mofsbu.sites.state import refresh_state
 #: it from here.  Every existing `from mofsbu.assembly.join import NotBuiltYet` still
 #: works, and none of them has to care that the definition moved.
 __all__ = ["BuildingBlock", "Compatibility", "IncompatibleJoin", "JoinResult",
-           "NotBuiltYet", "chelate_compatible", "chelate_reach", "compatible", "grow",
-           "join", "join_chelate"]
+           "NotBuiltYet", "bridge_compatible", "chelate_compatible", "chelate_reach",
+           "compatible", "grow", "join", "join_bridge", "join_chelate"]
 
 
 @dataclass(frozen=True)
@@ -132,6 +138,11 @@ class Compatibility:
     mode: str = BindingMode.MONODENTATE.value
     wells: tuple[float, ...] = ()
     d_ml: float | None = None
+    #: How many in-plane lobes the donor offers — the size of the OTHER discrete branch a
+    #: join chooses from, alongside the torsion well.  One for a donor whose direction its
+    #: bonding fixes; two for an sp2 donor, and for those two the choice is worth 2.8 A of
+    #: M...M (the difference between a syn-syn bridge and an anti-anti one).
+    lone_pairs: int = 1
 
 
 #: How far a ligand's bite angle may sit from the separation of the two vertices it is
@@ -149,6 +160,23 @@ MAX_BITE_MISMATCH_DEG = 40.0
 #: named a partner.  Same default, for the same reason, as `sites.model.chelate_pockets`:
 #: the bite ANGLE is what the verdict turns on, and it moves very little with this number.
 NOMINAL_D_ML = 2.0
+
+#: How far a bridging ligand's donor-donor span may sit from the span its two target
+#: points require.  Deliberately not a new number — it is `geometry.qc.check_metal_bonds`'
+#: tolerance — but it is a BOUND rather than a derivation, and the difference is measured.
+#:
+#: A mismatch has to go somewhere, and where it goes depends on the two vertex axes.  When
+#: they point along the span it lands on the M-D bond lengths; when they are near-parallel
+#: (which is what a sequentially-built dimer offers, its two polyhedra being in unrelated
+#: orientations) the span runs perpendicular to both bonds, and a 0.380 A mismatch came out
+#: as Cu-O 1.989 against a 1.980 target — 0.009 A, not the 0.190 a per-bond split would
+#: predict.  It went into the angles instead.  So this cannot be read as "each bond is off
+#: by half"; what it says is that a mismatch larger than the slack QC allows one bond
+#: cannot be absorbed by anything, whichever coordinate absorbs it.
+#:
+#: That makes the verdict NECESSARY AND NOT SUFFICIENT, which `bridge_compatible` says in
+#: as many words.  QC remains the arbiter.
+MAX_BRIDGE_SPAN_MISMATCH_A = QC_METAL_BOND_TOL
 
 
 @dataclass(frozen=True)
@@ -179,9 +207,27 @@ class IncompatibleJoin(MofsbuError):
         self.verdict = verdict
 
 
-def _frame_of(site: Site) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """`(origin, axis, ref)` from a site's stored frame, or None if it has none."""
-    frame = site.frame
+def _lone_pairs(site: Site) -> int:
+    """How many directions this donor offers.  One for anything its bonding determines.
+
+    The count IS the answer to "can this atom bridge on its own" (`lone_pair_frames`),
+    and it is the size of the Kind-B branch a join chooses from.
+    """
+    return max(len(frame_lobes(site.frame)), 1)
+
+
+def _frame_of(site: Site, lone_pair: int = 0
+              ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """`(origin, axis, ref)` from a site's stored frame, or None if it has none.
+
+    `lone_pair` selects among an sp2 donor's in-plane lobes; 0 is the stored `frame`
+    itself, so every existing caller reads exactly what it always read.  Which lobe binds
+    is a discrete choice with no default answer in the chemistry — it is the difference
+    between a syn-syn bridge and an anti-anti one — so it is an index into a set, the same
+    shape as a torsion well (D13).
+    """
+    lobes = frame_lobes(site.frame)
+    frame = lobes[lone_pair % len(lobes)] if lobes else None
     if not frame or "axis" not in frame or "origin" not in frame:
         return None
     return (np.asarray(frame["origin"], dtype=float),
@@ -290,12 +336,19 @@ def compatible(a: Site, b: Site, *, partner: Any | None = None,
         d_ml = metal_donor_distance(metal, donor_element).value
 
     wells = torsion_wells(donor.donor_type, BindingMode(mode))
+    lobes = _lone_pairs(donor)
     notes = []
     frame = _frame_of(donor)
     if frame is None:
         notes.append("donor has no frame (perceived without a geometry), so the verdict "
                      "is from roles and modes alone")
-    elif (donor.frame or {}).get("mode") == "fallback":
+    elif lobes > 1:
+        # Not a refusal and not a preference: both lobes are real, and this says so
+        # rather than letting the caller assume the stored frame is the only direction.
+        notes.append(f"this donor offers {lobes} in-plane lone pairs, so `lone_pair=` is "
+                     "a choice with no default answer in the chemistry — the metal goes "
+                     "where the caller puts it")
+    if frame is not None and (donor.frame or {}).get("mode") == "fallback":
         # Not a refusal.  A fallback frame is a real answer from a donor with no
         # neighbours to orient it, and the caller should know the axis was inferred from
         # the molecule's centroid rather than from bonding.
@@ -305,7 +358,8 @@ def compatible(a: Site, b: Site, *, partner: Any | None = None,
               f"this alignment exactly, so there is no residual strain to report")
     if notes:
         reason += " — " + "; ".join(notes)
-    return Compatibility(True, 0.0, reason, mode=mode, wells=wells, d_ml=d_ml)
+    return Compatibility(True, 0.0, reason, mode=mode, wells=wells, d_ml=d_ml,
+                         lone_pairs=lobes)
 
 
 def chelate_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
@@ -392,6 +446,118 @@ def chelate_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
                          d_ml=d[0] if metal is not None else None)
 
 
+def _bridge_roles(donors: Sequence[Site], vacancies: Sequence[Site],
+                  ) -> Compatibility | None:
+    """The structural refusals, or None if this pairing is a bridge at all.
+
+    Separated from the geometry because none of these is a placement that could be
+    improved by moving anything — the same split `chelate_reach` makes when it passes an
+    infinite-strain pocket verdict straight through.
+    """
+    mode = BindingMode.BRIDGE_MU2.value
+    if donors[0].atom_idx == donors[1].atom_idx:
+        return Compatibility(
+            False, float("inf"),
+            f"both donors are atom {donors[0].atom_idx}; one atom bridging two metals is "
+            "a SINGLE-atom bridge, which is mechanism B and a different operation — the "
+            "bridging atom is a centre there, not a pair of donors", mode=mode)
+    if vacancies[0].atom_idx == vacancies[1].atom_idx:
+        return Compatibility(
+            False, float("inf"),
+            f"both vertices are on metal {vacancies[0].atom_idx}; one ligand across two "
+            "vertices of ONE centre is a chelate, not a bridge — use join_chelate",
+            mode=mode)
+    for donor in donors:
+        if mode not in donor.binding_modes:
+            return Compatibility(
+                False, float("inf"),
+                f"{donor.donor_type} does not bridge; it offers "
+                f"{', '.join(donor.binding_modes)}", mode=mode)
+    return None
+
+
+def bridge_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
+                      partner: Any | None = None,
+                      donor_elements: Sequence[str] | None = None,
+                      lone_pairs: Sequence[int] = (0, 0),
+                      tolerance: float = MAX_BRIDGE_SPAN_MISMATCH_A) -> Compatibility:
+    """Can this donor pair span two vertices on DIFFERENT metals?
+
+    The µ2 verdict, and the shape of the question changes with the mechanism.  A chelate
+    is judged on an ANGLE — its two vertices share an origin, so "how far apart are they"
+    is something they subtend at their common metal, and `join_chelate` can absorb a
+    mismatch by tilting the ligand about that centre while keeping both bonds at length.
+
+    A bridge has no common origin.  Its two target points are each fixed outright by their
+    own metal's vertex axis and their own M-D distance, so the only question left is a
+    DISTANCE: the ligand's donors are a rigid `|p1 - p2|` apart and the targets are
+    `|t1 - t2|` apart, and a rigid body either matches that or does not.
+
+    **This is a necessary condition and not a sufficient one, which is worth stating
+    because the tempting reading is the other one.**  A mismatch has to go somewhere, and
+    where depends on the two vertex axes rather than on the number: measured on a
+    sequentially-built Cu dimer, whose polyhedra sit in unrelated orientations, a 0.380 A
+    span mismatch produced Cu-O bonds of 1.989 A against a 1.980 target — it went into the
+    angles almost entirely, not the lengths.  On the same dimer at CN 6 a *smaller*
+    mismatch (0.183 A) placed the ligand's carbon 1.41 A from the far metal, which is a
+    clash and not a bridge.  So the span test cannot rank candidates on its own and QC
+    stays the arbiter; what the tolerance says is only that a mismatch bigger than the
+    slack QC allows one bond has nowhere at all to go.
+
+    Frames are required and their absence RAISES, for `chelate_compatible`'s reason: the
+    verdict is derived from them, and "unknown" reported as "impossible" is the mistake
+    `BuildingBlock.open_sites` already refuses to make.
+    """
+    if len(donors) != 2 or len(vacancies) != 2:
+        raise ValueError(
+            f"a mu2 bridge spans exactly two donors and two vertices; got {len(donors)} "
+            f"and {len(vacancies)}. A mu3/mu4 bridge is ONE donor on three or four "
+            f"metals, which is mechanism B and a different operation.")
+    mode = BindingMode.BRIDGE_MU2.value
+    refusal = _bridge_roles(donors, vacancies)
+    if refusal is not None:
+        return refusal
+
+    lobes = tuple(lone_pairs) + (0, 0)
+    frames = [_frame_of(s, lobes[k]) for k, s in enumerate(donors)]
+    frames += [_frame_of(s) for s in vacancies]
+    if any(f is None for f in frames):
+        raise ValueError(
+            "bridge compatibility is computed FROM the frames — the donors' separation on "
+            "the ligand side, the vertices' target points on the metal side — and at "
+            "least one site has none. Perceive with a geometry (or load the stored "
+            "frames) before asking; a missing frame is an unknown answer, not a negative "
+            "one.")
+    (p_1, _, _), (p_2, _, _), (m_1, v_1, _), (m_2, v_2, _) = frames
+
+    metal = _metal_symbol(partner)
+    if metal is not None and donor_elements is not None and len(donor_elements) == 2:
+        d = [metal_donor_distance(metal, el).value for el in donor_elements]
+    else:
+        d = [NOMINAL_D_ML, NOMINAL_D_ML]
+    t_1, t_2 = m_1 + d[0] * v_1, m_2 + d[1] * v_2
+
+    offered = float(np.linalg.norm(p_2 - p_1))
+    required = float(np.linalg.norm(t_2 - t_1))
+    mismatch = abs(required - offered)
+    feasible = mismatch <= tolerance
+    d_mm = float(np.linalg.norm(m_2 - m_1))
+    reason = (
+        f"the vertices want their donors {required:.3f} A apart and this ligand holds "
+        f"them {offered:.3f} A apart, so it "
+        f"{'can reach' if feasible else 'cannot reach'} both: {mismatch:.3f} A of span "
+        f"mismatch against a {tolerance:.2f} A tolerance. Necessary and not sufficient — "
+        f"where the mismatch lands depends on the vertex axes, so run qc on the product. "
+        f"The two centres are {d_mm:.3f} A apart, which is reported and NOT judged: "
+        f"whether that separation is right is `qc.check_intercentre`'s question and this "
+        f"one is only whether a rigid ligand reaches across it")
+    return Compatibility(feasible, mismatch / tolerance, reason, mode=mode,
+                         wells=torsion_wells(donors[0].donor_type,
+                                             BindingMode.BRIDGE_MU2),
+                         d_ml=d[0] if metal is not None else None,
+                         lone_pairs=max(_lone_pairs(donors[0]), _lone_pairs(donors[1])))
+
+
 def _coords_of(block: BuildingBlock, label: str) -> np.ndarray | None:
     """A block's coordinates as an (n_atoms, 3) array, in its own atom order.
 
@@ -469,7 +635,7 @@ def _merged_graph(a: TypedGraph, b: TypedGraph, name: str,
 
 
 def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
-         mode: str = "mono", torsion_well: int = 0, seed: int = 0,
+         mode: str = "mono", torsion_well: int = 0, lone_pair: int = 0, seed: int = 0,
          with_geometry: bool = True) -> JoinResult:
     """Join two blocks at a pair of sites and return the product.
 
@@ -493,12 +659,21 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
     difference is that the product can still answer "what bound here, and how easily did
     it activate", which is what a reaction edge needs to explain itself.
 
-    **The M5/M6 seam.**  A product with two or more metal centres gets its graph, its atom
-    maps, its inherited sites and its choice vector — everything an identity, a registry
-    row and a provenance edge need — and then raises `NotBuiltYet` at the geometry step,
-    naming `place_multicentre`.  Pass `with_geometry=False` to take the graph-level product
-    and stop there, which is how a paddlewheel's GRAPH is reachable from the assembly path
-    before the placer that can position one exists.
+    **Which lone pair the metal binds is a choice, and it is this caller's.**  An sp2
+    donor has two in-plane lobes pointing in genuinely different directions, and for a
+    carboxylate bridging two metals the choice is worth 2.8 A of M...M — anti-anti at
+    5.516, syn-anti at 5.148, syn-syn at 2.673, which is the paddlewheel.  `lone_pair` is
+    an index into the set the donor actually offers, wrapped modulo its size, and it
+    travels in the choice vector so a replay reproduces the lobe rather than the default.
+    A donor whose direction its bonding determines has one lobe and ignores it.
+
+    **A multi-centre product is no longer a stopping point (D20).**  One donor onto one
+    vertex is one contact, and one contact is satisfied by a rigid move of the donor's
+    block whatever either block already contains — so the geometry is determined and the
+    M...M that results is an OUTPUT, which is the whole of the emergence claim.  What
+    still needs `place_multicentre` is the case this function does not do: two contacts
+    that must be satisfied at once across centres whose separation two determinants
+    disagree about.
     """
     pair = _roles(site_a, site_b)
     if pair is None:
@@ -540,12 +715,13 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
 
     wells = verdict.wells or (0.0,)
     well_deg = wells[torsion_well % len(wells)]
+    lobe = int(lone_pair) % max(verdict.lone_pairs, 1)
     d_ml = verdict.d_ml if verdict.d_ml is not None else NOMINAL_D_ML
     choice_vector = {
         "op": "join", "mode": mode,
         "torsion_well": int(torsion_well) % len(wells), "torsion_deg": well_deg,
         "donor": {"atom": donor_site.atom_idx, "type": donor_site.donor_type,
-                  "element": donor_element,
+                  "element": donor_element, "lone_pair": lobe,
                   "block": donor_block.structure_id},
         "vacancy": {"atom": vacancy_site.atom_idx, "slot": vacancy_site.slot,
                     "metal": metal_element, "block": metal_block.structure_id},
@@ -556,18 +732,10 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
 
     donor_sites = donor_block.sites
     coords = None
-    n_metals = len(product.metals())
     if with_geometry:
-        if n_metals > 1:
-            raise NotBuiltYet(
-                f"this join makes a {n_metals}-centre product, and positioning one needs "
-                f"geometry.placer.place_multicentre (M6): the M-M distance and the bridge "
-                f"bite angle have to be solved together with each centre's local "
-                f"geometry, which single-centre alignment cannot do. The graph, the atom "
-                f"maps, the inherited sites and the choice vector are all derivable — "
-                f"pass with_geometry=False to take them.")
         coords, donor_sites = _place_donor_block(
-            donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg)
+            donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg,
+            lone_pair=lobe)
 
     sites = merge_inherited(
         inherit_sites(donor_sites, map_donor),
@@ -593,7 +761,7 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
 
 
 def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_site: Site,
-                       *, d_ml: float, well_deg: float,
+                       *, d_ml: float, well_deg: float, lone_pair: int = 0,
                        ) -> tuple[np.ndarray | None, tuple[Site, ...]]:
     """Rigidly move the donor's block onto the vacant vertex.  The N=1 alignment.
 
@@ -601,12 +769,15 @@ def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_sit
     argument for a frame over a vector:
 
     1. the donor atom lands at `metal + d_ml * vertex_axis`;
-    2. its outward axis points back at the metal (antiparallel to the vertex axis);
+    2. its chosen lone-pair axis points back at the metal (antiparallel to the vertex
+       axis).  WHICH lobe that is comes from the caller, because an sp2 donor's two are
+       genuinely different directions and nothing in the donor decides between them;
     3. the roll about the new bond is the chosen torsion WELL, not whatever the arithmetic
        happened to leave — an index into a discrete set, so it replays exactly.
     """
     coords = _coords_of(donor_block, "the donor block")
-    donor_frame, vacancy_frame = _frame_of(donor_site), _frame_of(vacancy_site)
+    donor_frame = _frame_of(donor_site, lone_pair)
+    vacancy_frame = _frame_of(vacancy_site)
     if coords is None or donor_frame is None or vacancy_frame is None:
         missing = ("coordinates" if coords is None else
                    "a donor frame" if donor_frame is None else "a vacancy frame")
@@ -656,6 +827,9 @@ def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
 
     Both vertices are consumed; both donors are inherited and become `OCCUPIED` off the
     product's dative bonds — the same split `join` documents, for the same reason.
+
+    Both vertices are on ONE metal — `chelate_compatible` refuses the other case by name,
+    and that refusal is where a µ2 bridge begins.
     """
     if len(sites_a) != 2 or len(sites_b) != 2:
         raise ValueError(
@@ -722,13 +896,7 @@ def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
 
     donor_sites = donor_block.sites
     coords = None
-    n_metals = len(product.metals())
     if with_geometry:
-        if n_metals > 1:
-            raise NotBuiltYet(
-                f"this join makes a {n_metals}-centre product, and positioning one needs "
-                f"geometry.placer.place_multicentre (M6). Pass with_geometry=False to take "
-                f"the graph, the atom maps, the inherited sites and the choice vector.")
         coords, donor_sites = _place_chelating_block(donor_block, donors, vacancies,
                                                      distances=distances)
 
@@ -753,6 +921,187 @@ def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
                             state=state),
         atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
         partner_atom_map=map_b, compatibility=verdict)
+
+
+def join_bridge(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+                sites_b: Sequence[Site], *, lone_pairs: Sequence[int] = (0, 0),
+                seed: int = 0, with_geometry: bool = True) -> JoinResult:
+    """One ligand across two vertices on DIFFERENT metals — the µ2 bridge (M6/S1).
+
+    `join_chelate`'s body with one assumption relaxed, which is the whole of mechanism A:
+    that function binds both donors to `vacancies[0].atom_idx`, and here the two vertices
+    belong to two centres.  Everything else it does is the same operation.
+
+    **What differs is that there is nowhere chosen for the residual to go.**  A chelate's
+    two vertices share an origin, so a span mismatch can be tilted into the bite angle
+    while both M-D bonds keep their length — `_place_chelating_block` slides along the
+    bisector to do exactly that, deliberately, because bond lengths are what QC checks.
+    Two vertices on different metals have no bisector and no common centre: both target
+    points are fixed outright, the fit is the best rigid compromise between them, and
+    which coordinate absorbs the difference falls out of the vertex axes rather than being
+    chosen.  `bridge_compatible` bounds the mismatch beforehand; **qc decides whether the
+    result is a bridge**, and on an unfavourable vertex pair it has to.
+
+    **Which lone pair each donor uses is the caller's choice**, and it is the choice that
+    selects the bridging mode: syn-syn is what holds a paddlewheel together at 2.67 A and
+    anti-anti is an extended chain at 5.52.  Both are recorded in the choice vector.
+
+    The two centres' separation is an OUTPUT here as everywhere else (D20) — this places a
+    ligand across a distance the metals already have; it does not set one.  A route that
+    wants to *declare* the separation is a nucleus-first route and states the number
+    itself (S4).
+    """
+    if len(sites_a) != 2 or len(sites_b) != 2:
+        raise ValueError(
+            f"a bridge join takes two sites on each block; got {len(sites_a)} and "
+            f"{len(sites_b)}. One donor onto one vertex is `join`; one donor onto three "
+            f"or four metals is a single-atom bridge and is mechanism B.")
+    a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
+    if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
+        roles = [("vacancy" if s.is_vacancy else "donor") for s in (*sites_a, *sites_b)]
+        raise IncompatibleJoin(Compatibility(
+            False, float("inf"),
+            f"this pairing is not two donors on one block and two vertices on the other "
+            f"(got {', '.join(roles)}): a bridge join puts two donors from one block on "
+            f"vertices of two DIFFERENT metals on the other",
+            mode=BindingMode.BRIDGE_MU2.value))
+    donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
+    donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
+    for pair, block, which in ((donors, donor_block, "donor"),
+                               (vacancies, metal_block, "vacancy")):
+        for site in pair:
+            if site not in block.sites:
+                raise ValueError(
+                    f"a {which} site is not on the block it was passed with. "
+                    f"`join_bridge(a, b, sites_a, sites_b)` reads sites_a off a and "
+                    f"sites_b off b; swapping them builds an atom map onto the wrong "
+                    f"parent, which nothing downstream can detect.")
+
+    metals = [metal_block.graph.label(s.atom_idx).element for s in vacancies]
+    donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
+    lobes = [int(k) % _lone_pairs(s) for k, s in zip(tuple(lone_pairs) + (0, 0), donors)]
+    verdict = bridge_compatible(donors, vacancies, partner=metals[0],
+                                donor_elements=donor_elements, lone_pairs=lobes)
+    if not verdict.feasible:
+        raise IncompatibleJoin(verdict)
+
+    product, map_a, map_b = _merged_graph(
+        a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
+    map_donor = map_a if donor_block is a else map_b
+    map_metal = map_b if donor_block is a else map_a
+    # One donor to ITS OWN vertex's metal — the line `join_chelate` cannot draw, since
+    # there both bonds go to `vacancies[0]`.  µ-ness is then DERIVED from these two edges
+    # rather than labelled (D14).
+    for donor, vacancy in zip(donors, vacancies):
+        product.add_bond(map_donor[donor.atom_idx], map_metal[vacancy.atom_idx],
+                         EdgeType.DATIVE)
+
+    product.charge = a.graph.net_charge() + b.graph.net_charge()
+    if a.graph.multiplicity is None or b.graph.multiplicity is None:
+        raise AmbiguousSpecError(
+            "a parent has no multiplicity, so the product's is not derivable. Unpaired "
+            "electrons add (energy.backends.combined_multiplicity) and there is no "
+            "default that is not a guess about spin state.")
+    product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+
+    distances = [metal_donor_distance(m, el).value
+                 for m, el in zip(metals, donor_elements)]
+    choice_vector = {
+        "op": "join", "mode": BindingMode.BRIDGE_MU2.value,
+        # No torsion index, for `join_chelate`'s reason: the second contact determines the
+        # roll.  What branches instead is which LOBE each donor bound through, and that is
+        # the coordinate the three bridging modes differ in.
+        "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
+                    "lone_pair": k, "block": donor_block.structure_id}
+                   for s, el, k in zip(donors, donor_elements, lobes)],
+        "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": m,
+                       "block": metal_block.structure_id}
+                      for s, m in zip(vacancies, metals)],
+        "d_ml": [round(float(x), 6) for x in distances],
+        "order": "donor-block-first" if donor_block is a else "metal-block-first",
+        "seed": int(seed),
+    }
+
+    donor_sites = donor_block.sites
+    coords = None
+    if with_geometry:
+        coords, donor_sites = _place_bridging_block(
+            donor_block, donors, vacancies, distances=distances, lone_pairs=lobes)
+
+    sites = merge_inherited(
+        inherit_sites(donor_sites, map_donor),
+        inherit_sites(metal_block.sites, map_metal,
+                      consumed=[(v.atom_idx, v.slot) for v in vacancies]),
+    )
+
+    geometry, state = None, None
+    if coords is not None:
+        metal_coords = _coords_of(metal_block, "the metal block")
+        if metal_coords is not None:
+            geometry = (np.vstack([coords, metal_coords]) if donor_block is a
+                        else np.vstack([metal_coords, coords]))
+            symbols = [product.label(i).element for i in product.nodes()]
+            states = refresh_state(sites, geometry, graph=product, symbols=symbols)
+            state = {(s.atom_idx, s.slot): s for s in states}
+
+    return JoinResult(
+        block=BuildingBlock(graph=product, sites=tuple(sites), geometry=geometry,
+                            state=state),
+        atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
+        partner_atom_map=map_b, compatibility=verdict)
+
+
+def _place_bridging_block(donor_block: BuildingBlock, donors: Sequence[Site],
+                          vacancies: Sequence[Site], *, distances: Sequence[float],
+                          lone_pairs: Sequence[int],
+                          ) -> tuple[np.ndarray | None, tuple[Site, ...]]:
+    """Rigidly move a bridging block across two vertices on two metals.
+
+    Both targets are fully determined, so this is a two-point fit and nothing more: put
+    the donors' midpoint on the targets' midpoint, turn their line onto the targets' line,
+    then roll about that line until each donor's chosen lone pair points at its own metal.
+
+    No slide along a bisector, and that absence is the difference from the chelate case
+    rather than an omission: there is no common centre to slide toward.  The consequence
+    is that the span mismatch lands wherever the vertex axes send it — into the bond
+    lengths when they run along the span, into the angles when they do not — so this
+    function does not promise a good geometry, only the best rigid one, and `qc` is what
+    says whether it is a bridge.
+    """
+    coords = _coords_of(donor_block, "the donor block")
+    frames = [_frame_of(s, k) for s, k in zip(donors, lone_pairs)]
+    frames += [_frame_of(s) for s in vacancies]
+    if coords is None or any(f is None for f in frames):
+        raise ValueError(
+            "cannot align this bridge join: coordinates or a frame are absent. The pose "
+            "is computed from the stored frames (D13) and applied to real coordinates; "
+            "pass with_geometry=False to build the graph-level product instead.")
+    (p_1, ax_1, _), (p_2, ax_2, _), (m_1, v_1, _), (m_2, v_2, _) = frames
+
+    t_1 = m_1 + distances[0] * v_1
+    t_2 = m_2 + distances[1] * v_2
+    span, target_span = _unit(p_2 - p_1), _unit(t_2 - t_1)
+    rot = _rotation_between(span, target_span)
+
+    # The roll about the span.  Each donor's chosen lobe points at where IT expects its
+    # metal; turn the pair onto where the two metals actually are.  Summed rather than
+    # solved per donor because one rotation has to serve both — which is the same
+    # least-contradiction the chelate's single `pocket_out` vector stands for, written for
+    # two centres instead of one.  Everything is measured perpendicular to the span, the
+    # only direction the roll can move anything.
+    ligand_view = _perpendicular(rot @ _unit(ax_1 + ax_2), target_span)
+    metal_view = _perpendicular((m_1 - t_1) + (m_2 - t_2), target_span)
+    if ligand_view is not None and metal_view is not None:
+        theta = math.atan2(float(np.dot(np.cross(ligand_view, metal_view), target_span)),
+                           float(np.dot(ligand_view, metal_view)))
+        rot = _axis_rotation(target_span, theta) @ rot
+
+    origin = (p_1 + p_2) / 2.0
+    target = (t_1 + t_2) / 2.0
+    moved = (rot @ (coords - origin).T).T + target
+    sites = tuple(replace(s, frame=_transform_frame(s.frame, rot, origin, target))
+                  for s in donor_block.sites)
+    return moved, sites
 
 
 def chelate_reach(donors: Sequence[Site], vacancies: Sequence[Site], *,

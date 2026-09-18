@@ -21,8 +21,8 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 | | |
 |---|---|
 | **Done** | M0 rails · M1 descriptors · M2 graph + identity · M3 registry · M3.5 viewer · M4 sites · **M5 assembly** |
-| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped. Route-level evaluation is not built, nothing decides what is worth computing, and the regression gate has no recorded result. [`WORKPLAN_M7.md`](WORKPLAN_M7.md) carries the slice-level detail |
-| **Next** | **M6** polynuclear nodes — the first milestone that builds a real SBU. `WORKPLAN_M6.md` carries the slice-level detail |
+| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped; the regression exit gate has a harness and no recorded result |
+| **In progress** | **M6** polynuclear nodes — the first milestone that builds a real SBU. S0 closed (D20/D24/D25 called, [B12](archive/BUGS_resolved.md) fixed) and S1's well branch landed; `WORKPLAN_M6.md` carries the slice-level detail |
 | **Then** | M8 pathways (the actual contribution) · M9 folded in opportunistically |
 
 ```
@@ -31,9 +31,8 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
         M7 energy — primitives built, route evaluation open ───┘
 ```
 
-**Open decision gates:** C2's energy window (blocked on [B9](BUGS.md#b9)), C9 and C10 (forced by
-M6), C6 and C7 (forced by M8). See §3. Nothing is pre-resolved here; the design doc's leanings
-stand.
+**Open decision gates:** C2's energy window (blocked on [B9](BUGS.md#b9)), C6 and C7 (forced by
+M8). See §3. C9 and C10 were M6's and are called — D24 and D25.
 
 ---
 
@@ -436,58 +435,10 @@ def enumerate_paths(reg, target_id, reagent_pool, *, max_steps=6) -> list[list[i
 
 ## 2. Remaining milestones
 
-### M5 — Recursive assembly (N=1 path of the general operation) · **L**
-
-**Work** — `assembly/block.py`, `join.py` (frame-alignment compatibility + join), `choice.py`
-(ChoiceVector, digest, replay), `construct.py` (deterministic construct + branch-tree enumerator),
-atom-map site inheritance, and `identity/l2_isomer_tag` filled in for real.
-
-**Decision gate: C2** — θ_geom (RMSD on rigid core + coordination sphere) and the energy window.
-This is the first milestone that actually *manufactures* conformers, so it is the first point the
-numbers are forced. Suggested way to set them rather than guess: build the fixture set, plot the
-pairwise core-RMSD distribution, and put θ_geom in the valley between the stochastic-duplicate peak
-(Kind A) and the real-branch peak (Kind B) — i.e. calibrate from data you now have.
-
-**Exit gate — the three headline validations:**
-1. **One node, two routes:** a structure built in two different orders lands on **one** L1 node with
-   two incoming provenance edges. (This is the D2 claim, tested.)
-2. **cis/trans survive:** anthrarufin–Cu cis and trans persist as distinct records carrying
-   different choice-vectors, and are **not** merged by geometric clustering even when near-degenerate
-   (this is D10/D11 tested — the discriminator is relevance, not ΔE).
-3. **Replay:** reconstructing from a stored `(choice_vector, seed)` reproduces coordinates within
-   tolerance. If this fails, stored conformers are frozen coordinates, not regenerable objects.
-
-Plus: `construct` on an ambiguous spec (CN not determined) **raises/branches** rather than defaulting.
-
-**Status: met.** S1–S7 built, all three exit gates pass (`tests/test_m5_exit_gates.py`), C2
-called on θ_geom (0.15 Å, calibrated on xTB-relaxed geometries). `WORKPLAN_M5.md` carries the
-slice-level detail.
-
-**The milestone is done; its bookkeeping is not, and that is scheduled.** The ledger D-numbers
-for C2, the L2-wiring call and `MAX_BITE_MISMATCH_DEG` were never written;
-`ALGO_VERSIONS["l3_conformer_id"]` still reads `"0-stub"`. Until that lands, M5 stays here
-rather than in `archive/PLAN_completed.md` — see [`WORKPLAN_M6.md`](WORKPLAN_M6.md) §8(a), which
-owns it. What is genuinely still unfinished is the carry-over list below.
-
-**Carried out of M5 — unbuilt, so not bugs (see `BUGS.md`'s scope note):**
-
-* **The L3 energy window is unset.** Half of C2. Blocked on `BUGS.md` B9 rather than on missing
-  data — the measurement available today is contaminated by the rigid-core defect.
-* **Symmetry collapse in the enumerator.** 405 leaves over 5 distinct L1 at CN 6 degree 2. The
-  enumerator deliberately does not merge leaves sharing an L1 (cis and trans share one too); now
-  that L2 and θ_geom both exist, the collapse they were waiting for is buildable.
-* **Driving the enumerator from the run pipeline** for `degree > 1` (S4.1). `runner.plan` still
-  refuses it, now because the pipeline does not drive the *tree* rather than because the tree
-  does not exist. The **ladder** is driven: `spec.pathways` plans the rung below each product
-  and joins the step between them, which is S4.1 for the one shape a mononuclear sweep makes.
-* **Which vertices an intermediate leaves empty is not chosen.** `place_mononuclear` fills
-  vertices in its own order, so a CN-6 centre carrying four co-ligands comes back with its two
-  empty vertices **trans** — and a chelating ligand that subtends ~90° cannot reach them, so
-  that rung's step is refused (`chelate_cannot_span`) with the measurement in the task row. The
-  ladder therefore connects the unsaturated series but not the co-ligand-saturated one. The fix
-  is for the placer to take the vertices to reserve, which is placer work, not pathway work.
-
----
+*(M5 met its exit gate and its bookkeeping landed at M6/S0 — moved to
+[`archive/PLAN_completed.md`](archive/PLAN_completed.md), which also carries the four things it
+handed forward. Two of them, the reserved-vertex placer call and the enumerator's symmetry
+collapse, are M6's.)*
 
 ### M6 — Polynuclear nodes, emerging from joins · **L**
 
@@ -519,27 +470,31 @@ so this is a measured limitation, reported as strain and closed by relaxation. *
 `place_multicentre` is for**, and the reason to keep it: the paddlewheel never needs it, and the
 oxo clusters cannot be built without it. It is one scalar per edge, not a general solver.
 
-**Work** — the lone-pair well as a Kind-B branch; `bridge_compatible` and a two-point form of
+**Work** — ✅ the lone-pair well as a Kind-B branch, ✅ recorded in the choice vector and
+✅ `join`'s `n_metals > 1` guard lifted, which together make a bridged dimer emerge from two
+one-contact joins at 2.673 Å. Still to build: `bridge_compatible` and a two-point form of
 `join`; bridging atoms as centres, plus the bent CN-2 geometry; reconciliation via
 `place_multicentre`; vacancy↔vacancy joins for a declared nucleus, with
-`metal_metal_distance` in `geometry/distances.py`; lifting `join`'s `n_metals > 1` guard;
-`geometry/qc.py` extended with `check_intercentre`; multi-metal `to_rdkit`. *(The CN=5 item this
-section used to carry is done — both CN-5 polyhedra are in `site_vectors` and tested.)*
+`metal_metal_distance` in `geometry/distances.py`; `geometry/qc.py` extended with
+`check_intercentre`; multi-metal `to_rdkit`. *(The CN=5 item this section used to carry is
+done — both CN-5 polyhedra are in `site_vectors` and tested.)*
 
 **Ground-truth targets:** a battery, not one motif — paddlewheel, under-bridged Cu₂(µ-O₂CH)₂,
 its benzoate analogue, a pyrazolate dimer, Cu₂(µ-OH)₂, Fe₃(µ₃-O) in both valence patterns, and
 Zn₄O. Between them: both mechanisms, nuclearity 2/3/4, with and without an M–M bond,
-carboxylate and not, symmetric and mixed-valence. **Most of it has to be built** — see
-`WORKPLAN_M6.md` §6 for the row-by-row state.
+carboxylate and not, symmetric and mixed-valence.
 
-**The battery's targets are written down, and the first row of it is built** (S0(b)):
+**S0 is closed, and the battery's targets are written down before anything builds them.**
 `data/reference/node_cases.tsv` holds each cluster's mechanism, local geometry, M···M and the
 window it must land in. It is the interface for adding a case — add a row, no code changes —
-and `tests/test_m6_battery.py` checks the rows against each other and against the fixture
-graphs *before* anything builds them, so a typo in a target is not discovered as a clash out of
-a placer that is working correctly. `zn4o` is now in `examples.ALL`, which closes the one
-fixture §6 named as missing. The remaining battery rows, and the perception fixes
-[B13](BUGS.md#b13) and [B14](BUGS.md#b14) they depend on, are still S0(b) work.
+and `tests/test_m6_battery.py` checks the rows against each other, against the fixture graphs,
+and against the code's own `site_vectors`, so a typo in a target is not discovered as a clash
+out of a placer that is working correctly. Two rows carry `blocked_on` rather than numbers —
+[B13](BUGS.md#b13) for the hydroxide bridge, [B14](BUGS.md#b14) for the pyrazolate one — and
+the blockers themselves are asserted, so the battery cannot claim to be waiting on a defect
+that has been fixed. **Its numbers are typical of the named compound class, not a refinement of
+a deposited structure**: no CIF was consulted, which is why every row carries a window and why
+narrowing one against the CSD is a prerequisite for any quantitative claim it backs.
 
 **Exit gate — the strong one:** the **sequential** route (Cu₂(µ-HCOO) + HCOO) and the
 **nucleus-first** route (declare the dimer, add bridges) reach **one** node with **two**
@@ -631,15 +586,17 @@ milestone lands, not as a block at the end.
 | Gate | Milestone | Forced by | What you need in hand to decide |
 |---|---|---|---|
 | **C2** — L3 thresholds (θ_geom **called**, energy window open) | **M5**, at the first conformer generation | clustering can't run without numbers | θ_geom = 0.15 Å, calibrated. The window waits on [B9](BUGS.md#b9) — the measurement available today is contaminated by the rigid-core defect |
-| **C9** — polynuclear multiplicity | **M6**, at the first manufactured node | multiplicity is in L0, so it decides identity | the two ground-truth fixtures disagree: `cu_paddlewheel` declares 1 (AF-coupled d⁹–d⁹) where `combined_multiplicity` gives 3; `fe3_mu3_oxo` declares 16 and the additive rule agrees. *Leaning: coupling is a Kind-C branch — require it stated, raise otherwise* |
-| **C10** — when is there an M–M edge? | **M6**, alongside C9 | `METAL_METAL` is in the certificate, so a wrong answer is a wrong identity | at 2.673 Å two Cu are bonded, at 5.516 Å they are not. A silent distance threshold is exactly what ground rule 5 forbids — branch or declare |
 | **C6** — barrier proxy | **M8**, before the first path score | `PathScore.max_barrier` needs a definition | whether the paddlewheel A-vs-B ordering is stable under the cheap proxies alone |
 | **C7** — partner dependence | **M8**, alongside C6 | `ease(site, partner)` is called at query time | how many (site, partner) pairs you actually intend to screen — the factorization only pays off if that number is large |
 
-*Resolved: C1 → D10 · C4 → D12 · C5 → D18 · C8 → curated tables.*
+*Resolved: C1 → D10 · C4 → D12 · C5 → D18 · C8 → curated tables · C9 → D24 (multiplicity is
+stated, because coupling is not derivable) · C10 → D25 (an M–M edge is declared, never inferred
+from distance).*
 
-One further call is open and is **not** a milestone gate — the L2 backfill-versus-version
-decision ([B2](BUGS.md#b2)). M5 forces it, because M5 is what fills `l2_isomer_tag` in.
+One further call was open and is **not** a milestone gate — the L2 backfill-versus-version
+decision ([B2](BUGS.md#b2)). Called as **D22**: no backfill in either direction, and the run
+pipeline passes `l2=""` on purpose so its products land on the node every other route reaches.
+B2 stays open as the *reported* seam until both paths tag together.
 
 Rule for all of them: when a gate is called, **write the resolution into the design doc's
 Decision Ledger with a new D-number and a changelog line**, then code against it. A gate
@@ -675,15 +632,15 @@ resolved only in your head is how the two documents drift apart.
 
 **Fixture set.** Hand-written typed graphs live in `mofsbu/examples.py`, not `tests/fixtures/`,
 so scripts, notebooks and the demo registry all draw on the same ones. `examples.ALL` currently
-holds **16**: water, formate, formic acid, BTC (both protonation states), Cu paddlewheel,
-Fe₃-µ₃-oxo in two valence patterns, the Zn₂ bridged/chelated discrimination pair, the
+holds **17**: water, formate, formic acid, BTC (both protonation states), Cu paddlewheel,
+Fe₃-µ₃-oxo in two valence patterns, **Zn₄O**, the Zn₂ bridged/chelated discrimination pair, the
 Pt(NH₃)₂Cl₂ build-order pair, Fe hexaaqua high/low spin, and the cyclohexane / two-cyclopropanes
 1-WL collision. Parameterised families (`paddlewheel`, `hexaaqua`, `aqua_carboxylate`,
 `bipyridine`, `metal_bipy`) sit alongside them.
 
-**What this list used to claim and does not have:** Zn₄O, mononuclear Zn/BDC, BDC, bipy as a
-`TypedGraph`, EDTA, anthrarufin, and the cis/trans anthrarufin–Cu pair. M6 needs several of
-them and builds them as its first slice — see [`WORKPLAN_M6.md`](WORKPLAN_M6.md) §6.
+**What this list still does not have:** mononuclear Zn/BDC, BDC, bipy as a `TypedGraph`, EDTA,
+anthrarufin, and the cis/trans anthrarufin–Cu pair. None of them are M6 targets — M6's are
+`data/reference/node_cases.tsv` and the fixtures it names, all of which exist.
 
 Four kinds of test, each with a job:
 
@@ -707,9 +664,8 @@ that would fail if the claim stopped being true.**
    on a machine with tblite. Minutes of compute, and it is a *check* rather than a build. Then
    decide whether stage 2's re-derivation is worth building now or at M8, when the numbers
    actually carry a claim.
-2. **Call the L2 question** ([B2](BUGS.md#b2)) before writing M5 code, not during.
-3. **M5 fixtures before M5 code** — the cis/trans anthrarufin–Cu pair and the two-route
-   structure as failing tests first. This is the same move that made M2 cheap: it forces the
-   D10/D11 commitments at the point where they are still free.
-4. **Write the M6 fallback date down when M6 starts** (§4, first row). A plan-B with no trigger
-   is not a plan-B.
+2. **Work M6 in `WORKPLAN_M6.md`'s order.** S0 is closed — D20/D24/D25 called, B12 fixed, the
+   battery written down as `data/reference/node_cases.tsv` and checked against the fixtures
+   before anything builds them. S1's well branch has landed; its two-point bridge join has not,
+   and S1 and S2 are independently testable in either order.
+3. ~~Write the M6 fallback date down when M6 starts.~~ ✅ **2026-10-14** (§4, first row).

@@ -155,9 +155,11 @@ precisely because `geometry.distances.BASE_MO` does not know them, which is the 
 
 The exit-gate tests for the nodes are already written and **strict-xfailed on `NotBuiltYet`**,
 so they flip to passing the moment a body lands and the strict marker forces the marker's
-removal. What that table does *not* yet cover is mechanism A's non-carboxylate case and the
-single-atom bridges, so those rows are still owed: Cu₂(µ-OH)₂ and the pyrazolate dimer, both
-blocked on [B13](BUGS.md#b13) / [B14](BUGS.md#b14).
+removal.
+
+**Every row is now in the table** — S0 closed the two that were owed. The two that cannot carry
+numbers carry `blocked_on` instead, and the blockers are *asserted*, not cited, so a fixed
+defect cannot leave a row waiting for it.
 
 | cluster | n | bridges | what it stresses | today |
 |---|---|---|---|---|
@@ -166,10 +168,10 @@ blocked on [B13](BUGS.md#b13) / [B14](BUGS.md#b14).
 | Fe₃ mixed-valence (2,3,3) | 3 | as above | per-centre labels in L0 and L1 | fixture + row ✅ |
 | Zn₄O(O₂CH)₆ | 4 | B(µ4) + A ×6 | nuclearity 4; 0.49 Å collision; no vacancy at all | fixture + row ✅ |
 | Cr₂ / Rh₂ / Mo₂ paddlewheels | 2 | A ×4 + M–M | M–M is not a two-point table; Rh and Mo are absent from `BASE_MO` | rows ✅, no fixture by design |
-| Cu₂(µ-O₂CH)₂ | 2 | A ×2 | under-bridged dimer; route discrimination | `zn2_bridged` is the Zn analogue; **row owed** |
-| Cu₂(µ-O₂C–Ph)₄ | 2 | A ×4 | ligand-dependence of the span (2.46 vs 2.67 Å) | benzoate perceives ✅; **row owed** |
-| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | blocked on [B14](BUGS.md#b14) |
-| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | blocked on [B13](BUGS.md#b13); no bent CN-2 |
+| Zn₂(µ-O₂CH)₂ | 2 | A ×2 | under-bridged dimer; route discrimination | fixture + row ✅ (`zn2_bridged_formate`); `d_mm` deliberately absent — nobody has measured it, and absent is not zero |
+| Cu₂(µ-O₂C–Ph)₄ | 2 | A ×4 | ligand-dependence of the span (2.46 vs 2.67 Å) | row ✅, no fixture; benzoate perceives ✅ |
+| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | row ✅, `blocked_on` [B14](BUGS.md#b14) |
+| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | row ✅, `blocked_on` [B13](BUGS.md#b13) + no bent CN-2 |
 
 Between them: both mechanisms, nuclearity 2/3/4, with and without an M–M bond, carboxylate and
 non-carboxylate, symmetric and mixed-valence.
@@ -180,12 +182,12 @@ non-carboxylate, symmetric and mixed-valence.
 
 | File | State |
 |---|---|
-| `sites/model.py::perceive` | stores well 0 only — mechanism A is unreachable (§3) |
-| `sites/frames.py::torsion_wells` | no `BRIDGE_MU2` branch; falls through to the monodentate `(0.0, 180.0)` |
-| `sites/model.py::vacancy_sites` | a vacancy offers `mono` only, so `compatible` refuses `mu2` on the metal side |
-| `assembly/join.py::chelate_compatible` | refuses the two-different-metals case **by name** — that refusal is the new `bridge_compatible` |
-| `assembly/join.py::join_chelate` | hardcodes `vacancies[0].atom_idx` for both bonds, i.e. one metal. The µ2 bridge is the same body with two |
-| `assembly/join.py::join` | raises for `n_metals > 1` |
+| ~~`sites/model.py::perceive`~~ | ✅ **landed (S1)** — every lone pair is stored, `frame` is still lobe 0 byte for byte, and the rest travel under `frame["lone_pairs"]` with no schema change. `perception` bumped to `3` |
+| ~~`sites/frames.py::torsion_wells`~~ | ✅ **landed (S1)** — `_TWO_POINT_MODES` covers chelate and both bridges: a mode whose roll is an *output* of the fit must not branch over it, or it emits siblings with identical coordinates |
+| `sites/model.py::vacancy_sites` | a vacancy offers `mono` only. **Not blocking** — `bridge_compatible` checks the donors' modes, as `chelate_compatible` does — but `compatible` still refuses `mu2` by blaming the vacancy instead of naming `bridge_compatible` |
+| ~~`assembly/join.py::chelate_compatible`~~ | ✅ **landed (S1)** — `bridge_compatible` exists and refuses the same-metal case back, by name, pointing at `join_chelate`. Its verdict is a **distance**, and it is necessary-not-sufficient: qc stays the arbiter |
+| ~~`assembly/join.py::join_chelate`~~ | ✅ **landed (S1)** — `join_bridge` is that body with the two vertices on different metals: one DATIVE per donor to its OWN metal, no bisector slide, both lobes recorded |
+| ~~`assembly/join.py::join`~~ | ✅ **landed (S1)** — the `n_metals > 1` guard is gone under D20, and `lone_pair=` is a recorded coordinate. A bridged dimer now builds from two one-contact joins at 2.673 Å. `choice_vector` → `cv2` |
 | `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
 | `geometry/placer.py::place_multicentre` | **signature settled, body raises.** `Center` and `InterCentreConstraint` (with `metal_metal_bond` and `window()`) exist; `Center.element` is deliberately not always a metal, because a bridging atom is a centre (§4). **`Join` stays named-but-undefined on purpose** — what the placer receives from the join path is S1's output and therefore S3's call, so guessing it now would settle the wrong end first |
@@ -195,79 +197,151 @@ non-carboxylate, symmetric and mixed-valence.
 | `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0 and never writes an M–M bond. The fix is a **widening of this function, not a second one** — one conversion means one place to be wrong, which is its own docstring's argument (S7) |
 | `sites/perception.py` | `[OH-]` perceives **zero** donors — filed as [B13](BUGS.md#b13) |
 | `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS.md#b14) |
-| `assembly/construct.py` | `metal_block`'s metal charge gives one species two L1 — filed as [B12](BUGS.md#b12) |
-| `examples.py` | Zn₄O absent; `PLAN_implementation.md` §6's fixture list was substantially aspirational (now corrected) |
+| ~~`assembly/construct.py`~~ | ✅ **fixed (S0)** — `metal_block` writes `formal_charge=0`; [B12 archived](archive/BUGS_resolved.md) |
+| ~~`examples.py`~~ | ✅ Zn₄O landed; `examples.ALL` holds 17 and `PLAN_implementation.md` §6 now says so |
 
-Three of those are defects rather than unbuilt scope, so they are in `BUGS.md` and outlive this
-file. B14 is the same class that `cff47a8` fixed for oxo-acids — perception is
+The two perception entries are defects rather than unbuilt scope, so they are in `BUGS.md` and
+outlive this file. B14 is the same class that `cff47a8` fixed for oxo-acids — perception is
 resonance-invariant, an oxo-acid is one donor group — applied to azolates, which that change did
 not cover.
 
 ---
 
-## 8. Slice 0 — closeout, the battery, and five calls · **M**
+## 8. Slice 0 — closeout, the battery, and five calls · **M** · ✅ **LANDED**
 
-**(a) M5's bookkeeping, which never happened.** `WORKPLAN_M5.md` §6 lists it: ledger D-numbers
-for **C2** (θ_geom = 0.15 Å), for the L2-wiring/backfill call, and for `MAX_BITE_MISMATCH_DEG`,
-each with a changelog line; `ALGO_VERSIONS["l3_conformer_id"]` off `"0-stub"`; the remaining
-`CODE_ARCHITECTURE.md` rows flipped; `WORKPLAN_M5.md` deleted. M6 adds its own ledger entries,
-so the ledger has to be current before it does.
+**(a) M5's bookkeeping, which never happened.** ✅ Ledger entries **D21** (θ_geom = 0.15 Å,
+carrying the calibration table so the measurement outlives the workplan that made it), **D22**
+(the L2-wiring call, and the digest backfill folded in beside it — re-derive annotations,
+version addresses) and **D23** (`MAX_BITE_MISMATCH_DEG`), each with a changelog line.
+`ALGO_VERSIONS["l3_conformer_id"]` is `"conf1"`. M5 moved to `archive/PLAN_completed.md`;
+`WORKPLAN_M5.md` deleted; `CODE_ARCHITECTURE.md` §6 now says what B2 actually is, which is not
+what it said.
 
-**(b) The battery** (§6). Four of its rows and the reference table landed from a parallel
-session; what is owed is the two mechanism-A rows the table does not yet carry, and the two
-blocked on the perception fixes — [B13](BUGS.md#b13) for the hydroxide bridge,
-[B14](BUGS.md#b14) for the pyrazolate one — as failing tests.
+**B2 is sharper than "the stub is not filled in", and the sharpening is the useful part.** The
+classifier is built and `store_block` derives a tag whenever it has coordinates — but `runner`
+passes `l2=""` deliberately, because it is the only path that does not tag, and a path that
+tagged alone would file its products away from the node every other route reaches. So B2 is a
+*wiring* seam, not an unbuilt one, and closing it moves both paths together.
 
-**(c) D20 — emergence primary, constraints for reconciliation.** Supersedes §6.1's framing.
-M···M is an **output to validate** wherever one mechanism determines it (§3), and
-`place_multicentre` is retained for the clusters where two determinants collide (§5) — a
-measured reason rather than a blanket "headline cost".
+**(b) The battery** (§6). ✅ Complete, and wider than this slice asked for: all nine rows are in
+`data/reference/node_cases.tsv`, including the two mechanism-A rows §6 listed as owed
+(`cu2_benzoate_paddlewheel`, and `zn2_bridged_formate` as the under-bridged dimer) and the two
+blocked ones. The blocked pair is checked rather than cited —
+`test_the_hydroxide_bridge_is_blocked_by_b13` and its pyrazolate twin assert the *defect*, so
+the battery cannot go on claiming to wait for something already fixed.
 
-**(d) C9 — what multiplicity does a polynuclear node carry?** The two ground-truth fixtures
-disagree: `cu_paddlewheel` declares 1 (AF-coupled d⁹–d⁹) where `combined_multiplicity` — which
-`join` uses — gives 3; `fe3_mu3_oxo` declares 16 and the additive rule agrees. Multiplicity is
-in L0, so this decides identity. *Leaning:* coupling is a Kind-C branch, not a derivation —
-whether two d⁹ centres give a singlet or a triplet is not recoverable from the centres, so the
-multicentre path should **require** a stated multiplicity and raise otherwise. That is already
-what `from_rdkit` does, and it makes both fixtures correct instead of one of them wrong.
+**(c) D20 — emergence primary, constraints for reconciliation.** ✅ Called. Supersedes §6.1's
+framing, which is struck there and preserved in `archive/DESIGN_history.md`. M···M is an
+**output to validate** wherever one mechanism determines it (§3), and `place_multicentre` is
+retained for the clusters where two determinants collide (§5) — a measured reason rather than a
+blanket "headline cost".
 
-**(e) C10 — when is there an M–M edge?** At 2.673 Å two Cu are bonded; at 5.516 Å they are not.
-`EdgeType.METAL_METAL` is in the certificate, so a wrong answer is a wrong identity, and a
-distance threshold applied silently is exactly the kind of inference ground rule 5 forbids.
-Branch or declare; never default.
+**(d) C9 — what multiplicity does a polynuclear node carry?** ✅ Called as **D24: stated, never
+combined.** The two ground-truth fixtures disagree — `cu_paddlewheel` declares 1 (AF-coupled
+d⁹–d⁹) where `combined_multiplicity` gives 3; `fe3_mu3_oxo` declares 16 and the additive rule
+agrees — and the resolution is that *both are right*, because the additive rule has a
+precondition the paddlewheel does not meet. Coupling is not recoverable from the centres, so
+the multicentre path requires a stated multiplicity and raises otherwise, which is already what
+`from_rdkit` does. Pinned by
+`test_m6_battery.py::test_multiplicity_is_declared_because_coupling_is_not_derivable`, against
+the golden L0 strings so a derived answer fails at the identity rather than at the arithmetic.
+
+**(e) C10 — when is there an M–M edge?** ✅ Called as **D25: declared, never inferred.** At
+2.673 Å two Cu are bonded; at 5.516 Å they are not. `EdgeType.METAL_METAL` is in the
+certificate, so a wrong answer is a wrong identity, and a distance threshold applied silently is
+exactly the kind of inference ground rule 5 forbids.
 
 **Independently reached, which is the strongest evidence a gate is real.** The parallel
 session's reference table arrived at the same place from the data side — `node_cases.tsv`
 carries `mm_bond` as a column and says it is "a chemical decision, NOT derivable from d_mm",
 and `InterCentreConstraint.metal_metal_bond` says a placer that guessed it from distance would
 be guessing the identity of its product. The Fe₃ trimer at 3.29 Å has no edge and the Cu₂
-paddlewheel at 2.62 Å has one; the two fixtures differ at L1 by exactly that. So C10's
-*resolution* is already implied — declared, never inferred — and what S0 owes is the D-number
-and the changelog line, not the argument.
+paddlewheel at 2.62 Å has one; the two fixtures differ at L1 by exactly that, and
+`test_the_table_and_the_fixture_graph_agree` holds the column and the graph to each other.
 
-**(f) [B12](BUGS.md#b12) — `metal_block` labels metals differently from every other producer.**
-`from_rdkit` and `examples.py` set a metal's `formal_charge` to 0 (D15, charge is graph-level);
-`metal_block` writes `formal_charge=oxidation_state`, and that string feeds `NodeLabel.key()`.
-Same species, two L1 hashes. Settle it before the gate, because the gate compares against
-fixtures written the other way.
+**(f) [B12](archive/BUGS_resolved.md) — `metal_block` labels metals differently from every
+other producer.** ✅ Fixed: it writes `formal_charge=0` like `from_rdkit` and `examples.py`
+(D15, charge is graph-level). **What the fix turned up is worth more than the fix.** 683 tests
+passed before and after and no golden hash moved — every stored hash descends from
+`examples.py`, and nothing had ever asserted on an identity produced by the enumerator. D2's
+claim was being tested along one route. So it ships with a producer-agreement test pinning the
+label string itself.
 
 **(g) The plan-B trigger,** which `PLAN_implementation.md` §4 and §7 require be written down
-when M6 starts: **2026-10-14**. Kept because the plan demands a date rather than a mood, while
-recording that §3 and §4 have largely retired the risk it guards — the fallback was "templates
-instead of a constrained placer", and the constrained placer turned out not to be on the
-critical path.
+when M6 starts: ✅ **2026-10-14**, recorded in §4's risk row. Kept because the plan demands a
+date rather than a mood, while recording that §3 and §4 have largely retired the risk it guards
+— the fallback was "templates instead of a constrained placer", and the constrained placer
+turned out not to be on the critical path.
 
 ---
 
 ## 9. The slices
 
-### S1 — mechanism A: the well branch and the two-point bridge join · **L**
+### S1 — mechanism A: the well branch and the two-point bridge join · **L** · *mostly landed*
 
-The lone-pair well becomes a Kind-B branch carried on the site or the verdict, for a
-`TORSION_LIVE` donor in a bridging mode, following `_convergence`'s existing 4-way precedent.
-`torsion_wells(_, BRIDGE_MU2)` gets its own entry instead of falling through to the monodentate
-pair. `chelate_compatible`'s named refusal becomes `bridge_compatible`, keeping the verdict
-shape.
+**The lone-pair well, as perception (landed first).** `perceive` records every lobe rather
+than only the first, so the anti lobe exists at all; `lone_pair_frames` answers "how many
+directions does this donor offer" in one place, and its tuple length *is* the answer to "can
+this atom bridge on its own" — a determined donor like aqua collapses to one lobe, which is
+§4's problem stated as data. `torsion_wells(_, BRIDGE_MU2)` has its own entry, alongside
+chelate, under a rule worth keeping: **a mode whose roll is an output of the fit must not
+branch over it**, or the tree emits siblings whose coordinates are identical. `perception`
+bumped to `3`, and a `2` catalog is not readable as "this donor has one lobe" — which is why
+it is a bump and not a backfill.
+
+**The lone-pair well, as a join coordinate (landed second) — and the measurement that
+reframes the rest of the slice.** `join(..., lone_pair=k)` selects the lobe, `compatible`
+reports how many are on offer, and the index travels in the choice vector so a replay
+reproduces the lobe rather than the default. With it, **the bridged dimer is reachable through
+two ordinary joins** — formate onto one Cu, its free oxygen onto a second — and all four lobe
+combinations land exactly on the frame-implied numbers:
+
+| lobes | built Cu···Cu | mode |
+|---|---|---|
+| (1,1) | **2.673 Å** | syn-syn — the paddlewheel, 0.05 Å from literature |
+| (0,1) / (1,0) | 5.148 Å | syn-anti |
+| (0,0) | 5.516 Å | anti-anti |
+
+So `join`'s `n_metals > 1` guard is gone, which was **S5's job and turns out to belong here**:
+the guard was written on the premise D20 replaced. One donor onto one vertex is *one contact*,
+and one contact is satisfied by a rigid move of the donor's block whatever either block already
+carries — so nothing about a second centre makes the pose undetermined, and the M···M is an
+output. `choice_vector` bumped to `cv2`: a key over a larger set of coordinates is a different
+key, and that is true even though lobe 0 replays every `cv1` path byte-identically.
+
+**`bridge_compatible` and `join_bridge` (landed third).** One ligand across two vertices of
+*different* metals in one move. The verdict keeps `chelate_compatible`'s shape but compares a
+**distance** — the donors' own separation against the separation the two target points require
+— because two vertices on two centres have no common origin to subtend an angle at.
+
+**Three things the building turned up, none of them in the plan:**
+
+* **The mismatch does not land where the chelate's does, and the tolerance had to be
+  re-derived because of it.** A chelate slides along its bisector so the residual goes into the
+  bite angle and the M–D bonds keep their length — deliberate, because bond lengths are what QC
+  checks. A bridge has no bisector, so where the residual goes falls out of the two vertex
+  axes. Measured: a **0.380 Å** span mismatch on a square-planar dimer produced Cu–O bonds of
+  **1.989 Å against a 1.980 target** — 0.009 Å, not the 0.190 a per-bond split predicts. It
+  went into the angles. So `MAX_BRIDGE_SPAN_MISMATCH_A` is QC's own bond tolerance used as a
+  **bound** ("a mismatch bigger than the slack one bond gets has nowhere to go"), not as a
+  derivation, and the constant says so.
+* **The verdict is necessary and not sufficient.** On a CN-6 dimer the *smallest* mismatch in
+  the whole candidate set — 0.183 Å, better than the square-pyramidal pair that builds cleanly
+  — puts the ligand's carbon 1.41 Å from the far metal and its far oxygen 0.76 Å from it. A
+  span test cannot see that, so a caller ranks on the verdict and then runs `qc`, which is
+  exactly what `chelate_reach` says one layer down. Pinned as a test rather than a caveat.
+* **The second bridge is not blocked after all — the earlier reading of the vertex-orientation
+  measurement was wrong.** A second formate places across a sequentially-built dimer and the
+  product is **QC-clean** at square-planar and square-pyramidal, two µ2 bridges on the graph.
+  What the arbitrary vertex orientation costs is not feasibility but *quality and choice*: the
+  usable pairs are accidents of where `site_vectors` happened to point, most cross-metal pairs
+  are refused, and nothing arranges four bridges at 90° around the M···M axis. That is still
+  S4's job; it is a worse paddlewheel rather than no second bridge.
+
+**Still owed:** `vacancy_sites` offers `mono` only. `bridge_compatible` does not consult it —
+it checks the donors' modes, as `chelate_compatible` does — so this is not blocking, but
+`compatible` still refuses `mu2` with "the vacancy does not bind it" where it should say that a
+bridge is two contacts on two metals and name `bridge_compatible`.
 
 **The two-point join is not invented here, it is generalised.** `join_chelate` already places
 one ligand across two vertices with one rigid move, absorbing the residual into the bite angle
@@ -278,11 +352,12 @@ origin — for a chelate it is the bite against the vertex separation *angle*; f
 vertices have no common centre, so it is the donor–donor **distance** against the
 vertex-to-vertex distance.
 
-*Exit:* the three bridging modes are separately enumerable and reproduce 2.67 / 5.15 / 5.52 Å;
-the paddlewheel and its benzoate analogue build QC-clean; a bite that cannot span the vertices
-refuses **by name**; replay from the emitted vector is bit-identical; `join_chelate`'s own
-tests still pass unchanged, because a chelate is the case where the two vertices happen to
-share a metal.
+*Exit:* ✅ the three bridging modes are separately enumerable and reproduce 2.67 / 5.15 /
+5.52 Å **through the assembly path**, not only from the frames; ✅ replay from the emitted
+vector is bit-identical; ✅ `join_chelate`'s own tests pass unchanged, because a chelate is the
+case where the two vertices happen to share a metal; ✅ a span that cannot reach the vertices
+refuses **by name and with its number**. Still owed: the **whole** paddlewheel and its benzoate
+analogue QC-clean — two bridges build, four need S4's vertex arrangement.
 
 ### S2 — mechanism B: the bridging atom as a centre · **M**
 
@@ -311,8 +386,22 @@ Two halves of one idea: **the caller says what the starting geometry leaves open
 Vacancy↔vacancy becomes a `METAL_METAL` join instead of a refusal. Its placement needs an M–M
 distance, which is a legitimate **input** here because a nucleus is being declared:
 `metal_metal_distance(m1, m2, *, motif) -> Distance` in `geometry/distances.py`, following
-`metal_donor_distance` exactly — curated table, covalent-radii fallback that marks itself
-`estimated` and says so in `source`.
+`metal_donor_distance`'s shape.
+
+**Called, 2026-09-18: there is no curated M–M table, and the caller states the number.** The
+two tempting sources both fail on inspection. `node_cases.tsv`'s Cr/Rh/Mo rows say in their own
+notes that they exist for this table — but that file's header says its `d_mm` values are
+*literature-typical for a compound class*, no CIF consulted, which is why every row carries a
+window; they are what a built node is measured **against**, and driving a placer from them
+would close the loop and make gate 4 compare a number with itself. A second curated TSV
+duplicating them would only move the problem and add two files to keep in step.
+
+So `metal_metal_distance` returns a covalent-radii estimate that marks itself `estimated`, and
+**raises rather than inventing a motif-specific number** — a quadruply-bonded Mo₂ at 2.09 Å and
+a Cu₂ paddlewheel at 2.62 Å are not the same question, and nothing in the elements distinguishes
+them. That is consistent rather than restrictive: D20 says a distance is an input only where it
+is *declared*, and a declaration comes from the caller, not from a table the caller did not
+write.
 
 And `place_mononuclear` learns to take **which vertices to reserve**. It currently fills them in
 its own order, so a CN-6 centre carrying four co-ligands comes back with its two vacancies
@@ -326,11 +415,11 @@ system, and `enumerate_constructions` grows ligands onto it — prove this rathe
 since B8's occlusion rule is exactly what could mark a dimer's vertices `BLOCKED`. A centre
 asked to reserve a cis pair returns one, and the ladder's co-ligand-saturated series connects.
 
-### S5 — lift the `n_metals` guard, and discriminate the routes · **S**
+### S5 — ~~lift the `n_metals` guard~~, and discriminate the routes · **S**
 
-`join` raises for `n_metals > 1` because the author assumed multi-centre needed a constraint
-solve. Under D20 it does not. With the guard gone both routes run, and the model says which
-works:
+**The guard is already gone** — it came out with S1, because that is the slice whose
+measurement proved it was refusing a determined placement. What is left here is the second
+half: with both routes running, the model says which works:
 
 | route | result |
 |---|---|
@@ -394,16 +483,18 @@ through SQLite rather than in memory, the way `tests/test_m5_exit_gates.py` does
 
 ## 11. Bookkeeping when M6 lands
 
-- `ALGO_VERSIONS`: `perception` bumps (the well is now part of what a site records);
-  `placement` bumps if `join`'s orientation model changes. Old rows keep their own version's
-  answer and are never re-labelled (ground rule 6 / D19).
-- Design doc: D-numbers for **D20**, **C9** and **C10**, with a changelog line each. §6.1's
-  constraint framing is superseded, not deleted — move it to `archive/DESIGN_history.md`.
+- ✅ `ALGO_VERSIONS`: `perception` → `3` (the lobes are part of what a site records) and
+  `choice_vector` → `cv2` (a join records which lobe it bound), both in S1. `placement` does
+  **not** move: lobe 0 reproduces every earlier geometry byte for byte, so the orientation
+  model is unchanged and only the set of recorded coordinates grew. Old rows keep their own
+  version's answer and are never re-labelled (ground rule 6 / D19).
+- ✅ Design doc: **D20**, **D24** (C9) and **D25** (C10) written, with a changelog entry; §6.1's
+  constraint framing struck there and preserved in `archive/DESIGN_history.md`.
 - `CODE_ARCHITECTURE.md`: flip `place_multicentre`'s 🔴 row; add the two bridge mechanisms to §4
   if either becomes an invariant.
-- `BUGS.md`: close B12; move the hydroxide and pyrazolate perception entries if they were filed
-  there.
-- `PLAN_implementation.md`: M6 moves to `archive/PLAN_completed.md`; §6's fixture list is
+- ✅ `BUGS.md`: B12 closed and archived. Still owed: the hydroxide and pyrazolate perception
+  entries (B13, B14) move when they are fixed.
+- `PLAN_implementation.md`: M6 moves to `archive/PLAN_completed.md`. ✅ §6's fixture list is
   corrected to what `examples.ALL` actually holds.
 - Delete this file.
 
@@ -413,10 +504,12 @@ through SQLite rather than in memory, the way `tests/test_m5_exit_gates.py` does
 
 ```
 S0 battery + decisions ─┬─► S1 mechanism A ──┬─► S3 reconciliation ─► S7 gates ─► S8 persist
-                        ├─► S2 mechanism B ──┘         ▲        ▲
+         ✅             ├─► S2 mechanism B ──┘         ▲        ▲
                         └─► S4 nucleus ────────────────┘        │
                                                    S5 routes · S6 qc
 ```
+
+S0 is closed. S1 is half done — the well branch landed, the two-point bridge join has not.
 
 S1 and S2 are independently testable and can be done in either order; S3 needs both, because
 reconciliation is by definition what happens where they meet. S5 is small and can land as soon

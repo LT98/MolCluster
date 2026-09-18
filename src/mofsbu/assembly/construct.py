@@ -113,6 +113,10 @@ def metal_block(symbol: str, oxidation_state: int, *, cn: int,
     Multiplicity is DERIVED from the d-count and the spin class, never defaulted to 1: a
     high-spin Fe(III) is a sextet, and a module whose whole argument is "do not guess"
     handing back a singlet for it would be the loudest possible contradiction.
+
+    The metal's per-atom `formal_charge` is **0** — charge is graph-level (D15), and the
+    oxidation state travels in its own label field.  Writing it twice made this producer
+    disagree with `from_rdkit` and `examples.py` about the same species (B12).
     """
     from mofsbu.energy.backends import spin_class_multiplicity
 
@@ -121,7 +125,7 @@ def metal_block(symbol: str, oxidation_state: int, *, cn: int,
         multiplicity = spin_class_multiplicity(symbol, oxidation_state, spin_class)
     g = TypedGraph(charge=oxidation_state if charge is None else charge,
                    multiplicity=multiplicity, name=f"{symbol}({chosen})")
-    g.add_atom(symbol, formal_charge=oxidation_state,
+    g.add_atom(symbol, formal_charge=0,
                oxidation_state=oxidation_state, spin_class=spin_class)
     directions = [tuple(float(x) for x in v) for v in site_vectors(chosen, cn, 1.0)]
     return _with_state(g, vacancy_sites(0, (0.0, 0.0, 0.0), directions), np.zeros((1, 3)))
@@ -389,9 +393,13 @@ def construct(seed: BuildingBlock, partners: Sequence[BuildingBlock],
             site_a = _find_site(block, vacancy_spec.get("atom"),
                                 vacancy_spec.get("slot"), f"vacancy (step {n})")
             site_b = _find_site(partner, donor_spec.get("atom"), 0, f"donor (step {n})")
+        # `lone_pair` defaults to 0 rather than raising on an older path, and that is safe
+        # for the one reason a replay default ever is: 0 IS what those paths did — it is
+        # the stored `frame`, and the lobes were not selectable when they were written.
         result = join(block, partner, site_a, site_b,
                       mode=step.get("mode", BindingMode.MONODENTATE.value),
                       torsion_well=int(step.get("torsion_well", 0)),
+                      lone_pair=int(donor_spec.get("lone_pair", 0)),
                       seed=int(step.get("seed", 0)), with_geometry=with_geometry)
         block, strain = result.block, max(strain, result.strain)
         taken.append(dict(result.choice_vector, partner=p))

@@ -227,11 +227,14 @@ identity, so they cannot be retrofitted):
   L0, so it is decided now.
 - **Bridging-ligand representation is frozen now:** a µ₂-carboxylate = **one ligand node with two
   typed dative edges** (each carrying which metal + which donor atom), never split/duplicated.
-- **The geometry placer generalizes from "ligands on a sphere around one center" to "a set of
-  coordination centers with inter-center constraints (M–M distance, bridge bite angle) + each
-  center's local geometry."** `GeometryPlacer` today is single-center — **this multi-center placer
-  is the headline engineering cost of the whole plan.** Identity (the canonical certificate) and
-  site inheritance (atom map) get polynuclear for free; the placer is where the work is.
+- ~~**The geometry placer generalizes to "a set of coordination centers with inter-center
+  constraints" — the headline engineering cost of the whole plan.**~~ **Superseded by D20**,
+  measured against the M6 battery: a polynuclear node *emerges* from joins, the multi-centre
+  placer reconciles only the edges where two determinants disagree, and the cost turned out
+  not to be on the critical path. The argument it replaces is in
+  [`archive/DESIGN_history.md`](archive/DESIGN_history.md). The rest of this bullet stands:
+  identity (the canonical certificate) and site inheritance (atom map) get polynuclear for
+  free.
 
 ### 6.2 Geometries + fidelity ladder
 
@@ -538,6 +541,118 @@ coordinates.
   it. An identity is pointed at by the provenance DAG. The rule is therefore not "always
   re-derive" or "never" but: **re-derive what is only an annotation; version what is an
   address.**
+
+- **D20 (supersedes §6.1's last bullet)** **A polynuclear node EMERGES from joins; the
+  multi-centre placer is for RECONCILIATION only.** §6.1 called the multi-centre placer "the
+  headline engineering cost of the whole plan". Measured against the M6 battery, it is not:
+  a Cu paddlewheel builds QC-clean and hashes to its M2 fixture at **both L0 and L1** from
+  machinery that already existed — the sp2 donor's second lone-pair well, `kabsch`, the
+  curated donor-distance table, the existing `qc` — with no solver anywhere. So **M···M is an
+  output to validate, not an input to impose**, and `data/reference/node_cases.tsv` carries
+  the literature window a built node is measured *against* rather than a target a placer is
+  driven *towards*.
+
+  `place_multicentre` is kept, for a measured reason rather than a blanket one: where two
+  determinants fix the same edge they disagree. A µ₃-oxo asks 3.291 Å of Fe₃ while syn-syn
+  formate offers 2.696 (0.595 Å apart); µ₄-oxo asks 3.168 Å of Zn₄O against 2.677 (0.491 Å).
+  That is **one scalar on one edge**, not a general constrained optimisation, and the
+  difference matters: a determined skeleton is *built*, an under-determined one **raises**
+  naming what is missing, and neither falls into a minimiser.
+
+  The residual is reported as strain and closed by relaxation. Averaging the two determinants
+  is specifically refused — it stores a number neither determinant asked for, and the
+  disagreement is a real property of a rigid-ligand model, not noise to be smoothed. Cost of
+  this decision, stated up front: the model is quantifiably wrong by ~0.5 Å on oxo-centred
+  clusters and says so, rather than being plausibly wrong and silent.
+
+  The one place a distance is a legitimate *input* is a **declared nucleus**, where the caller
+  states it on purpose — which is a declaration, not an inference, and so is the same rule.
+
+- **D21 (C2, geometric half)** **θ_geom = 0.15 Å, calibrated and not chosen.** The threshold
+  sits in the valley between two measured populations of core-RMSD over the rigid core plus
+  coordination sphere, 12 xTB-relaxed structures over 4 choice vectors × 3 embedding seeds:
+
+  | population (xTB-relaxed) | n | min | median | max |
+  |---|---|---|---|---|
+  | Kind A — one choice vector, different embedding seed | 12 | 0.0000 | 0.0000 | **0.0316** |
+  | Kind B — different choice vectors | 54 | **0.6435** | 0.8320 | 1.1871 |
+
+  **RAW constructs could not set this number, and that is the first result rather than an
+  obstacle.** A join is a deterministic function of its choice vector and absorbs the ligand's
+  embedding noise completely, so at RAW the Kind-A spread is *identically zero* (105 pairs,
+  max 0.0000) — there is no stochastic peak for a threshold to sit above, and a number
+  calibrated there would be calibrated against no noise. Relaxation re-introduces it.
+
+  0.15 is the **geometric** mean of the two bounds, not the arithmetic one, because these are
+  ratios of distances: it puts 4.7× margin above the widest duplicate and 4.3× below the
+  closest real branch, where an arithmetic midpoint would sit 20× above one and 1.5× below the
+  other. Both bounds ship beside the constant as `CALIBRATION_KIND_A_MAX` /
+  `CALIBRATION_KIND_B_MIN`, and a test asserts the threshold stays between them with margin,
+  so the number cannot drift away from the data that set it.
+
+  **C2's energy half stays open, deliberately.** Over the same set the Kind-A *energy* spread
+  reached 16.6 kcal/mol between samples whose cores agreed to 0.03 Å — all of it motion
+  outside the core, because the rigid-core rule cuts a delocalised carboxylate C–O as if it
+  were rotatable ([B9](BUGS.md#b9)). A window set from that data would bake a known defect
+  into a stored threshold. `DEFAULT_ENERGY_WINDOW is None`, the mechanism is built and tested,
+  and the number waits for the core fix.
+
+- **D22 (C2's storage corollary; narrows D19)** **A tag is derived where the coordinates are,
+  and a caller that shares a node with an untagged path says so explicitly.** `put_structure`
+  computes L2 from a graph alone, and a `structures` row exists before its geometry does — so
+  only the builder holds coordinates at insert time. `store_block` therefore derives the tag
+  by default and takes `l2=` as an override for the one case that needs it: the run pipeline
+  does not tag isomers, so a route that tagged its own product would file it apart from the
+  node every other route reached ([B2](BUGS.md#b2)). It passes `l2=""` **on purpose**, and
+  closing B2 moves both paths together or neither.
+
+  No backfill, in either direction. Of the 39 structures stored under the stub, 18 would gain
+  a real tag and 21 would still tag `""` — and re-deriving them would rewrite stored
+  identities and every `reactions` edge pointing at them, which is the one thing here that is
+  not regenerable (D2). `structures.algo_l2` records which recipe produced each value, so a
+  `""` reads as *"this predates L2"* rather than as *"this has no isomerism"*. The
+  choice-vector digest goes the other way and for the same rule: it is an **annotation**
+  nothing points at, so `ix_geometries_choice` is repopulated by rewriting, not versioned.
+
+- **D23** **`MAX_BITE_MISMATCH_DEG = 40°`, and what it separates is pinned rather than the
+  threshold itself.** A chelate's verdict is its bite angle against the angular separation of
+  the two vertices it is asked to span. Against an octahedral *cis* pair (90°) acetate
+  measures 59.7°, a 30.3° mismatch, and it is the strained end of what really forms — the
+  common chelators (acac ~92°, en ~85°, bipy ~78°) sit within 12°. Against a *trans* pair
+  (180°) every one of them misses by 88° or more, acetate by 120°. Anything from ~35 to ~60
+  draws the same line; 40 is taken from the low half so the strained-but-real case passes with
+  margin while nothing comes near trans.
+
+  The number is one named constant in one module, and the *populations* are what the test
+  asserts (`test_the_bite_angle_populations_stay_far_apart`) — so a donor type whose geometry
+  moves cannot quietly cross the line, which is the failure mode "pick a tolerance from a
+  figure" always has.
+
+- **D24 (C9 resolved)** **A polynuclear node's multiplicity is STATED, never combined.** Two
+  centres' unpaired electrons add only if they are independent, and whether two d⁹ Cu(II) give
+  a singlet or a triplet is exchange coupling — not recoverable from the centres, and so not
+  derivable by the rule that derives it. The two ground-truth fixtures make the point without
+  argument: `examples.cu_paddlewheel` declares multiplicity **1** (AF-coupled d⁹–d⁹) where
+  `energy.backends.combined_multiplicity(2, 2)` gives **3**, while `examples.fe3_mu3_oxo`
+  declares 16 and the additive rule agrees.
+
+  Multiplicity is in L0, so this decides identity: a derived 3 would file the paddlewheel at
+  `Cu2_C4H4O8_q0_s3` and miss its own fixture. The multi-centre path therefore **requires** a
+  multiplicity and raises otherwise — which is already what `from_rdkit` does, and which makes
+  both fixtures correct instead of one of them wrong. `combined_multiplicity` keeps its job on
+  the mononuclear path, where "one metal plus a closed-shell ligand set" genuinely is additive.
+
+- **D25 (C10 resolved)** **A METAL–METAL edge is DECLARED, never inferred from distance.** At
+  2.673 Å two Cu are bonded and at 5.516 Å they are not, so a threshold looks available — and
+  taking it would be exactly the silent inference ground rule 5 forbids, applied to the one
+  field that is in the certificate. `EdgeType.METAL_METAL` is hashed into L1, so a guessed
+  edge is a guessed *identity*.
+
+  The battery settles it as data rather than as argument: the Fe₃ trimer at **3.29 Å has no
+  M–M edge** and the Cu₂ paddlewheel at **2.62 Å has one**, the two fixtures differ at L1 by
+  precisely that, and `node_cases.tsv` carries `mm_bond` as its own column saying it is a
+  chemical decision not derivable from `d_mm`. So: branch on it or declare it; never default.
+  `InterCentreConstraint.metal_metal_bond` is the input side of the same rule.
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in

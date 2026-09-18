@@ -85,6 +85,14 @@ class Clash(NamedTuple):
                 "overlap": round(self.overlap, 3)}
 
 
+#: How far an M-D bond may sit from the length it was placed at before it is reported.
+#: Promoted out of `check_metal_bonds`' default so that the assembly layer can ask its
+#: verdicts in the same units the check will apply — `assembly.join` imports it rather
+#: than choosing a bridging tolerance of its own, which is how a verdict and the check
+#: that follows it come to disagree.
+METAL_BOND_TOL = 0.45
+
+
 class BadBond(NamedTuple):
     """A metal-donor bond that is not the length it was placed at.
 
@@ -307,7 +315,7 @@ def check_clashes(symbols: list[str], coords: np.ndarray, bonded: set[tuple[int,
 
 
 def check_metal_bonds(coords: np.ndarray, metal_idx: int, donor_idxs: list[int],
-                      *, d_ml: float | list[float], tol: float = 0.45,
+                      *, d_ml: float | list[float], tol: float = METAL_BOND_TOL,
                       symbols: list[str] | None = None,
                       owners: list[str] | None = None,
                       sources: list[str] | None = None) -> list[BadBond]:

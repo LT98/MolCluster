@@ -21,6 +21,7 @@ from mofsbu.registry import BlobStore, Registry, find, incoming_routes
 from mofsbu.registry.jobs import task_rows
 from mofsbu.runner import enumerate_plan, estimate, plan, run
 from mofsbu.spec import BuildSpec, MetalSpec, MoleculeSpec, PocketPredicate
+from mofsbu.versions import ALGO_VERSIONS
 
 
 @pytest.fixture()
@@ -113,7 +114,10 @@ def test_the_step_carries_its_reagents_and_its_choice_vector(reg):
     ligand = labelled(reg, "[catechol-2Hcfg(0,1)sep(3)] q-2")
     step = next(r for r in incoming_routes(reg, product["id"]) if r["reagent_ids"])
     assert sorted(step["reagent_ids"]) == sorted([rung["id"], ligand["id"]])
-    assert step["choice_vector_digest"].startswith("cv1:")
+    # The recipe version, read rather than spelled: what this asserts is that the digest
+    # is a VERSIONED key — a bare hash could not say it was stale — and pinning the
+    # literal would turn every honest bump into a test edit.
+    assert step["choice_vector_digest"].startswith(f"{ALGO_VERSIONS['choice_vector']}:")
     assert step["depth"] == 2                          # two ligand copies, two additions
 
 

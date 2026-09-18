@@ -33,10 +33,15 @@ plain mapping rather than replacing it, and every producer stays a producer of d
 **Why the version is a prefix and not a column.**  The L1 key keeps its recipe version in a
 separate column because `block_id` is an address and an address may not carry incidental
 text.  A choice digest is not part of any address, and there is no column for it — so it
-carries `cv1:` in front, which makes a stale digest self-identifying and makes it
-impossible for a future recipe to produce a value that silently compares equal to this
-one's.  Bump `ALGO_VERSIONS["choice_vector"]` when anything below this line changes; old
-rows keep their prefix and are never re-labelled (ground rule 6).
+carries `ALGO_VERSIONS["choice_vector"]` in front, which makes a stale digest
+self-identifying and makes it impossible for a future recipe to produce a value that
+silently compares equal to this one's.
+
+Bump that version when anything below this line changes — and also when a PRODUCER starts
+recording a coordinate it did not record before, which is the case that looks like it is
+somebody else's business and is not: a key over a larger set of choices is a different
+key, whatever the canonicalisation did.  Old rows keep their prefix and are never
+re-labelled (ground rule 6).
 """
 from __future__ import annotations
 
@@ -114,7 +119,7 @@ def canonical_json(data: Mapping[str, Any]) -> str:
 
 
 def digest_of(data: Mapping[str, Any]) -> str:
-    """`cv1:<sha256>` over the canonical form.  The value `choice_vector_digest` holds."""
+    """`<version>:<sha256>` over the canonical form — what `choice_vector_digest` holds."""
     payload = canonical_json(data).encode()
     return f"{ALGO_VERSIONS['choice_vector']}:{hashlib.sha256(payload).hexdigest()}"
 
