@@ -56,7 +56,7 @@ local ref or on `origin/main`.
 | Geometry/QC | `src/mofsbu/geometry/` | `test_placer.py`, `test_distances.py` |
 | Polynuclear nodes (M6) | `docs/WORKPLAN_M6.md` first, then `assembly/join.py`, `geometry/placer.py`, `qc.py` | `test_m6_battery.py` + `data/reference/node_cases.tsv` |
 | Registry/schema/migrations | `src/mofsbu/registry/` | `test_registry.py`, `test_migration.py`, `test_verify.py` |
-| Energy backends/references | `src/mofsbu/energy/` | `test_energy.py`, `test_reference.py` |
+| Energy backends/references (M7) | `docs/WORKPLAN_M7.md` first, then `src/mofsbu/energy/`, `scripts/regress_m7.py` | `test_energy.py`, `test_reference.py` |
 | Browser/API behavior | `src/mofsbu/ui/` | `test_ui.py`, `test_run_inspector.py` |
 
 `src/mofsbu/registry/api.py` is the only write surface. Preserve graph-derived identity,
