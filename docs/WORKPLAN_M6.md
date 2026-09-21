@@ -191,11 +191,11 @@ non-carboxylate, symmetric and mixed-valence.
 | `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
 | `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
 | `geometry/placer.py::place_multicentre` | **signature settled, body raises.** `Center` and `InterCentreConstraint` (with `metal_metal_bond` and `window()`) exist; `Center.element` is deliberately not always a metal, because a bridging atom is a centre (§4). **`Join` stays named-but-undefined on purpose** — what the placer receives from the join path is S1's output and therefore S3's call, so guessing it now would settle the wrong end first |
-| `geometry/placer.py::GEOMETRIES` | no bent CN-2 |
+| ~~`geometry/placer.py::GEOMETRIES`~~ | ✅ **landed (S2)** — `bent` at CN 2, taking `angle_deg` and refusing without it. CN 2 is now a Kind-C branch |
 | `geometry/distances.py` | no M–M distances in `src/`; the *targets* are curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
 | `geometry/qc.py::check_intercentre` | **signature settled, body raises** — `BadIntercentre` exists |
 | `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0 and never writes an M–M bond. The fix is a **widening of this function, not a second one** — one conversion means one place to be wrong, which is its own docstring's argument (S7) |
-| `sites/perception.py` | `[OH-]` perceives **zero** donors — filed as [B13](BUGS.md#b13) |
+| ~~`sites/perception.py`~~ | ✅ **fixed (S2)** — `[OH-]` perceives `hydroxide_O`; [B13 archived](archive/BUGS_resolved.md). Turned up [B15](BUGS.md#b15): `[O-2]` types as a hydroxide |
 | `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS.md#b14) |
 | ~~`assembly/construct.py`~~ | ✅ **fixed (S0)** — `metal_block` writes `formal_charge=0`; [B12 archived](archive/BUGS_resolved.md) |
 | ~~`examples.py`~~ | ✅ Zn₄O landed; `examples.ALL` holds 17 and `PLAN_implementation.md` §6 now says so |
@@ -359,13 +359,49 @@ case where the two vertices happen to share a metal; ✅ a span that cannot reac
 refuses **by name and with its number**. Still owed: the **whole** paddlewheel and its benzoate
 analogue QC-clean — two bridges build, four need S4's vertex arrangement.
 
-### S2 — mechanism B: the bridging atom as a centre · **M**
+### S2 — mechanism B: the bridging atom as a centre · **M** · ✅ **LANDED**
 
-A bridging atom carries its own local geometry and vertices that are metal positions. Add the
-bent CN-2 geometry `GEOMETRIES` lacks. Perception must first return a bare hydroxide at all.
+Three pieces, and the third one is where the change of viewpoint actually bit.
 
-*Exit:* µ3 and µ4 skeletons reproduce **3.291** and **3.168 Å**; a µ2-OH dimer builds at ~100°
-and ~3.0 Å; a bridging aqua stops reporting an implied M···M of zero.
+**[B13](archive/BUGS_resolved.md) closed.** `_classify_anionic` opened with "anionic means
+deprotonated", which is true of every donor it recovers except the one this slice needs:
+hydroxide is anionic **and** still carries its proton, so the guard dropped it. The giveaway
+was that the function already had an unreachable `hydroxide_O` branch. It also turned up a
+separate defect — `[O-2]` types as `hydroxide_O` too, so an oxo reports a hydroxide's pKa —
+filed as [B15](BUGS.md#b15) rather than folded in, because giving oxo its own type is a change
+to `donor_descriptors.tsv`.
+
+**`bent` added to `GEOMETRIES`, and it is the one entry whose name does not fix its vertices**,
+so `site_vectors` takes `angle_deg` and refuses without it (ground rule 5). A single baked-in
+number would have been exactly the tolerance-turned-folklore §10 warns about: a µ2-hydroxide
+sits near 100° and a bent µ2-oxo well above it. CN 2 therefore becomes a Kind-C branch, as CN 4
+already is — the difference between linear and bent is 0.9 Å of M···M.
+
+**`bridging_metal_positions` reads the BONDING, not a `SiteFrame`, and that is the whole
+distinction between mechanism A and mechanism B.** A frame answers "where does *one* metal go",
+and for a single-neighbour donor its axis is a lone-pair lobe tilted ~120° off the bond. Using
+that as a bridge's bisector swung one metal of a µ2-hydroxide to **1.68 Å from its own proton**.
+A bridge's bisector is the direction away from everything the atom is already bonded to. With
+that, all three exit numbers land:
+
+| bridge | geometry | M–O–M | M···M | clearance to substituents |
+|---|---|---|---|---|
+| µ2-OH | bent | 100.0° | **2.988 Å** | 2.69 Å |
+| µ2-aqua | bent | 104.5° | **3.084 Å** (was 0.000) | 2.48 Å |
+| µ3-oxo | trigonal | 120.0° | **3.291 Å** | — |
+| µ4-oxo | tetrahedral | 109.47° | **3.168 Å** | — |
+
+A bare oxo has nothing to orient against and every azimuth is free — honest rather than sloppy,
+since such a skeleton is fixed by its *angles* and every orientation gives the same M···M set.
+
+**And a data defect the slice tripped over:** `cu2_mu2_hydroxide` had been one field SHORT in
+`node_cases.tsv` since the day it was written, so `csv.DictReader` shifted every value after the
+gap one column left — its note was being read as its `source`, and `note` was `None`. Nothing
+caught it because nothing asserted on those two columns. `tests/node_cases.py` now refuses a row
+whose width disagrees with the header.
+
+*Exit:* ✅ µ3 and µ4 skeletons reproduce 3.291 and 3.168 Å; ✅ a µ2-OH bridge builds at 100° and
+2.988 Å; ✅ a bridging aqua reports 3.084 Å instead of zero.
 
 ### S3 — reconciliation, and `place_multicentre` · **L**
 
@@ -505,11 +541,14 @@ through SQLite rather than in memory, the way `tests/test_m5_exit_gates.py` does
 ```
 S0 battery + decisions ─┬─► S1 mechanism A ──┬─► S3 reconciliation ─► S7 gates ─► S8 persist
          ✅             ├─► S2 mechanism B ──┘         ▲        ▲
+                        │        ✅                    │        │
                         └─► S4 nucleus ────────────────┘        │
                                                    S5 routes · S6 qc
 ```
 
-S0 is closed. S1 is half done — the well branch landed, the two-point bridge join has not.
+S0 and S2 are closed. S1 built the lone-pair branch, the join coordinate and `join_bridge`; what
+it has not reached is the whole four-bridge paddlewheel, which needs S4's vertex arrangement —
+measured, not assumed, so **S4 comes before the rest of S1**.
 
 S1 and S2 are independently testable and can be done in either order; S3 needs both, because
 reconciliation is by definition what happens where they meet. S5 is small and can land as soon

@@ -24,8 +24,8 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B9](#b9) | correctness | `identity/conformers.py` | The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable |
 | [B10](#b10) | undecided | `identity/isomers.py` | Δ/Λ is self-consistent but its absolute assignment is unverified |
 | [B11](#b11) | cosmetic | `sites/model.py` | `vacancy_sites` normalises by hand, differently from `_linalg.unit` |
-| [B13](#b13) | correctness | `sites/perception.py` | A bare hydroxide perceives **zero** donors, so µ2-OH cannot be built |
 | [B14](#b14) | correctness | `sites/perception.py` | Pyrazolate's two equivalent N type differently, and one of them cannot bridge |
+| [B15](#b15) | correctness | `sites/perception.py` | A bare oxide `[O-2]` types as `hydroxide_O`, so an oxo reports a hydroxide's pKa |
 
 ---
 
@@ -276,31 +276,6 @@ Tracked as [#22](https://github.com/LT98/MolCluster/issues/22).
 
 ---
 
-## B13
-
-**A bare hydroxide perceives zero donors, so µ2-OH cannot be built.** `correctness` ·
-`sites/perception.py`
-
-Measured 2026-09-16:
-
-| molecule | donors perceived |
-|---|---|
-| `[OH-]` | **none** |
-| `C[O-]` methoxide | `alkoxide_O` |
-| `CO` methanol | `alkoxide_O` |
-
-Methoxide and methanol perceive normally, so the rule is dropping `[OH-]` specifically — it has
-no heavy neighbour. A hydroxide bridge is one of the commonest motifs in polynuclear chemistry
-and the M6 battery needs it, so this is not a curiosity.
-
-Note the neighbouring limitation, which is *not* this bug and is M6 scope rather than a defect:
-a donor with two neighbours (a bridging aqua) gets a single determined axis from `site_frame`,
-so both torsion wells return the same direction and its implied M···M is **0.000 Å**. One atom
-pointing at two metals needs the bridging atom treated as a centre in its own right —
-[`WORKPLAN_M6.md`](WORKPLAN_M6.md) §4.
-
----
-
 ## B14
 
 **Pyrazolate's two equivalent nitrogens type differently, and one of them cannot bridge.**
@@ -323,3 +298,34 @@ one end whatever the other end offers. Pyrazolate-bridged dimers are the standar
 non-carboxylate test of a bridging model, so M6 has no way to check that mechanism A generalises
 beyond carboxylates until this is fixed.
 
+---
+
+## B15
+
+**A bare oxide types as a hydroxide, so an oxo reports a hydroxide's pKa.** `correctness` ·
+`sites/perception.py`
+
+Found while fixing [B13](archive/BUGS_resolved.md). `_classify_anionic` returns
+`"hydroxide_O"` for any anionic oxygen with no heavy neighbour, and that branch does not look
+at the hydrogen count:
+
+| molecule | perceived as | should be |
+|---|---|---|
+| `[OH-]` | `hydroxide_O` | `hydroxide_O` ✅ |
+| `[O-2]` | `hydroxide_O` | an oxo — its own type |
+
+The consequence is not cosmetic. `descriptors.tables.donor("hydroxide_O")` carries pKa 15.7,
+which is the number for water losing its second proton; an oxo has already lost both and does
+not deprotonate at all. So `activation_ease` scores a µ-oxo as though it had an activation step
+it cannot have, and D18's rule that "a donor with no pKa never self-flags" is bypassed by
+giving it someone else's.
+
+**The fix is a new donor type, which makes it a reference-data change rather than a one-line
+one.** `oxo_O` needs a row in `data/reference/donor_descriptors.tsv` with its own pKa (absent,
+not large), HSAB class and denticity, plus an entry in `sites.frames._BINDING_MODES` offering
+`mu2`/`mu3`/`mu4`. `donor()` raises on an unknown key by design, so adding the type without the
+row fails loudly rather than silently — which is the right order to do it in.
+
+**Not blocking M6/S2.** µ3 and µ4 oxo bridges are placed as **centres**
+(`geometry.placer.bridging_metal_positions`), a path that never asks perception for a donor
+type. It bites whenever an oxo-centred node is stored and its sites are scored.

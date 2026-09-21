@@ -204,11 +204,21 @@ def _classify_anionic(atom: Chem.Atom) -> str | None:
     hydrogen.  Classifying only neutral atoms means re-perceiving such a structure finds
     nothing — activation would destroy the very site it creates.  The type is recovered
     from the environment, mirroring the labile patterns that would have produced it.
+
+    **Hydroxide keeps its proton and is still a donor** (B13).  "Anionic means
+    deprotonated" holds for every donor this function recovers except that one: `[OH-]`
+    carries a charge AND a hydrogen, and the blanket guard dropped it.
     """
-    if atom.GetFormalCharge() >= 0 or _n_hydrogens(atom) > 0:
+    if atom.GetFormalCharge() >= 0:
         return None
     sym = atom.GetSymbol()
     heavy = [nb for nb in atom.GetNeighbors() if nb.GetAtomicNum() > 1]
+    if _n_hydrogens(atom) > 0:
+        # An anion that is still protonated is a hydroxide or it is a protonation state
+        # this layer does not recognise; the second case gets no donor rather than a
+        # guessed one.  `not heavy` is what separates them — an O(-) bonded to carbon and
+        # carrying an H is not a species, it is a mis-built molecule.
+        return "hydroxide_O" if sym == "O" and not heavy else None
     if sym == "O":
         if not heavy:
             return "hydroxide_O"

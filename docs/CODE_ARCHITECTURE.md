@@ -60,6 +60,7 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
 | `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot | ✅ |
+| ↳ `bridging_metal_positions` | mechanism B: a bridging ATOM is a centre whose vertices are metal positions. Reads the bonding, not a frame — a lone-pair lobe is the wrong bisector for a bridge | ✅ |
 | ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
 | ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
