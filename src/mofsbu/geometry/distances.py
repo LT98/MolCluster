@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mofsbu._types import AmbiguousSpecError
+
 #: M-O distance per metal, angstrom.  This IS the old `placer.D_ML` table, kept as the
 #: base of the model so existing geometries and their tests do not move.
 BASE_MO: dict[str, float] = {
@@ -137,3 +139,39 @@ def metal_donor_distance(metal: str, donor_element: str,
 def donor_elements(mol, donor_idxs) -> tuple[str, ...]:
     """Element symbols of a ligand's donor atoms, from the molecule itself."""
     return tuple(mol.GetAtomWithIdx(int(i)).GetSymbol() for i in donor_idxs)
+
+
+def metal_metal_distance(m1: str, m2: str, *, motif: str | None = None,
+                         override: float | None = None) -> Distance:
+    """M-M distance for a DECLARED nucleus.  The caller states it or gets an estimate.
+
+    `Distance.donor_element` carries the second metal here; the dataclass is not widened
+    for one caller, and no M-M distance reaches a stored choice vector as a dict.
+
+    There is no curated M-M table and this function will not stand in for one.  A
+    quadruply-bonded Mo2 at 2.09 A and a Cu2 paddlewheel at 2.62 A are the same question
+    to every input this function has — the bond order is the answer and the element
+    symbols do not carry it.  So `motif` exists to be REFUSED: naming one is the moment a
+    caller believes a table is being consulted, and raising there is what keeps a made-up
+    number out of a geometry that is afterwards measured against literature.
+
+    `node_cases.tsv` is not that table either.  Its `d_mm` values are what a built node is
+    checked AGAINST; driving the placer from them would make the M6 exit gate compare a
+    number with itself.
+
+    A metal-metal bond is not dative, so `DATIVE_LENGTHENING` is not added: the fallback
+    is the plain covalent-radii sum, and it reports `estimated` because for a bond whose
+    order it does not know that is the honest label (D20).
+    """
+    if override is not None:
+        return Distance(float(override), "override", m1, m2)
+    if motif is not None:
+        raise AmbiguousSpecError(
+            f"there is no M-M distance table to look {motif!r} up in, and {m1}-{m2} does "
+            f"not determine one: a quadruply-bonded Mo2 sits at 2.09 A and a Cu2 "
+            f"paddlewheel at 2.62 A, and nothing in the two element symbols tells them "
+            f"apart. A nucleus is DECLARED, so pass override=<distance in A>; call "
+            f"without motif= to accept the covalent-radii estimate instead.")
+    d = (COVALENT_RADII.get(m1, DEFAULT_COVALENT)
+         + COVALENT_RADII.get(m2, DEFAULT_COVALENT))
+    return Distance(d, "covalent-radii", m1, m2)

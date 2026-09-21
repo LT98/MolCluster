@@ -34,6 +34,7 @@ calls a don't-care has one well, hence a full turn of azimuthal freedom — whic
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -131,6 +132,53 @@ def site_vectors(geometry: str, n: int, d: float = 2.05, *,
     if scale.shape != (n,):
         raise ValueError(f"{scale.shape[0]} distances for {n} sites")
     return scale[:, None] * vecs
+
+
+def _check_reserved(reserve: Sequence[int] | None, cn: int) -> set[int]:
+    """`reserve` as a validated set of vertex indices.  An index out of range RAISES.
+
+    Silently dropping one would reserve a different arrangement than the caller asked
+    for and report success, which is the failure this whole argument exists to prevent.
+    """
+    if reserve is None:
+        return set()
+    out: set[int] = set()
+    for v in reserve:
+        i = int(v)
+        if not 0 <= i < cn:
+            raise ValueError(
+                f"vertex {i} is not on a CN-{cn} polyhedron, whose vertices are "
+                f"0..{cn - 1}. `reserve` indexes site_vectors(geometry, cn).")
+        out.add(i)
+    return out
+
+
+def cis_vertices(geometry: str, cn: int, k: int = 2, *,
+                 angle_deg: float | None = None) -> tuple[int, ...]:
+    """`k` mutually-CIS vertex indices of this polyhedron — the set to `reserve`.
+
+    Cis is what a chelate can span and what a bridge needs (~90 deg on an octahedron);
+    trans is what `_assign_targets` leaves behind when nobody says otherwise.  The set
+    returned is the one whose widest internal angle is smallest, so "cis" is MEASURED off
+    the polyhedron rather than read from a table of index conventions that a reordering of
+    `site_vectors` would silently invalidate.
+
+    Ties are broken by the lowest indices, so the answer is deterministic and a build that
+    reserves a cis pair replays to the same pair.
+    """
+    from itertools import combinations
+
+    if k < 2:
+        raise ValueError(f"cis is a relation between at least two vertices; got k={k}")
+    targets = site_vectors(geometry, cn, 1.0, angle_deg=angle_deg)
+    if k > cn:
+        raise ValueError(f"{geometry} has {cn} vertices; cannot pick {k} of them")
+
+    def widest(combo: tuple[int, ...]) -> float:
+        return max(_angle_between(targets[i], targets[j])
+                   for i, j in combinations(combo, 2))
+
+    return min(combinations(range(cn), k), key=lambda c: (widest(c), c))
 
 
 def bridging_metal_positions(mol: Chem.Mol, atom_idx: int, conf=None, *, geometry: str,
@@ -280,7 +328,8 @@ def _clearance_scorer(symbols: list[str], other_symbols: list[str],
     return score
 
 
-def _assign_targets(targets: np.ndarray, ligands: list) -> tuple[list[np.ndarray], list[int]]:
+def _assign_targets(targets: np.ndarray, ligands: list, *, reserved: Sequence[int] = (),
+                    ) -> tuple[list[np.ndarray], list[int]]:
     """Give each ligand coordination vertices its denticity can actually reach.
 
     Polydentate ligands are served first and take the vertex set whose angles sit
@@ -292,10 +341,14 @@ def _assign_targets(targets: np.ndarray, ligands: list) -> tuple[list[np.ndarray
     That second value used to be dropped on the floor, which is why an unsaturated centre
     had to be rebuilt at a smaller coordination number instead of simply having empty
     vertices: the information that they existed was computed and then discarded here.
+
+    `reserved` vertices are withheld before any ligand is served and come back among the
+    vacancies: this is *which* vertices stay open, as against how many (S4).
     """
     from itertools import combinations
 
-    remaining = list(range(len(targets)))
+    held = set(reserved)
+    remaining = [i for i in range(len(targets)) if i not in held]
     order = sorted(range(len(ligands)), key=lambda i: -ligands[i].denticity)
     assigned: dict[int, np.ndarray] = {}
     for i in order:
@@ -320,7 +373,9 @@ def _assign_targets(targets: np.ndarray, ligands: list) -> tuple[list[np.ndarray
         for v in pick:
             remaining.remove(v)
         assigned[i] = targets[pick]
-    return [assigned[i] for i in range(len(ligands))], remaining
+    # Ascending, so a vacancy's slot number is a property of the polyhedron rather than
+    # of the order this function happened to hand vertices out in.
+    return [assigned[i] for i in range(len(ligands))], sorted(set(remaining) | held)
 
 
 def _oop_axis(mol: Chem.Mol, donor_idx: int, origin: np.ndarray, conf) -> np.ndarray | None:
@@ -510,6 +565,7 @@ def place_mononuclear(
     geometry: str,
     cn: int | None = None,
     d_ml: float | None = None,
+    reserve: Sequence[int] | None = None,
     seed: int = 0,
 ) -> PlacementResult:
     """Assemble one coordination centre from ligands whose frames are already known.
@@ -532,18 +588,33 @@ def place_mononuclear(
     Handing those integers back on `LigandPlacement` replays the geometry exactly and
     skips the search.  A vacancy is empty space, so a ligand is free to rotate INTO one —
     the search sees only the atoms that are actually there.
+
+    `reserve` names vertices of `site_vectors(geometry, cn)` that no ligand may take, so
+    the caller decides WHICH vertices stay open rather than only how many.  Without it the
+    assignment fills in its own order and a CN-6 centre carrying four co-ligands comes
+    back with its two vacancies *trans*, where a ~90 deg chelate cannot reach them and the
+    next step refuses with `chelate_cannot_span`.  A bridge wants the same control for the
+    same reason: the vertex facing the partner metal is not available to anything else.
+    `cis_vertices` names a mutually-cis set to hand in here.  It is part of the choice
+    vector, because it changes which vertex each ligand occupies.
     """
     n_sites = sum(lig.denticity for lig in ligands)
     cn = n_sites if cn is None else int(cn)
+    reserved = _check_reserved(reserve, cn)
     if cn < n_sites:
         raise ValueError(
             f"{n_sites} donor site(s) cannot fit a CN-{cn} polyhedron; the ligands ask "
             f"for more vertices than the geometry has")
+    if cn - len(reserved) < n_sites:
+        raise ValueError(
+            f"{n_sites} donor site(s) cannot fit the {cn - len(reserved)} vertex/vertices "
+            f"a CN-{cn} polyhedron has left once {sorted(reserved)} are reserved. Reserve "
+            f"fewer, or build at a higher coordination number.")
     # The polyhedron chooses DIRECTIONS; the donor chooses how far along one it sits.
     # So assignment happens on unit vectors — it scores angles, which are scale-free —
     # and the scaling is applied per donor afterwards.
     unit_targets = site_vectors(geometry, cn, 1.0)
-    per_ligand_units, vacant = _assign_targets(unit_targets, ligands)
+    per_ligand_units, vacant = _assign_targets(unit_targets, ligands, reserved=reserved)
 
     per_ligand_d: list[list[Distance]] = []
     for lig in ligands:
@@ -686,13 +757,15 @@ def place_mononuclear(
         # on a pair nobody calibrated is not read as a statement about the chemistry.
         report.notes.append("M-L distance estimated from covalent radii for: "
                             + ", ".join(estimated))
+    cv = {"metal": metal, "geometry": geometry, "cn": cn,
+          "d_ml": d, "seed": seed, "ligands": choices,
+          "donor_distances": [x.to_dict() for dists in per_ligand_d for x in dists]}
+    if reserved:
+        # Only when something was reserved, so a saturated build's choice vector — and
+        # therefore its stored identity — is unchanged by this argument existing.
+        cv["reserve"] = sorted(reserved)
     return PlacementResult(symbols, arr, 0, donor_idxs, bonded, report,
-                           choice_vector={"metal": metal, "geometry": geometry,
-                                          "cn": cn,
-                                          "d_ml": d, "seed": seed, "ligands": choices,
-                                          "donor_distances": [
-                                              x.to_dict() for dists in per_ligand_d
-                                              for x in dists]},
+                           choice_vector=cv,
                            atom_offsets=offsets, owners=owners,
                            donor_distances=[x for dists in per_ligand_d for x in dists],
                            vacancies=tuple(tuple(float(c) for c in unit_targets[v])

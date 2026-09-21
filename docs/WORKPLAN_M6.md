@@ -188,11 +188,11 @@ non-carboxylate, symmetric and mixed-valence.
 | ~~`assembly/join.py::chelate_compatible`~~ | ✅ **landed (S1)** — `bridge_compatible` exists and refuses the same-metal case back, by name, pointing at `join_chelate`. Its verdict is a **distance**, and it is necessary-not-sufficient: qc stays the arbiter |
 | ~~`assembly/join.py::join_chelate`~~ | ✅ **landed (S1)** — `join_bridge` is that body with the two vertices on different metals: one DATIVE per donor to its OWN metal, no bisector slide, both lobes recorded |
 | ~~`assembly/join.py::join`~~ | ✅ **landed (S1)** — the `n_metals > 1` guard is gone under D20, and `lone_pair=` is a recorded coordinate. A bridged dimer now builds from two one-contact joins at 2.673 Å. `choice_vector` → `cv2` |
-| `geometry/placer.py::place_mononuclear` | fills vertices in its own order, so the caller cannot say which to leave open — a CN-6 centre with four co-ligands comes back with its two vacancies **trans**, and a ~90° chelate cannot reach them (`chelate_cannot_span`). Declared placer work by the pathway ladder that hit it |
-| `assembly/join.py::compatible` | refuses vacancy↔vacancy, naming M6 as what will place it |
+| ~~`geometry/placer.py::place_mononuclear`~~ | ✅ **landed (S4)** — takes `reserve=`, a set of vertex indices no ligand may claim, and `cis_vertices` names the mutually-cis set to hand it. The trans defect is asserted in both directions: 180° by default, 90° reserved. Absent `reserve`, the choice vector is unchanged |
+| ~~`assembly/join.py::compatible`~~ | ✅ **landed (S4)** — vacancy↔vacancy is `join_metal_metal`, and `compatible` now refuses it *by naming that function* rather than by naming a milestone |
 | `geometry/placer.py::place_multicentre` | **signature settled, body raises.** `Center` and `InterCentreConstraint` (with `metal_metal_bond` and `window()`) exist; `Center.element` is deliberately not always a metal, because a bridging atom is a centre (§4). **`Join` stays named-but-undefined on purpose** — what the placer receives from the join path is S1's output and therefore S3's call, so guessing it now would settle the wrong end first |
 | ~~`geometry/placer.py::GEOMETRIES`~~ | ✅ **landed (S2)** — `bent` at CN 2, taking `angle_deg` and refusing without it. CN 2 is now a Kind-C branch |
-| `geometry/distances.py` | no M–M distances in `src/`; the *targets* are curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
+| `geometry/distances.py` | ✅ **`metal_metal_distance` landed (S4)**, and it is still not a table: a named `motif` is **refused** with the two numbers that make the point, and the fallback is a plain covalent-radii sum marked `estimated` (no `DATIVE_LENGTHENING` — an M–M bond is not dative). The *targets* stay curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
 | `geometry/qc.py::check_intercentre` | **signature settled, body raises** — `BadIntercentre` exists |
 | `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0 and never writes an M–M bond. The fix is a **widening of this function, not a second one** — one conversion means one place to be wrong, which is its own docstring's argument (S7) |
 | ~~`sites/perception.py`~~ | ✅ **fixed (S2)** — `[OH-]` perceives `hydroxide_O`; [B13 archived](archive/BUGS_resolved.md). Turned up [B15](BUGS.md#b15): `[O-2]` types as a hydroxide |
@@ -415,7 +415,7 @@ reconciliation is explicit policy — which determinant wins, and the residual r
 *Exit:* Fe₃-oxo and Zn₄O build with the residual reported at the measured ~0.5 Å; the
 paddlewheel path never calls this; an under-determined constraint set refuses.
 
-### S4 — the declared nucleus, and reserved vertices · **M**
+### S4 — the declared nucleus, and reserved vertices · **M** · ✅ **LANDED**
 
 Two halves of one idea: **the caller says what the starting geometry leaves open.**
 
@@ -450,6 +450,28 @@ partner metal is not available to anything else.
 system, and `enumerate_constructions` grows ligands onto it — prove this rather than assume it,
 since B8's occlusion rule is exactly what could mark a dimer's vertices `BLOCKED`. A centre
 asked to reserve a cis pair returns one, and the ladder's co-ligand-saturated series connects.
+
+**Met, and measured — `tests/test_m6_nucleus.py`.** A declared Cu₂ at 2.62 Å comes back as two
+atoms and one `METAL_METAL` edge, five open vertices per metal, and the partner's frames
+carried into the dimer's coordinates (origin at 2.62, not at its own 0). **All ten vertices
+are `OPEN`**: B8's occlusion does not fire on a bare second metal, which was the risk worth
+proving rather than assuming. `enumerate_constructions` then returns exactly ten degree-1
+products — one per open vertex, across *both* metals — with no refusals, and the M···M survives
+to degree 2.
+
+Two things the slice turned up that its plan did not predict:
+
+* **Equal `atom_idx` across two blocks is the normal case, not a self-bond.** Every freshly
+  built metal block numbers its metal atom 0, so a same-atom guard inside the two-site
+  predicate refuses every legitimate dimer. The self-bond question is about the *block*, and
+  `join_metal_metal` is where the blocks are, so the check lives there.
+* **`reserve` is kept out of the choice vector when nothing was reserved.** An argument that
+  exists must not re-label structures built before it did (ground rule 6 / D19), so a
+  saturated build's vector — and therefore its stored identity — is byte-identical.
+
+`cis_vertices` **measures** the angle rather than encoding an index convention, which the
+trigonal bipyramid earns: it returns the axial/equatorial pair at 90°, where table order would
+have handed back two equatorials at 120°.
 
 ### S5 — ~~lift the `n_metals` guard~~, and discriminate the routes · **S**
 
@@ -543,12 +565,15 @@ S0 battery + decisions ─┬─► S1 mechanism A ──┬─► S3 reconcilia
          ✅             ├─► S2 mechanism B ──┘         ▲        ▲
                         │        ✅                    │        │
                         └─► S4 nucleus ────────────────┘        │
-                                                   S5 routes · S6 qc
+                                 ✅                S5 routes · S6 qc
 ```
 
-S0 and S2 are closed. S1 built the lone-pair branch, the join coordinate and `join_bridge`; what
-it has not reached is the whole four-bridge paddlewheel, which needs S4's vertex arrangement —
-measured, not assumed, so **S4 comes before the rest of S1**.
+S0, S2 and S4 are closed. S1 built the lone-pair branch, the join coordinate and `join_bridge`;
+what it has not reached is the whole four-bridge paddlewheel, which needed S4's vertex
+arrangement — **and that is now in hand**: `place_mononuclear(reserve=cis_vertices(...))` hands
+a centre a cis pair to bridge across, and `join_metal_metal` supplies the declared nucleus the
+other route starts from. **Finishing S1 is the next slice**, with S5 available beside it since
+it only needs both routes running.
 
 S1 and S2 are independently testable and can be done in either order; S3 needs both, because
 reconciliation is by definition what happens where they meet. S5 is small and can land as soon
