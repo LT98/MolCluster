@@ -131,6 +131,19 @@ class NodeCase:
 def load_node_cases(path: Path = CASES_TSV) -> list[NodeCase]:
     rows = [line.rstrip("\n") for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.startswith("#")]
+    # A row of the wrong width is REFUSED, not padded.  `DictReader` fills a short row's
+    # trailing keys with None and puts everything after the gap one column to the left,
+    # so a missing tab silently reassigns values to their neighbours — which is how this
+    # table carried a row whose `note` was read as its `source` from the day it was
+    # written.  The header is the contract; checking it is the cheapest place to keep it.
+    width = len(rows[0].split("\t"))
+    for n, row in enumerate(rows[1:], start=2):
+        got = len(row.split("\t"))
+        if got != width:
+            raise ValueError(
+                f"{path.name} row {n} ({row.split(chr(9))[0]!r}) has {got} fields, not "
+                f"{width}. Every value after a missing tab shifts one column left, so "
+                f"this is a silently wrong table rather than a cosmetic one.")
     out: list[NodeCase] = []
     for r in csv.DictReader(rows, delimiter="\t"):
         out.append(NodeCase(

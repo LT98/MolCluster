@@ -38,11 +38,15 @@ import numpy as np
 import pytest
 
 import fixtures as fx
+from mofsbu._types import AmbiguousSpecError
+from mofsbu.assembly.construct import geometry_branches, resolve_geometry
 from mofsbu.assembly.join import NotBuiltYet
 from mofsbu.energy.backends import combined_multiplicity
 from mofsbu.geometry.distances import BASE_MO, base_distance
 from mofsbu.geometry.embed import embed_molecule
-from mofsbu.geometry.placer import Center, InterCentreConstraint, place_multicentre, site_vectors
+from mofsbu.geometry.placer import (
+    Center, InterCentreConstraint, bridging_metal_positions, place_multicentre,
+    site_vectors)
 from mofsbu.geometry.qc import check_intercentre, clash_limit, qc
 from mofsbu.graph import EdgeType
 from mofsbu.graph.from_mol import mol_from_smiles
@@ -64,7 +68,10 @@ def skeleton_mm(c: NodeCase) -> list[float]:
     Computed from `site_vectors` rather than from the arithmetic in `node_cases`, so this
     is the code's answer and not the table's — which is the point of comparing them.
     """
-    v = site_vectors(c.mu_geometry, c.n_metals, c.d_m_mu)
+    # `bent` is the one geometry whose name does not fix its vertices, so the row's own
+    # angle is handed over.  Every other one refuses the argument.
+    extra = {"angle_deg": c.mu_angle} if c.mu_geometry == "bent" else {}
+    v = site_vectors(c.mu_geometry, c.n_metals, c.d_m_mu, **extra)
     return [float(np.linalg.norm(v[i] - v[j]))
             for i in range(len(v)) for j in range(i + 1, len(v))]
 
@@ -77,7 +84,11 @@ def test_the_table_covers_both_mechanisms_and_three_nuclearities():
     assert {c.mechanism for c in CASES} >= {"A", "B", "A+B"}
     assert {c.n_metals for c in CASES} >= {2, 3, 4}
     assert {c.mm_bond for c in CASES} == {True, False}
-    assert len([c for c in CASES if c.blocked_on]) >= 2, "the known gaps should be rows"
+    # The gaps are ROWS, not omissions, and each names the defect holding it up so the
+    # battery cannot go on waiting for something already fixed.  One left: B14.
+    blocked = [c for c in CASES if c.blocked_on]
+    assert blocked, "a gap with no row is an omission"
+    assert all(c.blocked_on.startswith("B") for c in blocked)
 
 
 def test_every_case_naming_a_fixture_has_one(all_fixtures):
@@ -118,8 +129,12 @@ def test_the_skeleton_the_code_produces_is_the_one_the_table_claims(c: NodeCase)
     3.168. A change to either local geometry moves this test, which is what makes it a
     check on the code rather than a restatement of the workplan.
     """
-    if c.mu_geometry not in ("trigonal", "tetrahedral"):
-        pytest.skip(f"{c.mu_geometry} is not expressible in GEOMETRIES yet")
+    if c.mu_geometry == "bent":
+        # Not a gap: `bent` takes its angle FROM this row, so comparing the result with
+        # `2 d sin(theta/2)` on the same angle would be arithmetic checking itself. The
+        # bent case earns its keep against the literature window instead, in
+        # `test_a_bent_bridging_centre_lands_on_the_literature_hydroxide_dimer`.
+        pytest.skip("bent is built from the row's own angle; the check would be circular")
     edges = skeleton_mm(c)
     assert max(edges) - min(edges) < 1e-9, "a symmetric bridge gives one edge length"
     # 5e-4, not zero: the table stores the angle to two decimals (109.47 for a tetrahedron)
@@ -134,21 +149,106 @@ def test_the_mu3_and_mu4_skeletons_land_on_the_literature_values():
     assert abs(skeleton_mm(case("zn4o"))[0] - 3.168) < 0.001
 
 
-def test_a_bent_bridging_centre_cannot_be_expressed_at_all():
-    """§4's µ2 row fails for a stated reason: `GEOMETRIES` has only `linear` at CN 2.
+def test_a_bent_bridging_centre_lands_on_the_literature_hydroxide_dimer():
+    """§4's µ2 row, which used to fail because CN 2 offered only `linear`.
 
-    Same class of defect as the legacy table mapping CN 5 to 'planar', which this package
-    already fixed once. Delete this test in the commit that adds the bent geometry.
+    The failure it replaces is the measurement worth keeping: a linear bridge put the two
+    metals **3.900 Å** apart where a hydroxide dimer sits near 3.0, so this is not a
+    rounding difference — it is the wrong motif. At the row's own 100° the same code gives
+    2.988, inside a window the table set independently.
     """
-    from mofsbu.geometry.placer import GEOMETRIES
-
-    at_cn2 = {name for name, by_cn in GEOMETRIES.items() if 2 in by_cn}
-    assert at_cn2 == {"linear"}, f"CN 2 now offers {sorted(at_cn2)}"
-    with pytest.raises(ValueError, match="unknown coordination geometry"):
-        site_vectors("bent", 2)
     hydroxo = case("cu2_mu2_hydroxide")
-    assert hydroxo.mu_geometry == "bent" and hydroxo.blocked_on
-    assert "bent" in hydroxo.blocked_on
+    assert hydroxo.mu_geometry == "bent"
+    v = site_vectors("bent", 2, hydroxo.d_m_mu, angle_deg=hydroxo.mu_angle)
+    d_mm = float(np.linalg.norm(v[0] - v[1]))
+    assert hydroxo.d_mm_lo <= d_mm <= hydroxo.d_mm_hi, (
+        f"bent at {hydroxo.mu_angle}° gives {d_mm:.3f} Å, outside the row's window")
+    assert abs(d_mm - 2.988) < 1e-3
+
+    straight = site_vectors("linear", 2, hydroxo.d_m_mu)
+    assert float(np.linalg.norm(straight[0] - straight[1])) > hydroxo.d_mm_hi
+
+
+def bridge_positions(smiles, **kw):
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    conf = mol.GetConformer()
+    idx = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == "O")
+    return mol, conf, idx, bridging_metal_positions(mol, idx, conf, **kw)
+
+
+def separation(points):
+    return float(np.linalg.norm(points[0] - points[1]))
+
+
+def nearest_substituent(mol, conf, idx, points):
+    """Closest approach between a placed metal and anything the bridge is bonded to."""
+    pos = conf.GetPositions()
+    nb = [a.GetIdx() for a in mol.GetAtomWithIdx(idx).GetNeighbors()]
+    return min(float(np.linalg.norm(p - pos[i])) for p in points for i in nb)
+
+
+def test_a_bridging_aqua_stops_implying_a_zero_separation():
+    """The limitation B13 recorded alongside itself, and §4's reason for mechanism B.
+
+    A donor with two neighbours has ONE determined axis, so both torsion wells give the
+    same direction and the two metals a µ2-aqua implies landed on top of each other —
+    0.000 Å apart. Treating the oxygen as a centre instead gives it a real span, because
+    the second direction comes from the bridge's own local geometry rather than from a
+    lone-pair lobe that does not exist.
+    """
+    _mol, _conf, _idx, points = bridge_positions(
+        "O", geometry="bent", n_metals=2, d_m=1.95, angle_deg=104.5)
+    assert separation(points) == pytest.approx(3.084, abs=1e-3)
+
+
+def test_the_metals_of_a_bridge_clear_the_atoms_it_is_bonded_to():
+    """Which direction a bridge opens into is read off its bonding, not off a frame.
+
+    A `SiteFrame`'s axis is a lone-pair lobe tilted ~120° off the bond, and using it as
+    the bisector swung one metal of a µ2-hydroxide to **1.68 Å** from that hydroxide's own
+    proton. The bisector of a bridge is the direction away from everything the atom is
+    already bonded to, which is a property of the bonding — and then both metals clear.
+    """
+    mol, conf, idx, points = bridge_positions(
+        "[OH-]", geometry="bent", n_metals=2, d_m=1.95, angle_deg=100.0)
+    assert separation(points) == pytest.approx(case("cu2_mu2_hydroxide").d_mm, abs=0.02)
+    assert nearest_substituent(mol, conf, idx, points) > 2.5
+
+    mol, conf, idx, points = bridge_positions(
+        "O", geometry="bent", n_metals=2, d_m=1.95, angle_deg=104.5)
+    assert nearest_substituent(mol, conf, idx, points) > 2.0
+
+
+@pytest.mark.parametrize("geometry, n, d, expected", [
+    ("trigonal", 3, 1.90, 3.291),
+    ("tetrahedral", 4, 1.94, 3.168),
+])
+def test_an_oxo_bridge_places_its_metals_on_the_literature_skeleton(geometry, n, d, expected):
+    """A bare oxo has nothing to orient against, so every azimuth is free — and the
+    skeleton is fixed by the ANGLES regardless, which is why it lands exactly."""
+    _mol, _conf, _idx, points = bridge_positions(
+        "[O-2]", geometry=geometry, n_metals=n, d_m=d)
+    edges = [float(np.linalg.norm(points[i] - points[j]))
+             for i in range(n) for j in range(i + 1, n)]
+    assert max(edges) - min(edges) < 1e-9
+    assert edges[0] == pytest.approx(expected, abs=1e-3)
+
+
+def test_a_bent_centre_refuses_to_invent_its_own_angle():
+    """The angle IS the geometry here, so it is stated rather than defaulted (ground
+    rule 5). Every other polyhedron fixes its own angles and rejects the argument."""
+    with pytest.raises(AmbiguousSpecError, match="angle_deg"):
+        site_vectors("bent", 2, 1.95)
+    with pytest.raises(ValueError, match="fixes its own angles"):
+        site_vectors("tetrahedral", 4, 2.0, angle_deg=100.0)
+
+
+def test_cn_two_now_branches_instead_of_being_determined():
+    """Adding `bent` makes CN 2 a Kind-C branch, exactly as CN 4 already is — a CN-2
+    centre really is linear or bent, and the difference is 0.9 Å of M···M."""
+    assert set(geometry_branches(2)) == {"linear", "bent"}
+    with pytest.raises(AmbiguousSpecError, match="does not determine"):
+        resolve_geometry(2)
 
 
 # ══ 3. mechanism A, and where the two collide (§5) ═══════════════════════════
@@ -320,11 +420,19 @@ def test_the_zn4o_target_reaches_four_metals_through_one_oxygen():
 
 # ══ 5. the stated blockers are real ══════════════════════════════════════════
 
-def test_the_hydroxide_bridge_is_blocked_by_b13():
-    """A bare hydroxide perceives zero donors, so the µ2-OH row cannot build. Checked
-    rather than cited, so the battery cannot claim to be waiting on a fixed defect."""
-    assert perceive(embed_molecule(mol_from_smiles("[OH-]"), seed=7)) == []
-    assert "B13" in case("cu2_mu2_hydroxide").blocked_on
+def test_the_hydroxide_perceives_and_offers_the_bridging_modes():
+    """B13, closed. "Anionic means deprotonated" held for every donor but this one.
+
+    `[OH-]` carries a charge AND a hydrogen, so the blanket guard in `_classify_anionic`
+    dropped it — while methoxide and methanol, which differ only in having a heavy
+    neighbour, perceived normally. A hydroxide bridge is among the commonest motifs in
+    polynuclear chemistry, so the row it blocked was not a curiosity.
+    """
+    sites = perceive(embed_molecule(mol_from_smiles("[OH-]"), seed=7))
+    assert len(sites) == 1
+    assert sites[0].donor_type == "hydroxide_O"
+    assert {"mu2", "mu3"} <= set(sites[0].binding_modes)
+    assert case("cu2_mu2_hydroxide").blocked_on is None
 
 
 def test_the_pyrazolate_bridge_is_blocked_by_b14():

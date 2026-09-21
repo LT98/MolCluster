@@ -12,6 +12,46 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B13 — a bare hydroxide perceived zero donors ✅
+
+**`correctness` · `sites/perception.py` · found while planning M6, fixed in S2.**
+
+| molecule | donors perceived, before |
+|---|---|
+| `[OH-]` | **none** |
+| `C[O-]` methoxide | `alkoxide_O` |
+| `CO` methanol | `alkoxide_O` |
+
+Methoxide and methanol perceived normally, so the rule was dropping `[OH-]` specifically. A
+hydroxide bridge is among the commonest motifs in polynuclear chemistry and the M6 battery
+needs one, so this was not a curiosity.
+
+**Cause: one assumption in `_classify_anionic`, true of every donor it recovers except this
+one.** That function exists because "activate = deprotonate", so a structure recalled from the
+registry is usually already activated — anionic and unprotonated. It opened with
+`if atom.GetFormalCharge() >= 0 or _n_hydrogens(atom) > 0: return None`. Hydroxide is anionic
+**and** still carries its proton, so the second clause dropped it. The dead giveaway was that
+the function already had a `hydroxide_O` branch for an oxygen with no heavy neighbour — it was
+simply unreachable.
+
+**Fixed** by splitting the guard: an anion that is still protonated is a hydroxide when it has
+no heavy neighbour, and otherwise still gets no donor rather than a guessed one. `[OH-]` now
+perceives `hydroxide_O`, which already declared `mono`/`mu2`/`mu3` in `sites.frames`.
+
+**What the fix turned up, and it is a separate defect: `[O-2]` types as `hydroxide_O` too.**
+The `not heavy` branch does not distinguish a bare oxide from a hydroxide, so an oxo reports a
+hydroxide's type and pKa. It is filed as [B15](../BUGS.md#b15) rather than folded in here,
+because giving oxo its own type means a new curated row in `donor_descriptors.tsv` and that is
+a change to the reference dataset, not to this function. It does not block S2: µ3/µ4 oxo
+bridges are handled as **centres**, which never asks perception for a donor type.
+
+**The neighbouring limitation recorded in the original entry is now also closed**, by a
+different route: a donor with two neighbours has one determined axis, so a bridging aqua
+implied an M···M of **0.000 Å**. Treating the bridging atom as a centre (`WORKPLAN_M6` §4,
+`geometry.placer.bridging_metal_positions`) gives it 3.084 Å at 104.5°.
+
+---
+
 ## B12 — `metal_block` gave a metal a formal charge nothing else does ✅
 
 **`correctness` · `assembly/construct.py` · found while planning M6, fixed in S0.**

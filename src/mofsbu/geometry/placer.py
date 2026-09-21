@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from rdkit import Chem
 
+from mofsbu._types import AmbiguousSpecError
 from mofsbu.geometry.distances import (
     BASE_MO, DEFAULT_BASE_MO, Distance, donor_elements, metal_donor_distance,
 )
@@ -62,23 +63,36 @@ D_ML: dict[str, float] = BASE_MO
 DEFAULT_D_ML = DEFAULT_BASE_MO
 
 GEOMETRIES: dict[str, dict[int, str]] = {
-    "linear": {2: "linear"}, "trigonal": {3: "trigonal"},
+    "linear": {2: "linear"}, "bent": {2: "bent"}, "trigonal": {3: "trigonal"},
     "tetrahedral": {4: "tetrahedral"}, "square_planar": {4: "square_planar"},
     "trigonal_bipyramidal": {5: "trigonal_bipyramidal"},
     "square_pyramidal": {5: "square_pyramidal"}, "octahedral": {6: "octahedral"},
 }
 
 
-def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray:
+def site_vectors(geometry: str, n: int, d: float = 2.05, *,
+                 angle_deg: float | None = None) -> np.ndarray:
     """Unit coordination directions for a coordination number, scaled to `d`.
 
     The legacy table mapped CN 5 to 'planar', which is not a coordination geometry;
     both real CN-5 polyhedra are here instead.
+
+    **`bent` is the one entry whose name does not determine its vertices**, so it takes
+    `angle_deg` and refuses without it.  Every other polyhedron here fixes its own angles
+    — a tetrahedron is 109.47 and nothing may ask it for 104 — which is why the argument
+    is rejected for them rather than ignored.  A bent bridge is a real span: a µ2-hydroxide
+    sits near 100 deg and a bent µ2-oxo well above it, and a single baked-in number would
+    be the kind of tolerance-turned-folklore the M6 risk table names.
     """
     g = geometry.lower()
+    if angle_deg is not None and g != "bent":
+        raise ValueError(
+            f"{geometry} fixes its own angles, so angle_deg={angle_deg} has nothing to "
+            f"set. Only 'bent' takes one.")
     s3 = 1 / np.sqrt(3)
     table = {
         "linear": np.array([[1, 0, 0], [-1, 0, 0]], float),
+        "bent": None,                      # built below, from the angle the caller states
         "trigonal": np.array([[1, 0, 0], [-0.5, np.sqrt(3) / 2, 0], [-0.5, -np.sqrt(3) / 2, 0]]),
         "square_planar": np.array([[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], float),
         "tetrahedral": np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], float) * s3,
@@ -93,7 +107,18 @@ def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray:
     }
     if g not in table:
         raise ValueError(f"unknown coordination geometry {geometry!r}; have {sorted(table)}")
-    vecs = table[g]
+    if g == "bent":
+        if angle_deg is None:
+            raise AmbiguousSpecError(
+                "a bent centre is not determined by its coordination number — the angle "
+                "IS the geometry, and it is what separates a mu2-hydroxide near 100 deg "
+                "from a bent mu2-oxo far above it. Pass angle_deg; there is no default "
+                "that is not a guess about the chemistry (ground rule 5).")
+        half = np.radians(float(angle_deg)) / 2.0
+        vecs = np.array([[np.cos(half), np.sin(half), 0.0],
+                         [np.cos(half), -np.sin(half), 0.0]], float)
+    else:
+        vecs = table[g]
     if len(vecs) != n:
         raise ValueError(f"{geometry} has {len(vecs)} sites, asked for {n}")
     # `d` may be one distance or one per vertex.  Unit vectors are the honest internal
@@ -106,6 +131,63 @@ def site_vectors(geometry: str, n: int, d: float = 2.05) -> np.ndarray:
     if scale.shape != (n,):
         raise ValueError(f"{scale.shape[0]} distances for {n} sites")
     return scale[:, None] * vecs
+
+
+def bridging_metal_positions(mol: Chem.Mol, atom_idx: int, conf=None, *, geometry: str,
+                             n_metals: int, d_m: float,
+                             angle_deg: float | None = None) -> np.ndarray:
+    """Where the metals go around a SINGLE-atom bridge — mechanism B (WORKPLAN_M6 §4).
+
+    The reframing this function is: **a bridging atom is a centre whose vertices are metal
+    positions.**  `site_vectors` never cared which element sits at the middle, so what was
+    missing was not machinery but a caller willing to point it at a ligand atom.
+
+    **It reads the bonding rather than a `SiteFrame`, and that is the whole difference
+    between the two questions.**  A frame answers "where does ONE metal go", and for a
+    single-neighbour donor its axis is a lone-pair lobe tilted ~120 deg off the bond.
+    Using that as the bisector of a µ2 bridge swings one of the two metals back toward the
+    substituent — measured on hydroxide, 1.68 A from its own proton.  A bridge's bisector
+    is the direction AWAY from everything the atom is already bonded to, which is a
+    property of its bonding and not of any one lobe.
+
+    Three cases, by how much the bonding constrains the result:
+
+    * **Two or more neighbours** (a bridging aqua): the bisector points away from their
+      sum and the metals open PERPENDICULAR to the substituent plane, where water's lone
+      pairs are.  Opening in-plane would put a metal on top of an O-H.
+    * **One neighbour** (a hydroxide): the bisector is the bond reversed.  The azimuth
+      about it is a genuine free rotation — nothing else on the atom orients it — so it is
+      chosen deterministically and is arbitrary, which is worth knowing rather than
+      hiding.
+    * **None** (a bare µ3/µ4 oxo): every direction is free.  Honest rather than sloppy:
+      such a bridge's skeleton is fixed by its ANGLES, so every orientation yields the
+      same set of M···M distances, which is exactly why µ3 and µ4 land on the literature
+      values without anything to orient against.
+    """
+    conf = conf if conf is not None else mol.GetConformer()
+    origin = np.array(conf.GetAtomPosition(atom_idx))
+    units = [_unit(np.array(conf.GetAtomPosition(nb.GetIdx())) - origin)
+             for nb in mol.GetAtomWithIdx(atom_idx).GetNeighbors()]
+
+    if not units:
+        bisector = np.array([1.0, 0.0, 0.0])
+        spread = np.array([0.0, 1.0, 0.0])
+    else:
+        total = sum(units)
+        bisector = _unit(-total) if float(np.linalg.norm(total)) > 1e-6 else _unit(-units[0])
+        # Perpendicular to the substituent PLANE where there is one; otherwise any
+        # perpendicular, deterministically.
+        normal = np.cross(units[0], units[1]) if len(units) >= 2 else np.zeros(3)
+        spread = (_unit(normal) if float(np.linalg.norm(normal)) > 1e-6
+                  else _perpendicular(bisector))
+    spread = spread - float(np.dot(spread, bisector)) * bisector
+    spread = (_unit(spread) if float(np.linalg.norm(spread)) > 1e-9
+              else _perpendicular(bisector))
+    # The polyhedron below is symmetric about +x and opens in the xy-plane, so the
+    # orientation wanted is (+x -> bisector, +y -> the direction the metals open into).
+    rot = np.column_stack([bisector, spread, np.cross(bisector, spread)])
+    local = site_vectors(geometry, n_metals, d_m, angle_deg=angle_deg)
+    return origin + local @ rot.T
 
 
 # A five-membered chelate ring (M-D-C-C-D) subtends roughly this at the metal.  A
