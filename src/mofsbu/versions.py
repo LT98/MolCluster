@@ -90,7 +90,17 @@ ALGO_VERSIONS: dict[str, str] = {
     #    of this recipe, they are a different one, and only comparable among themselves.
     #    The grid sizes and the out-of-plane cap are part of the recipe, because an index
     #    only means anything against a grid of a known size.
-    "placement":        "2",       # how a ligand is oriented on a coordination vertex
+    # 3: WHICH vertices a centre leaves open is now chosen, not left to fill order.  A
+    #    centre with two or more vacancies reserves a mutually-cis set for them, so the
+    #    ligands take the remaining vertices and the empty ones are where the next step
+    #    can reach: a CN-6 rung carrying co-ligands used to hand back a TRANS pair, and a
+    #    ~90 deg chelate was refused across it (measured, one centre and one ligand:
+    #    strain 2.156 trans against 0.094 cis).  Ligands therefore sit on different
+    #    vertices than a `2` build put them on, so the coordinates differ wherever a
+    #    centre has two or more vacancies.  A saturated centre, and one with a single
+    #    vacancy, have no arrangement to choose and are byte-identical to `2`.  Old rows
+    #    keep algo=2 and are never re-labelled (ground rule 6 / D19).
+    "placement":        "3",       # how a ligand is oriented on a coordination vertex
 }
 
 

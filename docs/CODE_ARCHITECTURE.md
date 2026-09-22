@@ -59,12 +59,13 @@ charge, spin — travels with it in a `methods` row.
 | `descriptors/ease.py` | Activation-ease floor (**D18**). Components ▸ scalar | ✅ |
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
-| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot | ✅ |
+| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot. Takes `reserve=` (which vertices stay open), because a caller that can only say *how many* gets its two vacancies trans | ✅ |
+| ↳ `cis_vertices` | the mutually-cis vertex set to reserve, **measured** off the polyhedron rather than read from an index convention. `runner._execute_place` reserves one whenever a rung leaves ≥2 vertices open, which is what makes the pathway ladder's co-ligand series connect | ✅ |
 | ↳ `bridging_metal_positions` | mechanism B: a bridging ATOM is a centre whose vertices are metal positions. Reads the bonding, not a frame — a lone-pair lobe is the wrong bisector for a bridge | ✅ |
 | ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
 | ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
-| `geometry/distances.py` | M–L target distance as a property of the *pair* | ✅ |
+| `geometry/distances.py` | M–L target distance as a property of the *pair*. `metal_metal_distance` is the M–M half and has **no table behind it**: a named motif is refused, because the element symbols do not carry the bond order | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
 | `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
 | **energy/** | | |
@@ -73,6 +74,7 @@ charge, spin — travels with it in a `methods` row.
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
 | **assembly/** | | |
 | `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow`. A join takes `lone_pair=` — which lobe of an sp2 donor binds is worth 2.8 Å of M···M and has no default in the chemistry | ✅ |
+| ↳ `metal_metal_compatible`/`join_metal_metal` | vertex to vertex, no ligand between them — the **declared nucleus**. The one join whose M···M is an *input*, because there is no ligand to derive it from (D20) | ✅ |
 | ↳ `bridge_compatible` / `join_bridge` | one ligand across vertices of **different** metals in one move. Verdict is a **distance** (no common origin to subtend an angle at) and is necessary-not-sufficient — where the mismatch lands depends on the vertex axes, so `qc` is the arbiter | ✅ |
 | `assembly/choice.py` | `ChoiceVector`, canonical form, version-prefixed digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |

@@ -30,7 +30,8 @@ from mofsbu.config import (
 from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
-from mofsbu.geometry.placer import GEOMETRIES, LigandPlacement, place_mononuclear, to_rdkit
+from mofsbu.geometry.placer import (
+    GEOMETRIES, LigandPlacement, cis_vertices, place_mononuclear, to_rdkit)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
@@ -813,13 +814,22 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
                                     name=spec.co_ligand)
                     for _ in range(payload["n_co"])]
 
+    # A rung's vacancies are what the NEXT rung binds to, so their arrangement is this
+    # step's business: left to fill order they come back trans, and a ~90 deg chelate is
+    # then refused with `chelate_cannot_span` (measured: strain 2.156 trans against 0.094
+    # cis, on one centre and one ligand).  Below two there is no arrangement to choose,
+    # and those builds are byte-identical to a `placement 2` one.
+    cn_asked = payload.get("cn")
+    n_vacant = 0 if cn_asked is None else int(cn_asked) - sum(l.denticity for l in ligands)
+    reserve = (cis_vertices(payload["geometry"], int(cn_asked), n_vacant)
+               if n_vacant >= 2 else None)
     try:
         # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
         # was asked for and reports its empty vertices, instead of being silently
         # rebuilt as a smaller, differently-shaped complex.
         result = place_mononuclear(metal.symbol, ligands,
                                    geometry=payload["geometry"],
-                                   cn=payload.get("cn"))
+                                   cn=cn_asked, reserve=reserve)
     except ValueError as exc:
         # The placer refusing a request is an ANSWER, not a breakage: a bidentate
         # ligand cannot span a linear two-coordinate centre, and saying so is the
