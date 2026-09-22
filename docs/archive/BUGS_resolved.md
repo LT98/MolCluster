@@ -12,6 +12,42 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B18 — a `grow` step wrote an edge without the ligand it added ✅
+
+**`correctness` · `runner.py` · found while pricing provenance edges in the viewer, fixed in
+the same change.**
+
+`grow` recorded two reagents — the rung below and the free ligand — and the ladder is built so
+that those balance: `_parent_payloads` keeps `n_co` fixed, so the co-ligand waters cancel
+across the arrow and `parent + ligand = product` in atoms and charge.
+
+The ligand lookup did not hold up its end:
+
+```python
+ligand_sid = None
+if payload.get("ligand_task") is not None:
+    row = reg.conn.execute("SELECT structure_id FROM tasks WHERE id=?", …).fetchone()
+    ligand_sid = None if row is None else row["structure_id"]
+```
+
+If the ligand task had no structure yet — not run, failed, or rejected — `ligand_sid` stayed
+`None` and the list comprehension that builds `reagent_ids` filtered it straight back out. The
+join still happened and the edge was still written, **with only the parent as reagent**. The
+result is an edge unbalanced by exactly one ligand formula, with no metal in the delta — a
+signature that distinguishes it from a `place` edge, which is unbalanced by its whole
+composition.
+
+The asymmetry was the tell: the parent rung goes through `_rung`, which raises `_Rejected`
+with a reason naming the missing task. The ligand went through a bare `SELECT`. It now raises
+the same way, with code `pathway_ligand_missing`.
+
+**What the diagnosis turned up:** nothing counted these. A silently short edge is
+indistinguishable from a correct one until something tries to *price* it, which nothing did
+until the provenance panel. That is the argument for pricing being a first-class reader rather
+than a report — it exercises invariants that only writers had been trusted with.
+
+---
+
 ## B13 — a bare hydroxide perceived zero donors ✅
 
 **`correctness` · `sites/perception.py` · found while planning M6, fixed in S2.**

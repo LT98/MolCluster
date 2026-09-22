@@ -19,6 +19,7 @@ from mofsbu.energy.reference import (
     check_reference_quality, put_balanced_reaction, reaction_balanced_energy,
     reaction_terms, store_reaction_energy,
 )
+from mofsbu.energy.protons import deprotonation_pairs, link_protomers
 from mofsbu.energy.routes import decompositions, price_incoming_routes, price_reaction
 from mofsbu.graph import EdgeType, TypedGraph
 from mofsbu.registry import (
@@ -533,6 +534,54 @@ def test_a_derived_split_says_when_it_is_already_recorded(reg):
     split = next(d for d in decompositions(reg, product, min_fidelity=Fidelity.XTB)
                  if sorted(p["structure_id"] for p in d["parts"]) == sorted([rung, wat]))
     assert split["recorded_as"] == rid
+
+
+def test_protomers_of_one_molecule_are_found_by_arithmetic(reg):
+    """`[M(H2O)2]2+` and `[M(OH)(H2O)]+` differ by one proton and one charge."""
+    acid = _store(reg, aqua_ion(2), energy=-100.0)
+    base = _store(reg, hydroxo_complex(), energy=-95.0)
+    assert (acid, base, 1) in deprotonation_pairs(reg)
+
+
+def test_a_deprotonation_edge_is_isodesmic(reg):
+    """The first equations here that `strict=True` accepts.
+
+    No metal-donor bond changes across a proton transfer, so the rule that refuses every
+    assembly edge has nothing to object to — which is the whole reason the couple exists
+    rather than a bare H+.
+    """
+    acid = _store(reg, aqua_ion(2), energy=-100.0)
+    base = _store(reg, hydroxo_complex(), energy=-95.0)
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+
+    written = link_protomers(reg, water_id=wat, hydronium_id=h3o)
+    edge = next(w for w in written
+                if (w["protonated"], w["deprotonated"]) == (acid, base))
+    assert edge["why_not"] is None
+
+    energy = reaction_balanced_energy(reg, edge["reaction_id"], strict=True)
+    assert energy.quality.isodesmic is True
+    assert energy.dE == pytest.approx((-95.0 + -14.0) - (-100.0 + -15.0))
+
+
+def test_linking_twice_writes_nothing_the_second_time(reg):
+    _store(reg, aqua_ion(2), energy=-100.0)
+    _store(reg, hydroxo_complex(), energy=-95.0)
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+
+    first = link_protomers(reg, water_id=wat, hydronium_id=h3o)
+    assert any(w["reaction_id"] is not None for w in first)
+    assert link_protomers(reg, water_id=wat, hydronium_id=h3o) == []
+
+
+def test_the_couple_is_not_linked_through_itself(reg):
+    """`H3O+ + H2O -> H2O + H3O+` is balanced, isodesmic and exactly zero."""
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+    assert (h3o, wat, 1) in deprotonation_pairs(reg)          # the arithmetic sees it
+    assert link_protomers(reg, water_id=wat, hydronium_id=h3o) == []   # and declines it
 
 
 def test_a_split_below_the_floor_is_refused_not_hidden(reg):

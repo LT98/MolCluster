@@ -51,6 +51,23 @@ def water() -> TypedGraph:
     return g
 
 
+def hydronium() -> TypedGraph:
+    """The proton's carrier.
+
+    A deprotonation is only an equation once the H+ has somewhere to go: a bare proton
+    has no electrons, so no gas-phase method can price it and `check_balance` reads charge
+    off a graph that would have no atoms.  Paired with `water`, this is the couple that
+    turns `AH -> A- + H+` into `AH + H2O -> A- + H3O+`, which balances and, because no
+    metal-donor bond changes across it, is isodesmic — the thing every assembly edge in
+    this project is not.
+    """
+    g = TypedGraph(charge=1, multiplicity=1, name="hydronium")
+    o = g.add_atom("O", formal_charge=1)
+    for _ in range(3):
+        g.add_bond(o, g.add_atom("H"), COV)
+    return g
+
+
 def formate() -> TypedGraph:
     g = TypedGraph(charge=-1, multiplicity=1, name="formate")
     _formate(g)
@@ -334,6 +351,7 @@ def metal_bipy(metal: str = "Fe", oxidation_state: int = 2, spin_class: str = "l
 
 ALL: dict[str, "callable[[], TypedGraph]"] = {
     "water": water,
+    "hydronium": hydronium,
     "formate": formate,
     "formic_acid": formic_acid,
     "btc": lambda: btc(True),
