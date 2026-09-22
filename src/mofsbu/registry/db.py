@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -323,6 +324,21 @@ class Registry:
 
     def __repr__(self) -> str:      # pragma: no cover
         return f"Registry({self.db_path}, {self.count('structures')} structures)"
+
+
+@dataclass(frozen=True)
+class ReadOnlyRegistry:
+    """A `Registry`-shaped handle over a connection somebody else owns.
+
+    `Registry` opens its own read-write connection and probes the journal mode by
+    committing a table, so constructing one to answer a question writes to the database.
+    A reader — the viewer, which holds its connection at `PRAGMA query_only = ON` — needs
+    only the two attributes the read paths touch: `reg.conn` throughout `energy.reference`,
+    and `reg.store` for `get_graph`.
+    """
+
+    conn: sqlite3.Connection
+    store: BlobStore
 
 
 def ensure_registry(path: str | Path, note: str = "") -> Path:

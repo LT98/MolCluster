@@ -296,3 +296,47 @@ def test_xtb_sees_the_solvent():
     aq = b.single_point(*WATER, charge=0, multiplicity=1, solvent="water")
     assert gas.energy != aq.energy
     assert aq.method.solvent == "water"
+
+
+# ── the electronic state actually reaching the model ─────────────────────────
+#
+# `charge_aware = True` is a claim about the NUMBER, not about the MethodSpec.  Every
+# other test here checks the label; these two check that the model was told.
+
+def test_omol_writes_the_info_keys_mace_reads():
+    """Cheap half: the `atoms.info` keys, without loading a 1 GB model."""
+    pytest.importorskip("ase", reason="ase not installed on this machine")
+    atoms = MACEOmolBackend()._atoms(*WATER, charge=-2, multiplicity=3)
+    assert atoms.info["charge"] == -2
+    assert atoms.info["spin"] == 3
+    # MP-0 is asked nothing, so it is told nothing; a key it ignores would look configured.
+    blind = MACEBackend()._atoms(*WATER, charge=-2, multiplicity=3)
+    assert "charge" not in blind.info and "spin" not in blind.info
+
+
+def test_omol_reads_the_charge_it_is_given():
+    """The keys must be the ones `MACECalculator.info_keys` maps onto.
+
+    A wrong key is not an error anywhere: ASE carries it, MACE ignores it, and the
+    energy comes back as the neutral one with a charged `MethodSpec` attached to it.
+    Only a difference between two charges can tell the two apart.
+    """
+    pytest.importorskip("torch", reason="the ML stack is not installed on this machine")
+    pytest.importorskip("mace", reason="the ML stack is not installed on this machine")
+    b = MACEOmolBackend()
+    if not b.available():
+        pytest.skip("MACE-OMOL-0 is not loadable on this machine")
+    # Acetate: 31 electrons, so q=-1 is a singlet and q=0 a doublet. Same geometry.
+    sym = ["C", "C", "O", "O", "H", "H", "H"]
+    pos = [[0.0, 0.0, 0.0], [1.52, 0.0, 0.0], [2.15, 1.07, 0.0], [2.15, -1.07, 0.0],
+           [-0.38, 0.52, 0.89], [-0.38, 0.52, -0.89], [-0.38, -1.04, 0.0]]
+    anion = b.single_point(sym, pos, charge=-1, multiplicity=1).energy
+    neutral = b.single_point(sym, pos, charge=0, multiplicity=2).energy
+    assert anion != neutral
+    # Not merely different: a key the model ignores makes these two bit-identical, so
+    # the tolerance is what separates "told the model" from "wrote a dict nobody read".
+    assert abs(anion - neutral) > 0.1
+
+    calc = b._calculator()
+    assert calc.info_keys["total_charge"] == b.charge_key
+    assert calc.info_keys["total_spin"] == b.spin_key

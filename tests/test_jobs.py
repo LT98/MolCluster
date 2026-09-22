@@ -359,6 +359,13 @@ def test_the_pool_dedicates_a_worker_to_the_relax_queue_on_a_gpu(monkeypatch):
     assert (gpu.total, gpu.build, gpu.relax) == (8, 7, 1)
     assert gpu.build > 1, "the whole point: construction is not down to one core"
 
+    # One card stays one card however wide the declared pool is: a second process feeding
+    # it divides its memory rather than multiplying its throughput.
+    monkeypatch.setenv("MOFSBU_WORKERS", "64")
+    wide = plan_workers()
+    assert (wide.total, wide.build, wide.relax) == (64, 63, 1)
+
+    monkeypatch.setenv("MOFSBU_WORKERS", "8")
     monkeypatch.setenv("MOFSBU_RELAX_WORKERS", "3")            # a multi-GPU box says so
     assert plan_workers().relax == 3
     monkeypatch.setenv("MOFSBU_RELAX_WORKERS", "0")            # or opts back out
