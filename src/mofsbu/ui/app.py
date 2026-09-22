@@ -362,7 +362,8 @@ def create_app(db_path: Path, store_root: Path,
             # cheap, and it stops the UI offering a geometry whose blob is gone
             g["blob_present"] = _blob_ok(g["coords_hash"])
         routes = _rows(con.execute(
-            """SELECT id, kind, intermediate, depth, note, fidelity, created_at
+            """SELECT id, kind, intermediate, depth, note, fidelity, created_at,
+                      choice_vector_digest
                FROM reactions WHERE product_structure_id = ? ORDER BY id""",
             (structure_id,)))
         _price_routes(con, routes)

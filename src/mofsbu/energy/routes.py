@@ -39,12 +39,28 @@ REPORTABLE = (MofsbuError, OSError)
 
 
 def _terms(reg: Any, reaction_id: int) -> list[dict[str, Any]]:
+    """Every species in the edge. `display_label` is `None` when the row carries none —
+    a reader shows the id rather than inventing a name."""
     try:
+        terms = reaction_terms(reg, reaction_id)
+        labels = _display_labels(reg, [t.structure_id for t in terms])
         return [{"structure_id": t.structure_id, "stoich": t.stoich,
-                 "role": t.role, "side": t.side, "label": t.label}
-                for t in reaction_terms(reg, reaction_id)]
+                 "role": t.role, "side": t.side, "label": t.label,
+                 "display_label": labels.get(t.structure_id)}
+                for t in terms]
     except REPORTABLE:
         return []
+
+
+def _display_labels(reg: Any, structure_ids: list[int]) -> dict[int, str | None]:
+    """One query for the whole edge — a panel prices dozens of edges per page load."""
+    if not structure_ids:
+        return {}
+    marks = ",".join("?" * len(structure_ids))
+    rows = reg.conn.execute(
+        f"SELECT id, display_label FROM structures WHERE id IN ({marks})",  # noqa: S608
+        structure_ids).fetchall()
+    return {int(r["id"]): r["display_label"] for r in rows}
 
 
 def _step(reaction_id: int | None) -> dict[str, Any]:
