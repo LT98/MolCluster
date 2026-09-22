@@ -19,7 +19,7 @@ from mofsbu.energy.reference import (
     check_reference_quality, put_balanced_reaction, reaction_balanced_energy,
     reaction_terms, store_reaction_energy,
 )
-from mofsbu.energy.routes import price_incoming_routes, price_reaction
+from mofsbu.energy.routes import decompositions, price_incoming_routes, price_reaction
 from mofsbu.graph import EdgeType, TypedGraph
 from mofsbu.registry import (
     Provenance, ReadOnlyRegistry, Registry, put_geometry, put_reaction, put_structure,
@@ -501,3 +501,46 @@ def test_every_incoming_edge_gets_an_entry(reg, balanced):
     routes = price_incoming_routes(reg, ids["product"], min_fidelity=Fidelity.XTB)
     assert [r["reaction_id"] for r in routes] == [rid]
     assert routes[0]["kind"] == "reaction"
+
+
+# ── what this could have been made from ──────────────────────────────────────
+
+def test_decompositions_finds_a_split_that_was_never_recorded(reg):
+    """A `place` edge records a construction and cites nothing; the pieces still exist.
+
+    `[M(H2O)2]2+` is `[M(H2O)]2+` plus a water, and both are in the registry — so the
+    question "what adds up to this" has an answer even though no edge asserts it.
+    """
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    rung = _store(reg, aqua_ion(1), energy=-80.0)
+    wat = _store(reg, water(), energy=-15.0)
+
+    found = decompositions(reg, product, min_fidelity=Fidelity.XTB)
+    split = next(d for d in found
+                 if sorted(p["structure_id"] for p in d["parts"]) == sorted([rung, wat]))
+    assert split["origin"] == "inferred"
+    assert split["recorded_as"] is None           # nothing wrote this down
+    assert split["can_price"] is True
+    assert split["total_dE"] == pytest.approx(-100.0 - (-80.0 + -15.0))
+
+
+def test_a_derived_split_says_when_it_is_already_recorded(reg):
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    rung = _store(reg, aqua_ion(1), energy=-80.0)
+    wat = _store(reg, water(), energy=-15.0)
+    rid = put_reaction(reg, product, Provenance(reagent_ids=(rung, wat)))
+
+    split = next(d for d in decompositions(reg, product, min_fidelity=Fidelity.XTB)
+                 if sorted(p["structure_id"] for p in d["parts"]) == sorted([rung, wat]))
+    assert split["recorded_as"] == rid
+
+
+def test_a_split_below_the_floor_is_refused_not_hidden(reg):
+    """Absent is absent: a candidate with no ML energy is listed with its reason."""
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    _store(reg, aqua_ion(1), energy=-80.0)
+    _store(reg, water(), energy=-15.0)
+    found = decompositions(reg, product, min_fidelity=Fidelity.DFT)
+    assert found                                   # still offered, not silently dropped
+    assert all(not d["can_price"] for d in found)
+    assert all("XTB" in d["why_not"] and "DFT" in d["why_not"] for d in found)
