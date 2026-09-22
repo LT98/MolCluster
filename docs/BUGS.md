@@ -26,6 +26,8 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B11](#b11) | cosmetic | `sites/model.py` | `vacancy_sites` normalises by hand, differently from `_linalg.unit` |
 | [B14](#b14) | correctness | `sites/perception.py` | Pyrazolate's two equivalent N type differently, and one of them cannot bridge |
 | [B15](#b15) | correctness | `sites/perception.py` | A bare oxide `[O-2]` types as `hydroxide_O`, so an oxo reports a hydroxide's pKa |
+| [B16](#b16) | correctness | `scripts/run_spec.py` | `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store |
+| [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
 
 ---
 
@@ -329,3 +331,49 @@ row fails loudly rather than silently — which is the right order to do it in.
 **Not blocking M6/S2.** µ3 and µ4 oxo bridges are placed as **centres**
 (`geometry.placer.bridging_metal_positions`), a path that never asks perception for a donor
 type. It bites whenever an oxo-centred node is stored and its sites are scored.
+
+---
+
+## B16
+
+**`run_spec.py --store` is ignored, and the run still succeeds.** `correctness` ·
+`scripts/run_spec.py`
+
+A run launched with `--db data/proof.db --store data/proof_store` wrote its database where it
+was told and its blobs somewhere else: `data/store`, the default. `data/proof_store` was
+created and left empty.
+
+The parent honours the flag; the spawned workers do not. `execute_run` starts workers with the
+**spawn** context, so a worker begins from nothing and re-reads `config.data_root()` — which
+knows `MOFSBU_DATA` and the repo root, and nothing about a `--store` argument parsed in another
+process. The database path survives because it is passed explicitly; the store path is not.
+
+Nothing detects it. The blobs are content-addressed, so they are written and read back under
+the same digest within a run, and the mismatch only shows up later when someone moves the
+database and finds its geometries are not beside it.
+
+**Fix direction:** either pass the store path into each worker the way the database path already
+is, or refuse a `--store` that differs from `store_root()` rather than accepting a flag that
+does not take effect. The second is smaller and honest; the first is what the flag promises.
+
+---
+
+## B17
+
+**Changing the geometry leaves the detail panel showing the previous one's method.**
+`honesty` · `ui/static/index.html`
+
+The geometry `<select>`'s `onchange` calls `showGeometry()`, which repaints the 3D viewer and
+sets `state.geomId`. It does not call `renderDetail()`. But `renderDetail` reads the selected
+geometry once, at render time, and builds the `method` and `converged` rows from it.
+
+So selecting a second geometry moves the structure on screen while the rows beside it go on
+describing the first — most visibly when the two differ in exactly the way that matters, a
+raw construct and its ML relaxation.
+
+Found while adding per-route energies to the provenance panel; those are scoped to the
+equation rather than to the selected geometry, so they do not inherit it. Any future
+geometry-scoped row would.
+
+**Fix direction:** have `onchange` re-render the panel rather than only the viewer, or move the
+geometry-scoped rows into `showGeometry` so there is one writer for them.

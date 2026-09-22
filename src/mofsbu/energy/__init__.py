@@ -23,6 +23,7 @@ from mofsbu.energy.relax import (
     MODE_FIDELITY, available_modes, ml_model_status, mode_status, relax_geometry,
     single_point,
 )
+from mofsbu.energy.routes import price_incoming_routes, price_reaction
 
 __all__ = [
     "BalanceReport", "EnergyBackend", "EnergyBackendUnavailable", "EnergyResult",
@@ -33,6 +34,7 @@ __all__ = [
     "backend_for", "check_balance", "check_reference_quality", "check_spin",
     "combined_multiplicity", "d_electrons", "get_backend", "high_spin_multiplicity",
     "minimal_multiplicity", "ml_backend_key", "ml_model_status", "mode_status",
+    "price_incoming_routes", "price_reaction",
     "put_balanced_reaction", "reaction_balanced_energy", "reaction_terms",
     "relax_geometry", "single_point", "spin_class_multiplicity", "store_reaction_energy",
 ]

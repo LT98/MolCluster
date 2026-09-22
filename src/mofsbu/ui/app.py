@@ -365,7 +365,29 @@ def create_app(db_path: Path, store_root: Path,
             """SELECT id, kind, intermediate, depth, note, fidelity, created_at
                FROM reactions WHERE product_structure_id = ? ORDER BY id""",
             (structure_id,)))
+        _price_routes(con, routes)
         return {"structure": row, "geometries": geoms, "routes": routes}
+
+    def _price_routes(con: sqlite3.Connection, routes: list[dict[str, Any]]) -> None:
+        """Attach dE to each route, or the stated reason it has none.
+
+        Read-only throughout: `ReadOnlyRegistry` wraps the connection this request already
+        holds at `PRAGMA query_only = ON` rather than letting `Registry` open a writable
+        one of its own.  No chemistry is run — every number comes from a stored energy.
+        """
+        from mofsbu.energy.routes import price_reaction
+        from mofsbu.registry import ReadOnlyRegistry
+
+        reg = ReadOnlyRegistry(conn=con, store=store)
+        for route in routes:
+            try:
+                priced = price_reaction(reg, route["id"])
+            except Exception:                 # noqa: BLE001 - a panel must still render
+                route.update(can_price=False, why_not="could not be priced", steps=[],
+                             total_dE=None)
+                continue
+            route.update(can_price=priced["can_price"], why_not=priced["why_not"],
+                         steps=priced["steps"], total_dE=priced["total_dE"])
 
     def _blob_ok(digest: str | None) -> bool:
         if not digest:

@@ -12,11 +12,12 @@ from mofsbu.registry.api import (
     fragment_aliases, put_geometry, put_reaction, put_site_state, put_sites, put_structure,
     relabel_all, set_hidden,
 )
-from mofsbu.registry.db import Registry, ensure_registry
+from mofsbu.registry.db import ReadOnlyRegistry, Registry, ensure_registry
 from mofsbu.registry.store import BlobStore
 
 __all__ = [
-    "BlobStore", "MethodSpec", "Provenance", "Put", "Registry", "RegistryError",
+    "BlobStore", "MethodSpec", "Provenance", "Put", "ReadOnlyRegistry", "Registry",
+    "RegistryError",
     "backfill_choice_digests", "best_geometry", "canonical_map", "catalog_drift",
     "display_label", "ensure_registry", "export_xyz", "find", "formula",
     "find_method_id", "geometries_from_choice", "geometry_xyz", "get_graph",

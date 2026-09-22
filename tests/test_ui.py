@@ -109,6 +109,26 @@ def test_detail_shape(client):
             assert key in g
 
 
+def test_a_route_says_what_it_cost_or_why_it_cannot(client):
+    """The provenance panel is handed a verdict, never left to compute one.
+
+    Every route carries the same keys whether or not it has a number, so the page has no
+    policy in it — the `can_X` + `why_not` shape `structure_origin` already established.
+    """
+    routes = client.get("/api/structures/4").json()["routes"]
+    for r in routes:
+        for key in ("can_price", "why_not", "steps", "total_dE"):
+            assert key in r
+        assert isinstance(r["steps"], list)
+        if r["can_price"]:
+            assert r["total_dE"] is not None
+            assert r["steps"][0]["fidelity"] is not None
+        else:
+            # Absent, not zero (D18): an unpriced route never reports a number.
+            assert r["total_dE"] is None
+            assert r["why_not"]
+
+
 def test_detail_404(client):
     assert client.get("/api/structures/999999").status_code == 404
 

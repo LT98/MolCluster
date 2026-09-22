@@ -127,6 +127,9 @@ tbody tr.hidden-row td{opacity:.5;font-style:italic}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:11px}
 .muted{color:var(--muted)}
+.caveat{color:var(--warn)}
+.route{margin-bottom:5px}
+.route-e{padding-left:10px;font-variant-numeric:tabular-nums}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .spacer{flex:1}
 /* The pane itself no longer scrolls — the wrapper does.  That is what keeps the paging
@@ -316,7 +319,7 @@ dd{margin:0;overflow-wrap:anywhere}
       </div>
       <div id="entry-msg" class="muted" style="font-size:11.5px"></div>
 
-      <h2>provenance</h2>
+      <h2>provenance <span class="muted" style="font-weight:400;font-size:11px">· dE in eV</span></h2>
       <div id="d-routes" class="muted"></div>
     </div>
   </aside>
@@ -360,6 +363,35 @@ async function copyText(text, what){
   toast(what+" copied");
 }
 const fmtE = (v) => v===null||v===undefined ? "—" : Number(v).toFixed(4);
+/* The rungs of the fidelity ladder, by their stored integer (mofsbu._types.Fidelity). */
+const FIDELITY = {"-1":"heuristic", "0":"raw", "1":"FF", "2":"ML", "3":"xTB", "4":"DFT"};
+/* A refusal from the reference scheme is a paragraph; a list of routes has room for a
+   clause. The whole of it goes in the title attribute rather than being thrown away. */
+const firstClause = (s) => {
+  const t = String(s ?? "").split(/[;.]\s/)[0].trim();
+  return t.length > 80 ? t.slice(0, 77) + "…" : t;
+};
+
+/* One provenance edge: what it is, then what it cost or why that cannot be said.
+   A dE here is never isodesmic (an assembly step forms a metal-donor bond, D17), so the
+   caveat travels with the number rather than being left to the reader to remember. */
+function renderRoute(r){
+  const head = `#${r.id} · ${esc(r.kind)} · depth ${r.depth ?? "— (M8)"}`
+             + (r.note ? " · " + esc(r.note) : "");
+  let energy;
+  if(r.can_price){
+    const s = (r.steps && r.steps[0]) || {};
+    const rung = FIDELITY[String(s.fidelity)] || s.fidelity_name || "?";
+    energy = `${fmtE(r.total_dE)} · ${esc(rung)}`;
+    if(s.isodesmic === false) energy += ` <span class="caveat">· not isodesmic</span>`;
+    if(s.all_converged === false) energy += ` <span class="caveat">· unconverged</span>`;
+  } else {
+    energy = `<span class="muted">— (${esc(firstClause(r.why_not) || "no energy")})</span>`;
+  }
+  const tip = r.why_not ? ` title="${esc(r.why_not)}"` : "";
+  return `<div class="route"><div>${head}</div>`
+       + `<div class="route-e"${tip}>${energy}</div></div>`;
+}
 const labelOf = (r) => r.display_label && r.display_label.trim()
                        ? r.display_label : (r.formula || ("structure " + r.id));
 const metalsOf = (r) => (r.metals||"").split(",").filter(Boolean).join(" ") || "—";
@@ -825,7 +857,7 @@ function renderDetail(){
   $("d-tags").innerHTML = (s.tags||"").split(",").filter(Boolean)
     .map(t=>`<span class="tag">${t}</span>`).join("");
   $("d-routes").innerHTML = d.routes.length
-    ? d.routes.map(r=>`<div>#${r.id} · ${r.kind} · depth ${r.depth ?? "— (M8)"} ${r.note?("· "+r.note):""}</div>`).join("")
+    ? d.routes.map(renderRoute).join("")
     : "no recorded route (ingested or root reagent)";
   $("copy-spec").onclick = async () => {
     const q = state.geomId ? "?geometry_id="+state.geomId : "";

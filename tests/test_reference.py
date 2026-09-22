@@ -8,6 +8,8 @@ this module have let that number be produced silently?
 """
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from mofsbu._types import Fidelity, MethodSpec, ReferenceSchemeError
@@ -17,8 +19,11 @@ from mofsbu.energy.reference import (
     check_reference_quality, put_balanced_reaction, reaction_balanced_energy,
     reaction_terms, store_reaction_energy,
 )
+from mofsbu.energy.routes import price_incoming_routes, price_reaction
 from mofsbu.graph import EdgeType, TypedGraph
-from mofsbu.registry import Registry, put_geometry, put_structure
+from mofsbu.registry import (
+    Provenance, ReadOnlyRegistry, Registry, put_geometry, put_reaction, put_structure,
+)
 
 XTB = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB")
 XTB_WATER = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB",
@@ -406,3 +411,93 @@ def test_storing_an_energy_records_its_method(reg, balanced):
     method = reg.conn.execute("SELECT * FROM methods WHERE id=?",
                               (row["method_id"],)).fetchone()
     assert method["method"] == "GFN2-xTB"
+
+
+# ── pricing an edge for a reader ─────────────────────────────────────────────
+#
+# `reaction_balanced_energy` answers by raising.  A panel listing a dozen routes needs
+# the same answer as data, one entry per edge, and needs it without a writable registry.
+
+def test_a_priced_route_carries_the_caveat_with_the_number(reg, balanced):
+    rid, _ = balanced
+    route = price_reaction(reg, rid, min_fidelity=Fidelity.XTB)
+    assert route["can_price"] is True
+    assert route["total_dE"] == pytest.approx(route["steps"][0]["dE"])
+    step = route["steps"][0]
+    assert step["fidelity_name"] == "XTB"
+    assert "GFN2-xTB" in step["method"]
+    assert step["isodesmic"] is True          # this fixture is a proton-balanced exchange
+
+
+def test_the_floor_admits_a_higher_rung(reg, balanced):
+    """The regression that matters: a floor, not a rung.
+
+    `_energy_row` matches a requested fidelity EXACTLY, so pricing must resolve the
+    equation at whatever rung it has and compare afterwards.  Asking the reference
+    scheme for `ML` would refuse this xTB equation, which is the opposite of a floor.
+    """
+    rid, _ = balanced
+    route = price_reaction(reg, rid, min_fidelity=Fidelity.ML)
+    assert route["can_price"] is True
+    assert route["steps"][0]["fidelity"] == int(Fidelity.XTB)
+
+
+def test_a_rung_below_the_floor_is_refused_and_the_rung_is_named(reg):
+    MMFF = MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF")
+    product = _store(reg, hydroxo_complex(), energy=-100.0, method=MMFF,
+                     fidelity=Fidelity.FF)
+    aqua = _store(reg, aqua_ion(2), energy=-60.0, method=MMFF, fidelity=Fidelity.FF)
+    wat = _store(reg, water(), energy=-15.0, method=MMFF, fidelity=Fidelity.FF)
+    h3o = _store(reg, hydronium(), energy=-14.0, method=MMFF, fidelity=Fidelity.FF)
+    rid = put_balanced_reaction(reg, product, reagents=[(aqua, 1), (wat, 1)],
+                                leaving=[(h3o, 1)])
+    route = price_reaction(reg, rid, min_fidelity=Fidelity.ML)
+    assert route["can_price"] is False
+    assert route["total_dE"] is None
+    # Naming the rung that IS there is the difference between "no" and "not yet".
+    assert "FF" in route["why_not"] and "ML" in route["why_not"]
+
+
+def test_an_unpriceable_route_still_reports_its_diagnosis(reg):
+    """A refusal is a result: the caveats survive the number failing to appear.
+
+    Built through `put_reaction`, which records what was constructed and does not check
+    balance — the path every assembly edge in a real run comes from, and the reason a
+    provenance panel meets unbalanced equations at all.
+    """
+    product = _store(reg, hydroxo_complex(), energy=-100.0)
+    ion = _store(reg, bare_ion(), energy=-40.0)
+    rid = put_reaction(reg, product, Provenance(kind="assembly", reagent_ids=(ion,)))
+    route = price_reaction(reg, rid)
+    assert route["can_price"] is False
+    assert "unbalanced" in route["why_not"]
+    step = route["steps"][0]
+    assert step["isodesmic"] is False
+    assert COORDINATION_CHANGE in step["caveats"]
+    # The unpriced shape carries every key the priced one does, so no caller branches.
+    assert set(step) == {"reaction_id", "dE", "fidelity", "fidelity_name", "method",
+                         "isodesmic", "caveats", "all_converged", "terms",
+                         "can_price", "why_not"}
+
+
+def test_pricing_needs_no_writable_registry(reg, balanced, tmp_path):
+    """The viewer holds `PRAGMA query_only = ON`; `Registry` would write to probe it."""
+    rid, _ = balanced
+    reg.conn.commit()
+    con = sqlite3.connect(f"file:{reg.db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA query_only = ON")
+    try:
+        reader = ReadOnlyRegistry(conn=con, store=reg.store)
+        route = price_reaction(reader, rid, min_fidelity=Fidelity.XTB)
+        assert route["can_price"] is True
+        assert con.execute("PRAGMA query_only").fetchone()[0] == 1
+    finally:
+        con.close()
+
+
+def test_every_incoming_edge_gets_an_entry(reg, balanced):
+    rid, ids = balanced
+    routes = price_incoming_routes(reg, ids["product"], min_fidelity=Fidelity.XTB)
+    assert [r["reaction_id"] for r in routes] == [rid]
+    assert routes[0]["kind"] == "reaction"
