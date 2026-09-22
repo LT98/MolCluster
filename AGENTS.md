@@ -26,6 +26,11 @@ Four active documents, each with one job. Nothing finished stays in an active do
 `docs/archive/` is reference, not scheduled work. Read it to find out why something is the way
 it is; never to find out what to do next.
 
+`docs/gui/` is user-facing reference for the HTML GUI — what each page does, the HTTP API, and
+what is not reachable from the pages yet. It describes behaviour rather than plans, so it is not
+one of the four active documents; it does have to be kept in step with `ui/` when a route or a
+control changes, and `04_limits.md` is where a boundary goes rather than being left unstated.
+
 **Rationale goes in docs, not in the code.** A bug fix does not get its history written into
 the file it touched. Source comments say what the code does and which invariant it upholds
 (one or two lines; a `D…` / `B…` / ground-rule reference is ideal); the diagnosis, the
