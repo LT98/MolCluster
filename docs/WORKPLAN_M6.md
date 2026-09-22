@@ -473,6 +473,21 @@ Two things the slice turned up that its plan did not predict:
 trigonal bipyramid earns: it returns the axial/equatorial pair at 90°, where table order would
 have handed back two equatorials at 120°.
 
+**The ladder's co-ligand-saturated series connects, and the number says by how much.** A
+capability nothing calls is not an exit gate, so `runner._execute_place` now reserves a
+mutually-cis set whenever a rung leaves two or more vertices open. On the CN-6 octahedral
+ladder with an aqua co-ligand, through the real runner:
+
+| | grow steps done | refused `chelate_cannot_span` |
+|---|---|---|
+| fill order (as before) | 1 | **2** |
+| cis reserved | **3** | 0 |
+
+At the seam, the same chelate on the same centre goes from infeasible at **strain 2.156**
+across a trans pair to feasible at **0.094** across a cis one. Below two vacancies there is no
+arrangement to choose, so those builds are byte-identical to a `placement 2` one —
+`tests/test_pathways.py::test_the_co_ligand_saturated_series_connects`.
+
 ### S5 — ~~lift the `n_metals` guard~~, and discriminate the routes · **S**
 
 **The guard is already gone** — it came out with S1, because that is the slice whose
@@ -542,10 +557,13 @@ through SQLite rather than in memory, the way `tests/test_m5_exit_gates.py` does
 ## 11. Bookkeeping when M6 lands
 
 - ✅ `ALGO_VERSIONS`: `perception` → `3` (the lobes are part of what a site records) and
-  `choice_vector` → `cv2` (a join records which lobe it bound), both in S1. `placement` does
-  **not** move: lobe 0 reproduces every earlier geometry byte for byte, so the orientation
-  model is unchanged and only the set of recorded coordinates grew. Old rows keep their own
-  version's answer and are never re-labelled (ground rule 6 / D19).
+  `choice_vector` → `cv2` (a join records which lobe it bound), both in S1. S1 did **not**
+  move `placement`: lobe 0 reproduced every earlier geometry byte for byte, so the
+  orientation model was unchanged and only the set of recorded coordinates grew.
+  **S4 does move it — `placement` → `3`.** Choosing which vertices stay open puts the
+  ligands on different vertices, so any centre with two or more vacancies has different
+  coordinates than a `2` build gave it; saturated and single-vacancy centres are unchanged.
+  Old rows keep their own version's answer and are never re-labelled (ground rule 6 / D19).
 - ✅ Design doc: **D20**, **D24** (C9) and **D25** (C10) written, with a changelog entry; §6.1's
   constraint framing struck there and preserved in `archive/DESIGN_history.md`.
 - `CODE_ARCHITECTURE.md`: flip `place_multicentre`'s 🔴 row; add the two bridge mechanisms to §4

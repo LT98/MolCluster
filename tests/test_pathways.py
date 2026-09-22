@@ -145,6 +145,28 @@ def test_the_intermediates_keep_their_open_vertices(reg):
     assert rung["n_open_sites"] == 2
 
 
+def test_the_co_ligand_saturated_series_connects(reg):
+    """M6/S4: a rung's vacancies are what the next rung binds to, so their ARRANGEMENT
+    is the placing step's business.
+
+    Left to fill order, a CN-6 centre carrying co-ligands hands back its two remaining
+    vertices *trans*, and a ~90 deg chelate cannot reach across 180 — the step is then
+    refused with `chelate_cannot_span` and the ladder has a hole in it. Measured on this
+    spec: two of the three grow steps refused before the placer was told which vertices
+    to keep, none after.
+    """
+    spec = ladder_spec(coordination="6", geometries=("octahedral",), co_ligand="O")
+    summary = run(reg, spec)
+    assert not summary["counts"].get("failed"), summary["counts"]
+
+    rows = task_rows(reg, 1)
+    spans = [t for t in rows if t["error_code"] == "chelate_cannot_span"]
+    assert not spans, f"{len(spans)} rung(s) unreachable: the vacancies came back trans"
+    grew = [t for t in rows if t["kind"] == "grow"]
+    assert grew and all(t["status"] == "done" for t in grew), (
+        [(t["kind"], t["status"], t["error_code"]) for t in grew])
+
+
 # ── where it does not make sense, it says so ─────────────────────────────────
 
 def test_a_saturated_parent_is_refused_as_a_substitution(reg):
