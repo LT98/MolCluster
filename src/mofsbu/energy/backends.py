@@ -521,14 +521,15 @@ class MACEBackend(_Base):
                                        default_dtype=self.default_dtype)
         return self._calc_cache
 
+    #: The `atoms.info` side of `MACECalculator.info_keys`, which maps internal name ->
+    #: info key.  `spin` is the MULTIPLICITY (2S+1), not the unpaired count.
+    charge_key = "charge"
+    spin_key = "spin"
+
     def _atoms(self, symbols, positions, *, charge: int, multiplicity: int):
         """Build the ASE object, handing the model the electronic state IF it takes one.
 
-        This is the one place the two MACE backends genuinely differ at run time.  A
-        charge-aware model reads `atoms.info["total_charge"]` and
-        `atoms.info["total_spin"]` (MACE maps those onto its internal `charge`/`spin`
-        config keys; OMol25's `spin` is the MULTIPLICITY, 2S+1, not the unpaired count).
-        Setting them on a charge-blind model would be worse than useless: the keys are
+        Setting these on a charge-blind model would be worse than useless: the keys are
         ignored, and the run would look configured.
         """
         from ase import Atoms
@@ -536,9 +537,9 @@ class MACEBackend(_Base):
         atoms = Atoms(symbols=list(symbols), positions=positions)
         atoms.pbc = False
         if self.charge_aware:
-            atoms.info["total_charge"] = int(charge)
+            atoms.info[self.charge_key] = int(charge)
         if self.spin_aware:
-            atoms.info["total_spin"] = int(multiplicity)
+            atoms.info[self.spin_key] = int(multiplicity)
         return atoms
 
     def _prepare(self, symbols, positions, charge: int, multiplicity: int, solvent):

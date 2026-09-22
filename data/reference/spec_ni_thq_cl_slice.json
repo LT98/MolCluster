@@ -1,0 +1,50 @@
+{
+  "allow_unsaturated": true,
+  "binding": [
+    "mono"
+  ],
+  "co_ligand": "O",
+  "coordination": [
+    4
+  ],
+  "degree": 1,
+  "geometries": null,
+  "ligands_per_metal": [
+    1,
+    2
+  ],
+  "max_distinct_ligands": 2,
+  "metals": [
+    {
+      "oxidation_state": 2,
+      "spin_class": "hs",
+      "symbol": "Ni"
+    }
+  ],
+  "ml_model": "mace_omol",
+  "molecules": [
+    {
+      "max_deprotonations": 1,
+      "multiplicity": 1,
+      "name": "tHQ",
+      "smiles": "O=C(C(O)=C1O)C(O)=C(O)C1=O"
+    },
+    {
+      "max_deprotonations": 1,
+      "multiplicity": 1,
+      "name": "HCl",
+      "smiles": "Cl"
+    }
+  ],
+  "note": "Ni(II)/tHQ/Cl/water proof slice: small enough to keep the pathway ladder under the 2000-task cap, so provenance edges carry reagents.",
+  "pathways": true,
+  "pocket": {
+    "min_anionic": null,
+    "n_anionic": null,
+    "rigid": null,
+    "ring_size": null
+  },
+  "run_mode": "ml_go",
+  "seed": 0,
+  "spec_version": 7
+}
