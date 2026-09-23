@@ -482,6 +482,92 @@ def put_geometry(
     return Put(gid, True)
 
 
+#: Two runs of one correction method on one set of coordinates are one number.
+SOLVATION_REPEAT_TOL = 1e-6
+
+
+def put_solvation_correction(
+    reg: Registry,
+    geometry_id: int,
+    *,
+    method: MethodSpec,
+    e_gas: float,
+    e_solv: float,
+) -> Put:
+    """Record a continuum correction on one stored geometry (C16/C17, D-TBD).
+
+    `method` is the CORRECTION's theory and its `solvent` is the medium token
+    ('model:solvent').  `e_gas` and `e_solv` are that method's energies on this
+    geometry's coordinates without and with the continuum; `dG_solv` is derived here so
+    no caller can store one that disagrees with them.
+    """
+    import math
+
+    from mofsbu._types import split_medium
+
+    geom = reg.conn.execute(
+        "SELECT g.id, g.structure_id, m.solvent AS base_solvent, "
+        "       s.net_charge, s.multiplicity "
+        "FROM geometries g JOIN structures s ON s.id = g.structure_id "
+        "LEFT JOIN methods m ON m.id = g.method_id WHERE g.id=?", (geometry_id,)).fetchone()
+    if geom is None:
+        raise RegistryError(f"no geometry {geometry_id}")
+    if method.solvent is None:
+        raise RegistryError(
+            "a solvation correction needs the medium it corrects to: method.solvent is "
+            "None, which means gas phase")
+    try:
+        split_medium(method.solvent)
+    except ValueError as exc:
+        raise RegistryError(str(exc)) from None
+    if geom["base_solvent"] is not None:
+        raise RegistryError(
+            f"geometry {geometry_id}'s energy is already in {geom['base_solvent']!r}; a "
+            f"continuum correction on top of a continuum counts solvation twice")
+    if method.charge is None or method.multiplicity is None:
+        raise RegistryError(
+            "a continuum correction depends on the charge and spin it was computed at; "
+            "method.charge and method.multiplicity must be stated")
+    if (method.charge, method.multiplicity) != (geom["net_charge"], geom["multiplicity"]):
+        raise RegistryError(
+            f"correction computed at charge {method.charge:+d}, multiplicity "
+            f"{method.multiplicity}; structure {geom['structure_id']} is charge "
+            f"{geom['net_charge']:+d}, multiplicity {geom['multiplicity']}")
+    if not (math.isfinite(e_gas) and math.isfinite(e_solv)):
+        raise RegistryError(f"non-finite energies: e_gas={e_gas!r}, e_solv={e_solv!r}")
+
+    mid = method_id(reg, method)
+    dG = float(e_solv) - float(e_gas)
+    row = reg.conn.execute(
+        "SELECT id, dG_solv FROM solvation_corrections WHERE geometry_id=? AND method_id=?",
+        (geometry_id, mid)).fetchone()
+    if row is not None:
+        if abs(float(row["dG_solv"]) - dG) > SOLVATION_REPEAT_TOL:
+            raise RegistryError(
+                f"geometry {geometry_id} already has dG_solv={row['dG_solv']:+.6f} eV from "
+                f"this method; the new value {dG:+.6f} eV disagrees, so one of the two "
+                f"runs is not the method its row says it is")
+        return Put(int(row["id"]), False)
+    cur = reg.conn.execute(
+        "INSERT INTO solvation_corrections (geometry_id, method_id, e_gas, e_solv, dG_solv, "
+        "created_at) VALUES (?,?,?,?,?,?)",
+        (geometry_id, mid, float(e_gas), float(e_solv), dG, utcnow()))
+    return Put(int(cur.lastrowid), True)
+
+
+def solvation_corrections(reg: Registry, geometry_id: int,
+                          medium: str | None = None) -> list[sqlite3.Row]:
+    """The corrections stored on one geometry, optionally in one medium.  Empty = none."""
+    sql = ("SELECT sc.*, m.code, m.code_version, m.method, m.solvent AS medium, "
+           "       m.extras_json FROM solvation_corrections sc "
+           "JOIN methods m ON m.id = sc.method_id WHERE sc.geometry_id=?")
+    args: list[Any] = [geometry_id]
+    if medium is not None:
+        sql += " AND m.solvent=?"
+        args.append(medium)
+    return reg.conn.execute(sql + " ORDER BY m.id", args).fetchall()
+
+
 def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
     """Maintain the best-available pointer.  The ONLY writer of these two columns.
 

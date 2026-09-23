@@ -72,6 +72,21 @@ class MethodSpec:
         return f"{self.method}/{self.code}-{self.code_version} ({medium})"
 
 
+def split_medium(token: str) -> tuple[str, str]:
+    """`'alpb:water'` -> `('alpb', 'water')`.  A medium names its MODEL and its solvent.
+
+    A bare `'water'` is refused: ALPB and GBSA on the same geometries differ by 0.35 eV on
+    one deprotonation and 0.96 eV on a four-ion equation (docs/WORKPLAN_solvation.md §1),
+    so a solvent name alone does not say which number was computed.
+    """
+    model, sep, solvent = str(token).strip().lower().partition(":")
+    if not sep or not model or not solvent:
+        raise ValueError(
+            f"medium {token!r} must be 'model:solvent' (e.g. 'alpb:water'); a solvent "
+            f"name alone does not say which continuum produced the number")
+    return model, solvent
+
+
 class MofsbuError(Exception):
     """Base for every error this package raises deliberately."""
 

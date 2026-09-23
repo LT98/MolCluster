@@ -12,7 +12,7 @@
     "l3_conformer_id": "conf1",
     "perception": "3",
     "placement": "3",
-    "reference_scheme": "balanced1",
+    "reference_scheme": "balanced2",
     "site_state": "1",
     "spin_convention": "hs1",
     "wl_index": "wl3-nx"

@@ -10,7 +10,7 @@ from mofsbu.registry.api import (
     get_site_state, get_sites,
     get_structure, find_method_id, incoming_routes, method_id, outgoing_routes,
     fragment_aliases, put_geometry, put_reaction, put_site_state, put_sites, put_structure,
-    relabel_all, set_hidden,
+    put_solvation_correction, relabel_all, set_hidden, solvation_corrections,
 )
 from mofsbu.registry.db import ReadOnlyRegistry, Registry, ensure_registry
 from mofsbu.registry.store import BlobStore
@@ -25,4 +25,5 @@ __all__ = [
     "get_structure", "incoming_routes", "method_id", "outgoing_routes", "put_geometry",
     "put_reaction", "put_site_state", "put_sites", "put_structure", "relabel_all",
     "alias_fragment", "fragment_aliases", "set_hidden",
+    "put_solvation_correction", "solvation_corrections",
 ]

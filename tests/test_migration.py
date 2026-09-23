@@ -172,3 +172,25 @@ def test_several_columns_can_be_added_in_one_revision(tmp_path):
         reg.migrate()                                  # and it stays idempotent
         versions = [r[0] for r in reg.conn.execute("SELECT version FROM migrations")]
     assert len(versions) == len(set(versions))
+
+
+def test_a_table_added_later_reaches_an_existing_database_and_is_logged(tmp_path):
+    """`solvation_corrections` is a TABLE new to old registries, not a column."""
+    db = tmp_path / "old.db"
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        reg.conn.execute("DROP TABLE solvation_corrections")
+        fresh = [r[0] for r in reg.conn.execute("SELECT note FROM migrations")]
+    assert not any(n.startswith("created table") for n in fresh)    # a new db: all new
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        columns = {r[1] for r in reg.conn.execute("PRAGMA table_info(solvation_corrections)")}
+        notes = [r[0] for r in reg.conn.execute("SELECT note FROM migrations")]
+    assert {"geometry_id", "method_id", "e_gas", "e_solv", "dG_solv"} <= columns
+    assert notes.count("created table solvation_corrections") == 1
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        again = [r[0] for r in reg.conn.execute("SELECT note FROM migrations")]
+    assert again == notes

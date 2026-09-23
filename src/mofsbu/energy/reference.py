@@ -131,6 +131,8 @@ class ReactionEnergy:
             flags.append("unconverged geometries")
         if not self.quality.isodesmic:
             flags.append("NOT isodesmic — relative comparisons only")
+        flags += [i.code if i.blocking else f"{i.code} (caveat)"
+                  for i in self.quality.issues if i.code not in BOND_RULES]
         note = f"  [{'; '.join(flags)}]" if flags else ""
         return f"dE = {self.dE:+.3f} eV  ({self.method.describe()}, {self.fidelity.name}){note}"
 
@@ -209,6 +211,11 @@ def balance_for_terms(reg: Registry, terms: tuple[Term, ...]) -> BalanceReport:
 BARE_ION = "bare_ion"
 NAKED_POLYANION = "naked_polyanion"
 COORDINATION_CHANGE = "coordination_change"
+#: The count of free charged species changes across the arrow.  Not a bond-type rule, so
+#: it does not touch `isodesmic`; it blocks `strict` in gas phase and travels as a caveat
+#: in a continuum (C18, D-TBD).
+CHARGE_SEPARATION = "charge_separation"
+BOND_RULES = frozenset({BARE_ION, NAKED_POLYANION, COORDINATION_CHANGE})
 
 
 @dataclass(frozen=True)
@@ -217,20 +224,29 @@ class QualityIssue:
     detail: str
     hint: str
     structure_id: int | None = None
+    blocking: bool = True                   # False: a caveat that travels, not a refusal
 
 
 @dataclass(frozen=True)
 class ReferenceQuality:
     """Whether the equation's two sides are comparable enough to subtract."""
 
-    isodesmic: bool
+    isodesmic: bool                         # the bond-type rules only
     dative_delta: int                       # metal-donor bonds, products minus reagents
     issues: tuple[QualityIssue, ...] = ()
+    ion_delta: int = 0                      # free charged species, products minus reagents
+    medium: str | None = None               # what the equation was weighed in; None = gas
+
+    @property
+    def acceptable(self) -> bool:
+        """No blocking issue: what `strict=True` and `store_reaction_energy` require."""
+        return not any(i.blocking for i in self.issues)
 
     def describe(self) -> str:
-        if self.isodesmic:
+        if not self.issues:
             return "isodesmic: same metal-donor bond count, no isolated reference species"
-        return "; ".join(f"{i.code}: {i.detail}" for i in self.issues)
+        return "; ".join(f"{i.code}{'' if i.blocking else ' (caveat)'}: {i.detail}"
+                         for i in self.issues)
 
 
 def _dative_count(g: Any) -> int:
@@ -238,7 +254,8 @@ def _dative_count(g: Any) -> int:
 
 
 def check_reference_quality(reg: Registry, reaction_id: int, *,
-                            max_naked_charge: int = 1) -> ReferenceQuality:
+                            max_naked_charge: int = 1,
+                            medium: str | None = None) -> ReferenceQuality:
     """Are the reference species comparable to the product, or merely balanced?
 
     * **bare ion** — a lone metal atom carrying a charge, the `E(M^q+)` term.  Gas-phase
@@ -251,20 +268,29 @@ def check_reference_quality(reg: Registry, reaction_id: int, *,
       on both sides.  This is the rule that separates a ligand-exchange equation, where
       the metal stays coordinated throughout and the errors cancel, from a
       formation-from-free-ions equation, where six bonds appear out of nothing.
+    * **charge separation** — the number of free charged species changes across the
+      arrow.  Balanced and bond-conserving, and in gas phase still wrong by the
+      Coulomb energy of pulling the ions apart: +7.36 eV for one proton transfer to
+      water on MACE-OMOL-0.  Blocking when `medium` is None (gas phase); a caveat when
+      the equation is weighed in a continuum, which screens most of it and not all.
     """
     return quality_for_terms(reg, reaction_terms(reg, reaction_id),
-                             max_naked_charge=max_naked_charge)
+                             max_naked_charge=max_naked_charge, medium=medium)
 
 
 def quality_for_terms(reg: Registry, terms: tuple[Term, ...], *,
-                      max_naked_charge: int = 1) -> ReferenceQuality:
+                      max_naked_charge: int = 1,
+                      medium: str | None = None) -> ReferenceQuality:
     """`check_reference_quality` for an equation that is not (yet) a row."""
     issues: list[QualityIssue] = []
     dative = 0
+    ions = 0
     for term in terms:
         g = get_graph(reg, term.structure_id)
         dative += term.sign * term.stoich * _dative_count(g)
         charge = int(g.charge or 0)
+        if charge:
+            ions += term.sign * term.stoich
         metals = g.metals()
         if len(g) == 1 and metals and charge != 0:
             issues.append(QualityIssue(
@@ -285,8 +311,20 @@ def quality_for_terms(reg: Registry, terms: tuple[Term, ...], *,
             detail=f"metal-donor bonds change by {dative:+d} across the arrow",
             hint="write it as a LIGAND EXCHANGE — the incoming donor replaces a solvent "
                  "molecule rather than binding a metal that started with nothing"))
-    return ReferenceQuality(isodesmic=not issues, dative_delta=dative,
-                            issues=tuple(issues))
+    if ions:
+        issues.append(QualityIssue(
+            CHARGE_SEPARATION, blocking=medium is None,
+            detail=(f"free charged species change by {ions:+d} across the arrow"
+                    + (" in gas phase" if medium is None
+                       else f"; {medium} screens most of the Coulomb term, not all")),
+            hint="weigh it in a continuum (solvent='alpb:water') — the gas-phase number "
+                 "is dominated by pulling the ions apart in vacuum"
+                 if medium is None else
+                 "the residual is the continuum's error on small ions; compare only "
+                 "against equations separating the same ions"))
+    bond = [i for i in issues if i.code in BOND_RULES]
+    return ReferenceQuality(isodesmic=not bond, dative_delta=dative,
+                            issues=tuple(issues), ion_delta=ions, medium=medium)
 
 
 # ── the energies behind the equation ─────────────────────────────────────────
@@ -337,6 +375,91 @@ def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
     return reg.conn.execute(sql, args).fetchone()
 
 
+def _corrected_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
+                   medium: str, method: str | None = None,
+                   correction: tuple[str, str, str, str] | None = None) -> Any:
+    """A gas-phase energy plus a stored continuum correction ON THE SAME GEOMETRY.
+
+    The route by which an ML energy acquires a medium (C17): MACE-OMOL-0 has no
+    continuum, so dG_solv comes from one correction method evaluated on the ML
+    coordinates.  Only a geometry carrying both numbers qualifies; the correction is
+    never borrowed from another geometry of the same structure, because it moved by
+    0.24 eV between two geometries of one Ni complex (docs/WORKPLAN_solvation.md §1).
+    `correction` pins (code, code_version, method, extras_json) once the first term has
+    chosen one, as `method` pins the base theory.
+    """
+    sql = ("SELECT g.id, g.energy + sc.dG_solv AS energy, g.converged, g.fidelity, "
+           "       g.method_id, sc.dG_solv, cm.code AS c_code, "
+           "       cm.code_version AS c_version, cm.method AS c_method, "
+           "       cm.extras_json AS c_extras "
+           "FROM geometries g JOIN methods m ON m.id = g.method_id "
+           "JOIN solvation_corrections sc ON sc.geometry_id = g.id "
+           "JOIN methods cm ON cm.id = sc.method_id "
+           "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS NULL "
+           "AND cm.solvent=?")
+    args: list[Any] = [structure_id, medium]
+    if fidelity is not None:
+        sql += " AND g.fidelity=?"
+        args.append(int(fidelity))
+    if method is not None:
+        sql += " AND m.method=?"
+        args.append(method)
+    if correction is not None:
+        sql += " AND cm.code=? AND cm.code_version=? AND cm.method=? AND cm.extras_json=?"
+        args.extend(correction)
+    sql += (" ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
+            "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
+            "         m.id ASC, cm.id ASC, g.energy ASC LIMIT 1")
+    return reg.conn.execute(sql, args).fetchone()
+
+
+def _corrected_spec(base: MethodSpec, row: Any, medium: str) -> MethodSpec:
+    """The theory of a corrected energy: the base theory, in `medium`, via one correction.
+
+    The correction's own charge and multiplicity are left out for the reason
+    `same_theory` leaves them out: they differ per species by construction.
+    """
+    correction = {"code": row["c_code"], "code_version": row["c_version"],
+                  "method": row["c_method"], "extras": json.loads(row["c_extras"] or "{}")}
+    return MethodSpec(code=base.code, code_version=base.code_version, method=base.method,
+                      solvent=medium, charge=base.charge, multiplicity=base.multiplicity,
+                      extras={**base.extras, "solvation_correction": correction})
+
+
+def _medium_route(reg: Registry, terms: tuple[Term, ...], *, fidelity: Fidelity | None,
+                  solvent: str | None, subject: str) -> str:
+    """'direct' or 'corrected' — ONE route for every term, or a refusal.
+
+    Direct: the energy itself was computed in the medium (`methods.solvent`).
+    Corrected: a gas-phase energy plus a stored correction.  Mixing the two inside one
+    equation subtracts a relaxed-in-solvent number from a gas-geometry one, so it is
+    refused by name rather than resolved term by term.
+    """
+    if solvent is None:
+        return "direct"
+    direct = {t.structure_id for t in terms
+              if _energy_row(reg, t.structure_id, fidelity=fidelity, solvent=solvent)}
+    if ":" not in solvent:
+        return "direct"                     # a bare name has no corrected route
+    corrected = {t.structure_id for t in terms
+                 if _corrected_row(reg, t.structure_id, fidelity=fidelity, medium=solvent)}
+    everyone = {t.structure_id for t in terms}
+    if direct == everyone:
+        return "direct"
+    if corrected == everyone:
+        return "corrected"
+    only_direct = sorted(everyone & direct - corrected)
+    only_corrected = sorted(everyone & corrected - direct)
+    if only_direct and only_corrected:
+        raise ReferenceSchemeError(
+            f"{subject} cannot be weighed in {solvent} by one route: structures "
+            f"{only_direct} have energies computed in it and structures {only_corrected} "
+            f"have gas-phase energies with a {solvent} correction. Mixing the two "
+            f"subtracts a number relaxed in the continuum from one that was not; compute "
+            f"the missing species one way or the other.")
+    return "corrected" if len(corrected) > len(direct) else "direct"
+
+
 def reaction_balanced_energy(
     reg: Registry,
     reaction: int,
@@ -351,7 +474,9 @@ def reaction_balanced_energy(
 
     `solvent` selects the medium the whole equation is evaluated in (None = gas phase);
     every species must have an energy in that same medium, which is what stops a solvated
-    product being compared against a gas-phase reagent.
+    product being compared against a gas-phase reagent.  A 'model:solvent' medium may be
+    met by energies computed in it or by gas-phase energies with a stored correction
+    (`registry.put_solvation_correction`) — one route for the whole equation, never both.
 
     `strict` (default on) additionally requires the equation to be isodesmic — see
     `check_reference_quality`.  Turning it off is how you reproduce a legacy number on
@@ -389,7 +514,7 @@ def energy_for_terms(
             f"counter-ion) as `leaving` reagents so both sides carry the same atoms and "
             f"the same charge.")
 
-    quality = quality_for_terms(reg, terms)
+    quality = quality_for_terms(reg, terms, medium=solvent)
     if strict and not quality.isodesmic:
         lines = "\n".join(f"  - {i.code}: {i.detail}\n    {i.hint}" for i in quality.issues)
         raise ReferenceSchemeError(
@@ -400,7 +525,17 @@ def energy_for_terms(
             f"Ni/EDTA verdict reversed once a medium was added "
             f"(docs/reports/solvation_report.md). Pass strict=False to reproduce it "
             f"deliberately; the result will carry isodesmic=False.")
+    if strict and not quality.acceptable:
+        lines = "\n".join(f"  - {i.code}: {i.detail}\n    {i.hint}"
+                          for i in quality.issues if i.blocking)
+        raise ReferenceSchemeError(
+            f"{subject} is isodesmic but not usable in gas phase:\n{lines}\n"
+            f"Pass a continuum medium, or strict=False to take the gas-phase number with "
+            f"the caveat attached.")
 
+    route = _medium_route(reg, balance.terms, fidelity=fidelity, solvent=solvent,
+                          subject=subject)
+    correction: tuple[str, str, str, str] | None = None
     method: MethodSpec | None = None
     total = 0.0
     all_converged = True
@@ -412,8 +547,14 @@ def energy_for_terms(
         # equation cannot be assembled out of two theories that happen to share a rung.
         # The `same_theory` check below still stands: it catches a mismatch in code
         # version or medium that the method NAME alone would let through.
-        row = _energy_row(reg, term.structure_id, fidelity=fidelity, solvent=solvent,
-                          method=None if method is None else method.method)
+        if route == "corrected":
+            row = _corrected_row(reg, term.structure_id, fidelity=fidelity,
+                                 medium=str(solvent),
+                                 method=None if method is None else method.method,
+                                 correction=correction)
+        else:
+            row = _energy_row(reg, term.structure_id, fidelity=fidelity, solvent=solvent,
+                              method=None if method is None else method.method)
         if row is None:
             medium = solvent or "gas phase"
             rung = f" at {fidelity.name}" if fidelity is not None else ""
@@ -424,8 +565,15 @@ def energy_for_terms(
                 f"a term silently changes what the number means"
                 + (f". It may have one from another method — a rung is not a theory, and "
                    f"the equation was pinned to {method.method} by its first term"
-                   if method is not None else ""))
+                   if method is not None else "")
+                + (" (gas-phase energy plus a stored correction on the same geometry, "
+                   "pinned to the first term's correction method)"
+                   if route == "corrected" else ""))
         spec = _method_of(reg, row["method_id"])
+        if route == "corrected":
+            spec = _corrected_spec(spec, row, str(solvent))
+            correction = (row["c_code"], row["c_version"], row["c_method"],
+                          row["c_extras"])
 
         if spec.code == "null" and not allow_null:
             raise ReferenceSchemeError(
@@ -487,14 +635,19 @@ def store_reaction_energy(reg: Registry, reaction_id: int, energy: ReactionEnerg
     """
     from mofsbu.registry.api import method_id as ensure_method
 
-    if not energy.quality.isodesmic and not force:
+    if not (energy.quality.isodesmic and energy.quality.acceptable) and not force:
         raise ReferenceSchemeError(
-            f"refusing to store a non-isodesmic dE on reaction {reaction_id} "
-            f"({energy.quality.describe()}); pass force=True and the caveat is recorded "
-            f"in the note alongside it")
+            f"refusing to store a dE on reaction {reaction_id} that the reference scheme "
+            f"does not accept ({energy.quality.describe()}); pass force=True and the "
+            f"caveat is recorded in the note alongside it")
     mid = ensure_method(reg, energy.method)
     caveats = "" if energy.quality.isodesmic else (
-        " NOT-ISODESMIC:" + ",".join(i.code for i in energy.quality.issues))
+        " NOT-ISODESMIC:" + ",".join(i.code for i in energy.quality.issues
+                                     if i.code in BOND_RULES))
+    others = [i.code if i.blocking else f"{i.code}~" for i in energy.quality.issues
+              if i.code not in BOND_RULES]
+    if others:
+        caveats += " CAVEAT:" + ",".join(others)
     if not energy.all_converged:
         caveats += " UNCONVERGED"
     reg.conn.execute(
