@@ -35,6 +35,25 @@ exclude it by default and `include_hidden=1` brings it back. Nothing becomes unr
 - `GET /api/geometries/{id}/xyz` — coordinates as plain text, rendered in-page by **3Dmol**.
 - `GET /api/structures/{id}/spec` — the spec that produced it.
 - `GET /api/structures/{id}/origin` — its provenance.
+- `GET /api/structures/{id}/xyz` — the best geometry's coordinates, without the record.
+  It exists because `GET /api/structures/{id}` prices every incoming route and is far too
+  dear to call at hover rate.
+
+### The provenance panel
+
+Incoming edges are a table — source / added / dE / rung / caveat / count. The source cell is
+the edge as an equation, reagents on the left of the arrow and the product on the right, and
+every species is a link that opens that structure whether or not it is on the current page.
+Hovering a link previews its geometry.
+
+Edges with the same reagents and the same choice vector are one edge reached by different
+orderings of the same choices, so they collapse to a single row carrying a count; opening the
+row lists the edges behind it. **The collapsing is in the browser** — the API still returns
+every edge, and the route count on a listing is the uncollapsed one.
+
+A dE always carries its reference-scheme caveat. Every assembly edge in this project is
+non-isodesmic, and a number shown without that caveat would assert what the scheme exists to
+refuse. An edge that cannot be priced shows `— (reason)`, never a blank.
 - `GET /api/meta` — which database and blob store are being served, that it is read-only,
   and **the `algo_versions` table as stored**. That last one is how you tell a row built
   under `placement 2` from one built under `3`.

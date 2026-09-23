@@ -33,6 +33,7 @@ Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only wr
 | GET | `/api/structures/{id}` | Registry | one record |
 | GET | `/api/structures/{id}/spec` | Registry | the spec that built it |
 | GET | `/api/structures/{id}/origin` | Registry | provenance |
+| GET | `/api/structures/{id}/xyz` | Registry | best geometry's coordinates, for the hover preview |
 | POST | `/api/structures/{id}/rerun` | Registry | re-run it (**builder router**) |
 | POST | `/api/structures/{id}/hide` | Registry | soft-delete (**builder router**) |
 | GET | `/api/geometries/{id}/xyz` | Registry | plain-text coordinates, for 3Dmol |
