@@ -133,6 +133,11 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 #d-routes{overflow-x:auto}
 #d-routes th{position:static;z-index:auto;cursor:default}
 #d-routes td.caveat-cell{white-space:normal;min-width:90px}
+/* dE is why the table exists, so it is first and never wraps.  The species columns are
+   capped and ellipsised: the full label is on the anchor's title and in the opened row. */
+#d-routes td.num,#d-routes th.num{white-space:nowrap}
+#d-routes td:nth-child(2),#d-routes td:nth-child(3){
+  max-width:19ch;overflow:hidden;text-overflow:ellipsis}
 #d-routes tr.rmember td{padding-left:16px;font-size:11px;color:var(--muted)}
 #d-routes .rhead,#d-routes .rnote{font-size:10.5px}
 #d-routes .rnote{margin-top:6px}
@@ -417,9 +422,11 @@ function renderTerms(step){
        + (right || `<span class="muted">no product recorded for this edge</span>`);
 }
 
-/* Duplicate edges are one reaction reached by different orderings of the same choices:
-   same reagents, same choice vector (D13).  Collapsed in the BROWSER — the API's route
-   count is what `tests/test_ui_controls.py` pins, and it must not move. */
+/* One row per CHEMISTRY: same source, same thing added, one entry.  The choice vector
+   distinguishes two placements of those same pieces, which is a geometric fact and not a
+   different reaction — dE does not depend on it — so it is counted inside the group
+   rather than splitting it.  Collapsed in the BROWSER: the API's route count is what
+   `tests/test_ui_controls.py` pins, and it must not move. */
 function groupRoutes(routes){
   const seen = new Map(), out = [];
   for(const r of routes){
@@ -427,13 +434,42 @@ function groupRoutes(routes){
     const ids = ((step && step.terms) || [])
       .filter(t => t.side === "reagent").map(t => Number(t.structure_id))
       .sort((a, b) => a - b);
-    const key = ids.join(",") + "|" + (r.choice_vector_digest || "");
+    const key = ids.join(",");
     let g = seen.get(key);
-    if(!g){ g = {key, rep:r, members:[]}; seen.set(key, g); out.push(g); }
+    if(!g){ g = {key, rep:r, members:[], vectors:new Set()}; seen.set(key, g); out.push(g); }
     g.members.push(r);
+    if(r.choice_vector_digest) g.vectors.add(r.choice_vector_digest);
   }
-  for(const g of out) g.count = g.members.length;
+  for(const g of out){ g.count = g.members.length; g.placements = g.vectors.size; }
   return out;
+}
+
+/* The stored label spells out the identity work: every deprotonation orbit, the spin, the
+   identity level it was resolved to.  That is the right thing to store and the wrong thing
+   to put in six table cells — it is wider than the panel.  The full string stays one hover
+   away, and `renderTerms` in the opened row still shows it in full. */
+function shortLabel(full){
+  return String(full ?? "")
+    .replace(/cfg\([^)]*\)/g, "").replace(/sep\([^)]*\)/g, "")   // the orbit bookkeeping
+    .replace(/\s*\?L\d+\s*$/, "")                                 // identity level
+    .replace(/\s+s\d+\b/g, "")                                    // spin multiplicity
+    .replace(/\s{2,}/g, " ").trim();
+}
+
+/* Which reagent is the thing being built on, and which is the thing added.  A free ligand
+   is labelled `[tHQ] q0`; a coordination sphere leads with its metal, `Ni[H2O]2[...]`.
+   Where that does not decide it, the bigger label is the sphere. */
+function splitReagents(step){
+  const rs = ((step && step.terms) || []).filter(t => t.side === "reagent");
+  if(rs.length < 2) return {source: rs[0] || null, added: null, rest: rs.slice(1)};
+  const free = rs.filter(t => /^\s*\[/.test(t.display_label || ""));
+  if(free.length === 1){
+    const added = free[0];
+    return {source: rs.find(t => t !== added), added, rest: rs.filter(t => t !== added).slice(1)};
+  }
+  const byLen = [...rs].sort((a, b) =>
+    String(b.display_label || "").length - String(a.display_label || "").length);
+  return {source: byLen[0], added: byLen[1], rest: byLen.slice(2)};
 }
 
 /* A dE here is never isodesmic (an assembly step forms a metal-donor bond, D17), so the
@@ -472,24 +508,39 @@ function routeHead(r){
   return `#${esc(r.id)} · ${esc(r.kind)} · depth ${esc(r.depth ?? "— (M8)")}`
        + (r.note ? " · " + esc(r.note) : "");
 }
-function routeCells(r){
-  return `<td>${routeEnergy(r)}</td><td>${routeRung(r)}</td>`
-       + `<td class="caveat-cell">${routeCaveats(r)}</td>`;
+/* A species cell: short enough to read across, with the stored label one hover away and
+   the id still the thing you click. */
+function speciesCell(term){
+  if(!term) return `<span class="muted">—</span>`;
+  const full = term.display_label || ("structure " + term.structure_id);
+  const n = Number(term.stoich || 1) > 1 ? esc(term.stoich) + "&times; " : "";
+  return `${n}<a href="#" class="term" data-sid="${esc(term.structure_id)}"`
+       + ` title="${esc(full)}">${esc(shortLabel(full))}</a>`;
 }
 
 function renderRouteGroup(g, gi){
   const r = g.rep, many = g.count > 1, open = state.openGroups.has(g.key);
   const tip = r.why_not ? ` title="${esc(r.why_not)}"` : "";
+  const {source, added} = splitReagents((r.steps && r.steps[0]) || {});
+  const placements = g.placements > 1
+    ? ` <span class="muted">(${esc(g.placements)} placements)</span>` : "";
+  // A `place` edge cites nothing: the sphere was constructed whole, not reacted together
+  // (C15).  Two bare dashes would read as missing data rather than as what happened.
+  const built = !source && !added
+    ? `<span class="muted">— (built whole, no reagents recorded)</span>` : null;
   let html = `<tr class="rgroup" data-gi="${esc(gi)}"${tip}>`
+    + `<td class="num">${routeEnergy(r)}</td>`
+    + `<td>${built ? "" : speciesCell(added)}</td>`
     + `<td><span class="caret">${many ? (open ? "▾" : "▸") : ""}</span>`
-    + `${renderTerms((r.steps && r.steps[0]) || {})}`
-    + `<div class="muted rhead">${routeHead(r)}</div></td>`
-    + `<td>${routeWhen(r)}</td>${routeCells(r)}`
+    + `${built || speciesCell(source)}${placements}</td>`
+    + `<td>${routeRung(r)}</td>`
+    + `<td class="caveat-cell">${routeCaveats(r)}</td>`
     + `<td class="num">${many ? "×" + esc(g.count) : `<span class="muted">×1</span>`}</td></tr>`;
   if(open && many)
     for(const m of g.members)
-      html += `<tr class="rmember"><td>${routeHead(m)}</td><td>${routeWhen(m)}</td>`
-            + `${routeCells(m)}<td class="num"><span class="muted">—</span></td></tr>`;
+      html += `<tr class="rmember"><td colspan="6">`
+            + `${renderTerms((m.steps && m.steps[0]) || {})}`
+            + `<div class="muted rhead">${routeHead(m)} · ${routeWhen(m)}</div></td></tr>`;
   return html;
 }
 
@@ -499,10 +550,10 @@ function renderRoutes(routes){
   const groups = groupRoutes(routes);
   const note = groups.length < routes.length
     ? `<div class="muted rnote">${esc(routes.length)} edges · ${esc(groups.length)} distinct`
-      + ` by reagents and choice vector — open a row to list the edges behind it</div>`
+      + ` by what was added to what — open a row for the edges behind it</div>`
     : "";
-  return `<table><thead><tr><th>source</th><th>added</th><th>dE</th><th>rung</th>`
-       + `<th>caveat</th><th class="num">count</th></tr></thead><tbody>`
+  return `<table><thead><tr><th class="num">dE</th><th>added</th><th>source</th>`
+       + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead><tbody>`
        + groups.map(renderRouteGroup).join("")
        + `</tbody></table>${note}`;
 }
