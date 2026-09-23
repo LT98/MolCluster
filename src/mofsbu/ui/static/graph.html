@@ -6,6 +6,7 @@
 <title>mofsbu formation-energy graph</title>
 <link rel="stylesheet" href="/static/chrome.css">
 <script src="/static/chrome.js"></script>
+<script src="/static/routes.js"></script>
 <style>
 :root{
   --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
@@ -19,18 +20,24 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
      display:flex;flex-direction:column}
-/* Three panes under the tab strip, in the registry page's proportions but shifted:
-   the picker carries a six-column table and the legend carries one line per route. */
-#app{display:grid;grid-template-columns:330px minmax(420px,1fr) 300px;flex:1;min-height:0}
+/* Two columns.  The right one splits: the diagram does not need the whole height, and
+   the routes on it read better underneath it than beside it. */
+#app{display:grid;grid-template-columns:340px minmax(420px,1fr);flex:1;min-height:0}
 .pane{overflow:auto;padding:12px 14px}
-#picker{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
-#chart{display:flex;flex-direction:column;gap:10px;min-width:0}
-#legend{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
+#picker{border-right:1px solid var(--line);background:var(--panel);
+        display:flex;flex-direction:column;gap:8px}
+#right{display:flex;flex-direction:column;min-height:0;min-width:0}
+#chart{flex:3 1 0;min-height:230px;display:flex;flex-direction:column;gap:8px}
+#routes-pane{flex:2 1 0;min-height:130px;border-top:1px solid var(--line);background:var(--panel)}
 h1{font-size:14px;margin:0;letter-spacing:.02em;overflow-wrap:anywhere}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
    margin:6px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+h2:first-child{margin-top:0}
+.chart-head{display:flex;align-items:flex-end;gap:12px}
+.chart-head h2{flex:1;margin:0}
 .mono{font-family:var(--mono)}
 .muted{color:var(--muted)}
+.caveat{color:var(--warn)}
 .toolbar{display:flex;gap:6px;align-items:center}
 input,button{font:inherit;color:var(--ink);background:var(--panel);
   border:1px solid var(--line);border-radius:4px;padding:4px 6px}
@@ -39,13 +46,39 @@ button:hover{border-color:var(--accent);color:var(--accent)}
 button.primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 #target-id{width:5.5em;text-align:right;font-family:var(--mono)}
 
-/* ── the focused node ──────────────────────────────────────────────────────
-   The one thing that is real at U0: what the walk is standing on.  It is a
-   header rather than a row because every list below it is relative to it. */
+/* ── the trail ─────────────────────────────────────────────────────────────
+   The walk so far, target first.  It is the route being built; U3 gives it a
+   colour and a line on the chart, but it has to be steppable back before then
+   or a wrong turn is a page reload. */
+#trail{display:flex;flex-wrap:wrap;align-items:center;gap:3px;font-size:11.5px;min-height:1.2em}
+#trail .crumb{border:1px solid var(--line);border-radius:4px;padding:1px 6px;
+  background:var(--bg);cursor:pointer;color:var(--ink);max-width:15em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#trail .crumb:hover{border-color:var(--accent);color:var(--accent)}
+#trail .crumb.here{background:var(--accent-soft);border-color:var(--accent);
+  color:var(--accent);font-weight:600;cursor:default}
+#trail .sep{color:var(--muted)}
+
+/* ── the focused node ─────────────────────────────────────────────────── */
 #focus{border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:var(--bg)}
 #focus.none{border-style:dashed;color:var(--muted)}
 #focus-sub{font-size:11.5px;color:var(--muted);margin-top:3px;font-family:var(--mono)}
 #focus-why{font-size:11.5px;color:var(--warn);margin-top:4px}
+
+/* ── the precursor table ──────────────────────────────────────────────── */
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);font-size:10.5px;text-transform:uppercase;
+   letter-spacing:.06em;color:var(--muted);font-weight:600;z-index:1}
+td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+tbody tr.step{cursor:pointer}
+tbody tr.step:hover{background:var(--accent-soft)}
+tbody tr.dead{cursor:default}
+tbody tr.dead:hover{background:none}
+a.term{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)}
+a.term:hover{background:var(--accent-soft)}
+.onward{color:var(--muted);font-size:10.5px;white-space:nowrap}
+.rnote{font-size:11px;color:var(--muted);margin-top:6px}
 
 /* ── stubs ─────────────────────────────────────────────────────────────────
    A region that is planned but not written says so, in place, with the
@@ -61,7 +94,10 @@ button.primary{background:var(--accent-soft);border-color:var(--accent);color:va
   font-weight:600;letter-spacing:.04em;color:var(--muted)}
 .stub-what{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:3px}
 .stub-why{font-size:11.5px;line-height:1.5}
-.stub-grow{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:180px}
+.stub-grow{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}
+.stub.inline{padding:3px 9px;background:none;font-size:11.5px}
+.stub.inline .stub-inc{position:static;margin-right:6px}
+.stub.inline .stub-what{display:inline;font-size:11.5px;margin:0}
 body.stubs-off .stub{display:none}
 
 #msg{font-size:11.5px;color:var(--warn);min-height:1.2em}
@@ -84,6 +120,7 @@ body.stubs-off .stub{display:none}
       <button id="target-go" class="primary">load</button>
     </div>
     <div id="msg"></div>
+    <nav id="trail" aria-label="the walk so far"></nav>
 
     <h2>standing on</h2>
     <div id="focus" class="none">
@@ -96,46 +133,53 @@ body.stubs-off .stub{display:none}
     <div id="steps"></div>
   </section>
 
-  <!-- ── the diagram ──────────────────────────────────────────────────── -->
-  <section id="chart" class="pane">
-    <h2>formation energy · dE in eV, target at zero</h2>
-    <div id="diagram" class="stub-grow"></div>
-  </section>
-
-  <!-- ── the routes on the chart, and how they are drawn ──────────────── -->
-  <aside id="legend" class="pane">
-    <h2>routes</h2>
-    <div id="routes"></div>
-    <h2>show</h2>
-    <div id="toggles"></div>
-  </aside>
+  <!-- ── the diagram, and the routes drawn on it ──────────────────────── -->
+  <div id="right">
+    <section id="chart" class="pane">
+      <div class="chart-head">
+        <h2>formation energy · dE in eV, target at zero</h2>
+        <div id="toggles"></div>
+      </div>
+      <div id="diagram" class="stub-grow"></div>
+    </section>
+    <section id="routes-pane" class="pane">
+      <h2>routes</h2>
+      <div id="routes"></div>
+    </section>
+  </div>
 </div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const esc = mofsbuChrome.esc;
+const {esc, firstClause, shortLabel, groupRoutes, protonsShed, speciesCell,
+       routeEnergy, routeRung, routeCaveats} = mofsbuRoutes;
+
+/* The viewer's provenance panel has the width to print a refusal as a clause; this
+   column is one of six in a 340px pane, and a balance report set in it is the whole
+   table.  The reason is not dropped — it is what the cell and the row both say on
+   hover — it just stops being the widest thing on screen. */
+function stepEnergy(r){
+  if(r.can_price) return routeEnergy(r);
+  const why = firstClause(r.why_not) || "no energy";
+  const head = why.split(":")[0];
+  return `<span class="muted" title="${esc(r.why_not || why)}">&mdash; (${esc(head)})</span>`;
+}
 
 /* Every region of the finished page, and the increment that fills it.  Retiring a
    stub is deleting a row here and rendering into the same host.  The order is the
    order they are built in, so this table doubles as the remaining work. */
 const STUBS = [
-  {host: "steps", inc: "U1", what: "the grouped precursor list",
-   why: "every recorded edge that reaches this node, collapsed so that one chemistry "
-      + "is one row: dE, what was added, what it was added to, the rung it was priced "
-      + "at, its caveat, and how many edges are behind the row. Clicking one walks back "
-      + "a step."},
   {host: "diagram", inc: "U2", grow: true, what: "the energy diagram",
    why: "one level per node and a connector per step, read left to right from the "
       + "precursors to the target. The target sits at zero, so every route is pinned "
       + "at the one node they all share."},
+  {host: "toggles", inc: "U3", inline: true, what: "what the chart draws",
+   why: "energy labels, colour, the y-anchor, and — at U5 — derived routes."},
   {host: "routes", inc: "U3", what: "one line per route on the chart",
    why: "its colour, where it bottoms out, its total dE and its worst single step. "
       + "Routes that branch off each other get neighbouring hues. U4 adds the badge "
       + "for a route whose accounting does not match the others'."},
-  {host: "toggles", inc: "U3", what: "what the chart draws",
-   why: "energy labels, colour on or off, the y-anchor, and — at U5 — whether derived "
-      + "decompositions are offered alongside recorded edges."},
 ];
 
 function mountStubs(){
@@ -143,47 +187,175 @@ function mountStubs(){
     const host = $(s.host);
     if(!host) continue;
     host.innerHTML =
-      `<div class="stub${s.grow ? " stub-grow" : ""}">`
+      `<div class="stub${s.grow ? " stub-grow" : ""}${s.inline ? " inline" : ""}">`
       + `<span class="stub-inc">not built yet · ${esc(s.inc)}</span>`
       + `<div class="stub-what">${esc(s.what)}</div>`
-      + `<div class="stub-why">${esc(s.why)}</div></div>`;
+      + (s.inline ? "" : `<div class="stub-why">${esc(s.why)}</div>`) + `</div>`;
   }
 }
 
 /* ── state ────────────────────────────────────────────────────────────────
-   The walk lives in the URL hash, so a reload keeps it and a link carries it.
-   The viewer has no write path, so there is nowhere else it could live. */
-const state = {target: null, focus: null};
+   `trail` is the walk, target first; each entry past the first records the edge
+   that was walked to reach it.  It lives in the URL, so a reload keeps it and a
+   link carries it — the viewer has no write path, so there is nowhere else it
+   could live.  `data` is the last fetched hop, `cache` the ones before it. */
+const state = {trail: [], data: null, cache: new Map()};
+const here = () => state.trail.length ? state.trail[state.trail.length - 1] : null;
 
-function readHash(){
-  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
-  const t = Number(h.get("target"));
-  return Number.isInteger(t) && t > 0 ? t : null;
+/* ── composition, for deciding which reagent is the scaffold ───────────────
+   A step names two reagents and the walk follows one of them.  The registry
+   knows which: a coordination sphere carries the metal, and where neither does
+   (or both do) the bigger piece is the one being built on.  That is a fact
+   about the species rather than a reading of its label, which is why this does
+   not reuse the viewer's `splitReagents` — that one infers "added" from a
+   leading bracket, and it is guessing. */
+function atomCount(formula){
+  let n = 0;
+  for(const m of String(formula ?? "").matchAll(/([A-Z][a-z]?)(\d*)/g))
+    if(m[1]) n += m[2] ? Number(m[2]) : 1;
+  return n;
 }
 
-function writeHash(id){
-  const h = id ? `#target=${id}` : "";
-  if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
+function splitStep(step, species){
+  const rs = ((step && step.terms) || [])
+    // `solvent` and `leaving` are the proton's carrier, not species being built in —
+    // a deprotonation would otherwise read as "added water", which is true of the
+    // arithmetic and wrong about the chemistry.
+    .filter(t => t.side === "reagent" && (t.role || "reagent") === "reagent");
+  if(rs.length < 2) return {source: rs[0] || null, added: null};
+  const rank = (t) => {
+    const s = species[String(t.structure_id)] || {};
+    return [Number(s.n_metals || 0), atomCount(s.formula)];
+  };
+  const byWeight = [...rs].sort((a, b) => {
+    const A = rank(a), B = rank(b);
+    return (B[0] - A[0]) || (B[1] - A[1]);
+  });
+  return {source: byWeight[0], added: byWeight[1]};
 }
 
+/* Whether the walk can go on from a species, said in the cell you would click. */
+function onward(term, species){
+  if(!term) return "";
+  const s = species[String(term.structure_id)] || {};
+  const n = Number(s.n_incoming_routes || 0);
+  return n
+    ? ` <span class="onward" title="${esc(n)} recorded edges reach it">↩${esc(n)}</span>`
+    : ` <span class="onward" title="nothing recorded reaches it — the walk ends here">·end</span>`;
+}
+
+/* ── the precursor table ───────────────────────────────────────────────── */
+function renderSteps(routes, species){
+  if(!routes.length)
+    return `<div class="empty">no recorded route reaches this structure — `
+         + `it is where a walk stops</div>`;
+  // dE is what the row is being chosen on, so it orders them: cheapest step first,
+  // then the ones with no number, then the `place` edges that cite nothing and are
+  // not a step at all.  Reaction id — the order the rows arrive in — would put the
+  // one row you cannot act on at the top.
+  const groups = groupRoutes(routes).sort((a, b) => {
+    const rank = (g) => {
+      const r = g.rep;
+      if(!((r.steps && r.steps[0] || {}).terms || []).some(t => t.side === "reagent"))
+        return 2;                                   // built whole, nothing to walk to
+      return r.can_price && r.total_dE !== null ? 0 : 1;
+    };
+    return (rank(a) - rank(b))
+        || ((a.rep.total_dE ?? Infinity) - (b.rep.total_dE ?? Infinity));
+  });
+  const split = groups.map(g => splitStep((g.rep.steps && g.rep.steps[0]) || {}, species));
+
+  /* Two protomers of one ligand differ only in WHICH oxygen lost the proton, and
+     `shortLabel` drops exactly that bookkeeping — so a dozen genuinely different
+     precursors can print the same name in this table.  Where that happens the id is
+     shown, and only there: an id on every row is noise, an id on none is a table of
+     rows that look like duplicates of each other. */
+  const byName = new Map();
+  for(const {source, added} of split)
+    for(const t of [source, added])
+      if(t){
+        const k = shortLabel(t.display_label);
+        (byName.get(k) || byName.set(k, new Set()).get(k)).add(Number(t.structure_id));
+      }
+  const ambiguous = new Set(
+    [...byName].filter(([, ids]) => ids.size > 1).map(([k]) => k));
+  const cell = (t) => {
+    if(!t) return speciesCell(t);
+    return speciesCell(t) + (ambiguous.has(shortLabel(t.display_label))
+      ? ` <span class="onward" title="two precursors here share a short name">`
+        + `#${esc(t.structure_id)}</span>` : "");
+  };
+
+  const rows = groups.map((g, gi) => {
+    const r = g.rep, step = (r.steps && r.steps[0]) || {};
+    const {source, added} = split[gi];
+    // A `place` edge cites nothing: the sphere was constructed whole, not reacted
+    // together (C15).  There is nothing to walk to, so the row does not pretend.
+    const built = !source && !added;
+    const shed = protonsShed(step);
+    const placements = g.placements > 1
+      ? ` <span class="muted">(${esc(g.placements)} pl.)</span>` : "";
+    return `<tr class="${built ? "dead" : "step"}" data-rid="${esc(r.id)}"`
+         + `${built ? "" : ` data-source="${esc(source.structure_id)}"`}`
+         + `${r.why_not ? ` title="${esc(r.why_not)}"` : ""}>`
+         + `<td class="num">${stepEnergy(r)}</td>`
+         + `<td>${built ? "" : (shed || cell(added) + onward(added, species))}</td>`
+         + `<td>${built
+             ? `<span class="muted" title="a place edge cites no reagents: the sphere`
+               + ` was constructed whole rather than reacted together (C15)">`
+               + `— (built whole)</span>`
+             : cell(source) + onward(source, species) + placements}</td>`
+         + `<td>${routeRung(r)}</td>`
+         + `<td class="caveat-cell">${routeCaveats(r)}</td>`
+         + `<td class="num">${g.count > 1 ? "×" + esc(g.count)
+             : `<span class="muted">×1</span>`}</td></tr>`;
+  }).join("");
+  const note = groups.length < routes.length
+    ? `<div class="rnote">${esc(routes.length)} edges · ${esc(groups.length)} distinct by `
+      + `what was added to what · click a row to step back, or a species to step into it</div>`
+    : `<div class="rnote">click a row to step back, or a species to step into it</div>`;
+  return `<table><thead><tr><th class="num">dE</th><th>added</th><th>source</th>`
+       + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead>`
+       + `<tbody>${rows}</tbody></table>${note}`;
+}
+
+/* ── the trail ─────────────────────────────────────────────────────────── */
+function renderTrail(){
+  const t = $("trail");
+  if(state.trail.length < 1){ t.innerHTML = ""; return; }
+  t.innerHTML = state.trail.map((n, i) => {
+    const last = i === state.trail.length - 1;
+    const name = shortLabel(n.label) || ("#" + n.sid);
+    return (i ? `<span class="sep">←</span>` : "")
+         + `<span class="crumb${last ? " here" : ""}" data-i="${esc(i)}"`
+         + ` title="${esc(n.label || "")}${n.via ? `\nvia reaction #${n.via}` : ""}">`
+         + `${esc(name)}</span>`;
+  }).join("");
+}
+
+/* ── loading ──────────────────────────────────────────────────────────── */
 function say(text){ $("msg").textContent = text || ""; }
 
-/* U0 reads the full detail endpoint for one field, which is more than it needs —
-   that endpoint prices every incoming route.  U1 brings /api/structures/{id}/routes,
-   which carries the product's own label beside the routes, and this goes away. */
-async function loadTarget(id){
-  say("");
-  if(!id){ renderFocus(null); return; }
+async function fetchHop(sid){
+  if(state.cache.has(sid)) return state.cache.get(sid);
+  const r = await fetch(`/api/structures/${sid}/routes`);
+  if(!r.ok) throw new Error(`no structure ${sid} in this registry`);
+  const d = await r.json();
+  state.cache.set(sid, d);
+  return d;
+}
+
+async function showHere(){
+  const n = here();
+  if(!n){ state.data = null; renderFocus(null); renderTrail(); return; }
   let d;
-  try {
-    const r = await fetch("/api/structures/" + id);
-    if(!r.ok){ say(`no structure ${id} in this registry`); renderFocus(null); return; }
-    d = await r.json();
-  } catch(e){ say(`could not reach the server — ${e.message}`); return; }
-  state.target = state.focus = d.structure;
-  $("target-id").value = id;
-  writeHash(id);
+  try { d = await fetchHop(n.sid); }
+  catch(e){ say(e.message); return; }
+  state.data = d;
+  n.label = d.structure.display_label || d.structure.formula || ("structure " + n.sid);
+  renderTrail();
   renderFocus(d.structure);
+  $("steps").innerHTML = renderSteps(d.routes, d.species);
 }
 
 function renderFocus(s){
@@ -197,15 +369,85 @@ function renderFocus(s){
     return;
   }
   box.classList.remove("none");
-  $("focus-label").textContent = s.display_label || s.formula || `structure ${s.id}`;
+  $("focus-label").textContent = shortLabel(s.display_label) || s.formula
+                               || `structure ${s.id}`;
+  $("focus-label").title = s.display_label || "";
   $("focus-sub").textContent =
     [`#${s.id}`, s.formula, `q ${s.net_charge >= 0 ? "+" : ""}${s.net_charge}`,
      s.multiplicity ? `2S+1 ${s.multiplicity}` : null,
      `${s.n_incoming_routes} incoming`].filter(Boolean).join("  ·  ");
-  // The one thing worth saying at U0 that is not decoration: a node nothing reaches
-  // is where a walk would stop, and that is a property of the data, not of the page.
   why.hidden = Number(s.n_incoming_routes) > 0;
-  why.textContent = "nothing recorded reaches this structure — a walk would stop here";
+  why.textContent = "nothing recorded reaches this structure — the walk stops here";
+}
+
+/* ── the walk ─────────────────────────────────────────────────────────── */
+async function stepTo(sid, via){
+  state.trail.push({sid: Number(sid), via: via ?? null, label: ""});
+  writeHash();
+  await showHere();
+}
+
+function truncateTo(i){
+  if(i >= state.trail.length - 1) return;
+  state.trail.length = i + 1;
+  writeHash();
+  showHere();
+}
+
+/* ── the URL ──────────────────────────────────────────────────────────────
+   `#target=41&p=12-80.44-75` — the target, then each step as the edge walked and
+   the species it landed on.  Both halves are needed: the edge, because an id pair
+   does not say WHICH edge joins them; the species, because one edge names two
+   reagents and stepping into either of them is a legitimate different walk. */
+function writeHash(){
+  const t = state.trail[0];
+  if(!t){ history.replaceState(null, "", location.pathname); return; }
+  const legs = state.trail.slice(1)
+    .filter(n => n.via != null).map(n => `${n.via}-${n.sid}`);
+  const h = `#target=${t.sid}` + (legs.length ? `&p=${legs.join(".")}` : "");
+  if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
+}
+
+function readHash(){
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const t = Number(h.get("target"));
+  const p = (h.get("p") || "").split(".").filter(Boolean).map(leg => {
+    const [rid, sid] = leg.split("-").map(Number);
+    return Number.isInteger(rid) && Number.isInteger(sid) ? {rid, sid} : null;
+  }).filter(Boolean);
+  return {target: Number.isInteger(t) && t > 0 ? t : null, p};
+}
+
+/* Replaying a link: take each recorded leg from the target outwards, checking that
+   the edge still reaches where we stand and still names where the leg went.  A leg
+   that no longer holds stops the replay and says so, rather than quietly producing a
+   shorter walk that would look deliberate. */
+async function replay({target, p}){
+  state.trail = [];
+  if(!target){ await showHere(); return; }
+  await stepTo(target, null);
+  for(const {rid, sid} of p){
+    const d = state.data;
+    if(!d) break;
+    const route = d.routes.find(r => r.id === rid);
+    if(!route){
+      say(`reaction #${rid} does not reach this structure — walk stopped here`); break;
+    }
+    const names = ((route.steps && route.steps[0] || {}).terms || [])
+      .some(t => t.side === "reagent" && Number(t.structure_id) === sid);
+    if(!names){
+      say(`reaction #${rid} does not name structure ${sid} — walk stopped here`); break;
+    }
+    await stepTo(sid, rid);
+  }
+}
+
+async function loadTarget(id){
+  say("");
+  state.cache.clear();
+  if(!id){ state.trail = []; writeHash(); await showHere(); return; }
+  $("target-id").value = id;
+  await replay({target: id, p: []});
 }
 
 function boot(){
@@ -214,11 +456,46 @@ function boot(){
   mountStubs();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
-  addEventListener("hashchange", () => loadTarget(readHash()));
+
+  // Delegated: the table is replaced wholesale on every hop, so the listener has to
+  // outlive it.  A species is a step INTO that species; the row is a step back along
+  // the edge, which is the scaffold.
+  $("steps").addEventListener("click", (e) => {
+    const term = e.target.closest("a.term");
+    const row = e.target.closest("tr.step");
+    if(term){
+      e.preventDefault();
+      const sid = Number(term.dataset.sid);
+      const s = (state.data && state.data.species[String(sid)]) || {};
+      if(!Number(s.n_incoming_routes)){
+        say(`nothing recorded reaches ${shortLabel(s.display_label) || "#" + sid}`);
+        return;
+      }
+      say("");
+      stepTo(sid, row ? Number(row.dataset.rid) : null);
+      return;
+    }
+    if(row) { say(""); stepTo(Number(row.dataset.source), Number(row.dataset.rid)); }
+  });
+
+  $("trail").addEventListener("click", (e) => {
+    const c = e.target.closest(".crumb");
+    if(c){ say(""); truncateTo(Number(c.dataset.i)); }
+  });
+
+  addEventListener("hashchange", () => {
+    const h = readHash();
+    if(h.target) $("target-id").value = h.target;
+    replay(h);
+  });
+
   fetch("/api/meta").then(r => r.json())
     .then(m => { $("meta").textContent = `${m.db_name} · read-only`; })
     .catch(() => {});
-  loadTarget(readHash());
+
+  const h = readHash();
+  if(h.target) $("target-id").value = h.target;
+  replay(h);
 }
 
 document.addEventListener("DOMContentLoaded", boot);

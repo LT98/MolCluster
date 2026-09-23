@@ -58,7 +58,43 @@ def test_the_graph_page_is_served_and_is_in_the_tab_strip(client):
     assert '"/graph"' in client.get("/static/chrome.js").text
 
 
-@pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js"])
+def test_the_walk_gets_the_same_edges_as_the_detail_endpoint(client):
+    """Two doors onto one set of edges must not disagree about what reaches a
+    structure.  The walk's door exists to skip the geometry list and the blob probe
+    per geometry, not to answer a different question."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    detail = client.get(f"/api/structures/{sid}").json()["routes"]
+    walk = client.get(f"/api/structures/{sid}/routes").json()
+    assert [r["id"] for r in walk["routes"]] == [r["id"] for r in detail]
+    assert [r["total_dE"] for r in walk["routes"]] == [r["total_dE"] for r in detail]
+    assert walk["structure"]["id"] == sid
+
+
+def test_the_walk_can_name_every_species_its_edges_mention(client):
+    """A candidate step is chosen on what it is made of, so the names have to arrive
+    with the edges.  A term whose species is missing would render as a bare id and
+    the walk would not know whether it could go on from there."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    walk = client.get(f"/api/structures/{sid}/routes").json()
+    mentioned = {str(t["structure_id"]) for r in walk["routes"]
+                 for s in r["steps"] for t in s["terms"]}
+    assert mentioned <= set(walk["species"])
+    for s in walk["species"].values():
+        assert "display_label" in s and "n_incoming_routes" in s
+
+
+def test_the_walk_refuses_a_structure_that_is_not_there(client):
+    assert client.get("/api/structures/999999/routes").status_code == 404
+
+
+@pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js",
+                                   "/static/routes.js"])
 def test_the_shared_chrome_is_served(client, asset):
     """The tab strip is built by a fetched file, not by markup in each page.  If the
     mount goes, all three pages lose their navigation and say nothing about it."""

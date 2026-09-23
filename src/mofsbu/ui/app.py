@@ -398,6 +398,48 @@ def create_app(db_path: Path, store_root: Path,
         except ValueError:                    # not a sha256 digest → treat as absent
             return False
 
+    # ── the incoming edges, for a walk ───────────────────────────────────────
+    #: What a walk needs about a species: how to name it, what it is, and whether
+    #: anything recorded reaches it — which is what says the walk can go on from there.
+    SPECIES_COLS = ("id", "display_label", "formula", "net_charge", "multiplicity",
+                    "n_metals", "n_incoming_routes")
+
+    @app.get("/api/structures/{structure_id}/routes")
+    def structure_routes(structure_id: int,
+                         con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """The incoming edges, priced, and enough about every species they name.
+
+        `get_structure` answers this too, but it also lists every geometry and asks the
+        blob store about each one.  A backwards walk asks this once per hop and wants
+        neither, so it gets its own door.  `species` carries one row per structure the
+        terms mention, so a candidate can be named and its own reachability shown
+        without a request per candidate.
+        """
+        row = con.execute("SELECT * FROM v_structures WHERE id = ?",
+                          (structure_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, f"no structure {structure_id}")
+        routes = _rows(con.execute(
+            """SELECT id, kind, intermediate, depth, note, fidelity, created_at,
+                      choice_vector_digest
+               FROM reactions WHERE product_structure_id = ? ORDER BY id""",
+            (structure_id,)))
+        _price_routes(con, routes)
+        return {"structure": {k: row[k] for k in SPECIES_COLS},
+                "routes": routes, "species": _species(con, routes)}
+
+    def _species(con: sqlite3.Connection,
+                 routes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        ids = sorted({int(t["structure_id"]) for r in routes
+                      for s in (r.get("steps") or ()) for t in (s.get("terms") or ())})
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        rows = con.execute(
+            f"SELECT {', '.join(SPECIES_COLS)} FROM v_structures WHERE id IN ({marks})",
+            tuple(ids))
+        return {str(r["id"]): dict(r) for r in rows}
+
     # ── coordinates ──────────────────────────────────────────────────────────
     @app.get("/api/geometries/{geometry_id}/xyz", response_class=PlainTextResponse)
     def geometry_xyz(geometry_id: int, con: sqlite3.Connection = Con) -> PlainTextResponse:
