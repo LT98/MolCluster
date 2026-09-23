@@ -270,6 +270,30 @@ def reg(tmp_path):
         yield r
 
 
+def test_a_pathways_run_links_its_protomers_when_it_finishes(reg):
+    """The deprotonation edges are part of the run, not a script run afterwards."""
+    from mofsbu.registry.jobs import get_diagnostics
+
+    spec = aqua_spec(molecules=(MoleculeSpec("catechol", "Oc1ccccc1O", 1, 1),))
+    summary = run(reg, spec)
+    assert summary["status"] == "done"
+
+    formula = {r["id"]: (r["formula"], r["net_charge"]) for r in find(reg, limit=500)}
+    edges = reg.conn.execute(
+        "SELECT r.id, r.product_structure_id AS base, rr.structure_id AS acid "
+        "FROM reactions r JOIN reaction_reagents rr ON rr.reaction_id = r.id "
+        "WHERE r.kind = 'deprotonation' AND rr.role = 'reagent'").fetchall()
+    assert edges, "a run with a deprotonatable ligand and pathways links its protomers"
+    for e in edges:                        # every edge is one proton and one charge apart
+        assert formula[e["acid"]][1] - formula[e["base"]][1] == 1
+    free = [e for e in edges if "Ni" not in formula[e["acid"]][0]]
+    assert len(free) == 1                  # catechol -> catecholate, once
+
+    stage = [d for d in get_diagnostics(reg, summary["run_id"])
+             if d.get("stage") == "link_protomers" and "written" in d["reason"]]
+    assert stage and stage[0]["count"] == len(edges)
+
+
 def test_the_co_ligand_ladder_is_built_and_connected(reg):
     summary = run(reg, aqua_spec())
     assert summary["status"] == "done"

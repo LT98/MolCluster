@@ -6,7 +6,9 @@
 The registry stores tHQ and tHQ(-1H) as unrelated rows. They are not unrelated, and the
 reference scheme can price the difference — but only once the proton has somewhere to go,
 so this first ensures the H2O / H3O+ couple exists with an energy at the same level of
-theory, then writes `AH + n H2O -> A(n-) + n H3O+` for every pair it finds.
+theory, then writes `AH + H2O -> A- + H3O+` for every pair exactly one proton apart.
+A run with `pathways` does this itself when it finishes (`runner.finalise_run`); this
+script is for a registry built before that.
 
 Those edges are **isodesmic**: no metal-donor bond changes across the arrow, so unlike
 every assembly edge in this project they survive `strict=True`.
@@ -22,47 +24,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mofsbu._types import Fidelity, MethodSpec                          # noqa: E402
+from mofsbu._types import Fidelity                                       # noqa: E402
 from mofsbu.config import data_root, store_root                         # noqa: E402
-from mofsbu.energy.protons import deprotonation_pairs, link_protomers   # noqa: E402
-from mofsbu.energy.relax import relax_geometry                          # noqa: E402
-from mofsbu.geometry.embed import embed_molecule, to_xyz                # noqa: E402
-from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles           # noqa: E402
-from mofsbu.registry import (                                           # noqa: E402
-    BlobStore, Registry, find, put_geometry, put_structure,
+from mofsbu.energy.protons import (                                     # noqa: E402
+    deprotonation_pairs, ensure_couple, link_protomers,
 )
-
-FF = MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF")
-
-#: The couple. Charge is declared, not inferred: `[OH3+]` is only a proton carrier
-#: because we say it carries one.
-COUPLE = (("water", "O", 0), ("hydronium", "[OH3+]", 1))
-
-
-def ensure_species(reg, name: str, smiles: str, charge: int, *, ml_model: str | None,
-                   relax: bool) -> int:
-    """Register the species if absent, and give it an energy if it has none."""
-    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
-    graph = from_rdkit(mol, charge=charge, multiplicity=1, name=name)
-    put = put_structure(reg, graph, tags=[name, "reference"])
-    xyz_text = to_xyz(mol, name)
-    put_geometry(reg, put.id, xyz_text, fidelity=Fidelity.FF, method=FF)
-    if not relax:
-        return put.id
-    has_ml = reg.conn.execute(
-        "SELECT 1 FROM geometries WHERE structure_id=? AND fidelity>=? AND energy IS NOT NULL",
-        (put.id, int(Fidelity.ML))).fetchone()
-    if has_ml:
-        return put.id
-    lines = xyz_text.splitlines()[2:]
-    symbols = [line.split()[0] for line in lines if line.strip()]
-    coords = [[float(x) for x in line.split()[1:4]] for line in lines if line.strip()]
-    result = relax_geometry(coords, symbols, charge=charge, multiplicity=1,
-                            target=Fidelity.ML, ml_model=ml_model)
-    put_geometry(reg, put.id, result.to_xyz(name), fidelity=result.fidelity,
-                 method=result.method, energy=result.energy,
-                 converged=result.converged)
-    return put.id
+from mofsbu.registry import BlobStore, Registry                         # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,13 +52,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  x{n}  {protonated} -> {deprotonated}")
             return 0
 
-        ids = {name: ensure_species(reg, name, smiles, charge,
-                                    ml_model=a.ml_model, relax=True)
-               for name, smiles, charge in COUPLE}
-        print(f"couple: water={ids['water']} hydronium={ids['hydronium']}")
+        water, hydronium = ensure_couple(reg, target=Fidelity.ML, ml_model=a.ml_model)
+        print(f"couple: water={water} hydronium={hydronium}")
 
-        written = link_protomers(reg, water_id=ids["water"],
-                                 hydronium_id=ids["hydronium"])
+        written = link_protomers(reg, water_id=water, hydronium_id=hydronium)
         reg.conn.commit()
 
     ok = [w for w in written if w["reaction_id"] is not None]

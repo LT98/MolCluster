@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from mofsbu._types import Fidelity, MethodSpec, ReferenceSchemeError
-from mofsbu.energy.reference import COORDINATION_CHANGE, put_balanced_reaction
+from mofsbu.energy.reference import CHARGE_SEPARATION, COORDINATION_CHANGE, put_balanced_reaction
 from mofsbu.graph import EdgeType, TypedGraph
 from mofsbu.pathways.route import price_path
 from mofsbu.registry import Registry, outgoing_routes
@@ -304,7 +304,8 @@ def test_a_route_that_only_builds_up_is_still_not_isodesmic(reg, exchange):
     s = exchange
     p = price_path(reg, [s["D"], s["C"], s["P"]], [s["rD"], s["rC"]])
     assert p["isodesmic"] is False
-    assert p["caveats"] == [COORDINATION_CHANGE]
+    # Three ions become one neutral complex, so the gas-phase charge rule (C18) applies too.
+    assert sorted(p["caveats"]) == sorted([COORDINATION_CHANGE, CHARGE_SEPARATION])
     assert p["net_equation"]["dative_delta"] == 2
 
 

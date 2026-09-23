@@ -16,18 +16,65 @@ from __future__ import annotations
 
 from typing import Any
 
-from mofsbu._types import MofsbuError
+from mofsbu._types import Fidelity, MofsbuError
 from mofsbu.energy.reference import put_balanced_reaction
 from mofsbu.graph._types import EdgeType, TypedGraph
 from mofsbu.identity import l1_graph_hash
 from mofsbu.registry.api import get_graph
 
-__all__ = ["deprotonation_pairs", "labile_hydrogens", "link_protomers",
-           "PROTON_DONOR", "PROTON_ACCEPTOR"]
+__all__ = ["deprotonation_pairs", "ensure_couple", "ensure_species", "labile_hydrogens",
+           "link_protomers", "COUPLE", "PROTON_DONOR", "PROTON_ACCEPTOR"]
 
 #: The couple, by the `TypedGraph.name` `examples` gives them.
 PROTON_DONOR = "water"          # takes the proton away: H2O -> H3O+
 PROTON_ACCEPTOR = "hydronium"
+
+
+#: The couple as species: (name, SMILES, charge).  Charge is declared, not inferred —
+#: `[OH3+]` is only a proton carrier because we say it carries one.
+COUPLE = ((PROTON_DONOR, "O", 0), (PROTON_ACCEPTOR, "[OH3+]", 1))
+
+
+def ensure_species(reg: Any, name: str, smiles: str, charge: int, *,
+                   target: Fidelity, ml_model: str | None) -> int:
+    """Register a small closed-shell species if absent, with an energy at `target`.
+
+    Relaxed at the level of theory the run used, because `energy.reference` refuses to
+    subtract energies computed at different ones.  A species that already has an energy
+    at `target` is left alone — the run's own `co_ligand` task has usually relaxed water.
+    """
+    from mofsbu._types import MethodSpec
+    from mofsbu.energy.relax import relax_geometry
+    from mofsbu.geometry.embed import embed_molecule, to_xyz
+    from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
+    from mofsbu.registry import put_geometry, put_structure
+
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    graph = from_rdkit(mol, charge=charge, multiplicity=1, name=name)
+    sid = put_structure(reg, graph, tags=[name, "reference"]).id
+    xyz_text = to_xyz(mol, name)
+    put_geometry(reg, sid, xyz_text, fidelity=Fidelity.FF,
+                 method=MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF"))
+    if target <= Fidelity.FF:
+        return sid
+    if reg.conn.execute(
+            "SELECT 1 FROM geometries WHERE structure_id=? AND fidelity=? "
+            "AND energy IS NOT NULL", (sid, int(target))).fetchone():
+        return sid
+    lines = [ln for ln in xyz_text.splitlines()[2:] if ln.strip()]
+    result = relax_geometry([[float(x) for x in ln.split()[1:4]] for ln in lines],
+                            [ln.split()[0] for ln in lines], charge=charge, multiplicity=1,
+                            target=target, ml_model=ml_model)
+    put_geometry(reg, sid, result.to_xyz(name), fidelity=result.fidelity,
+                 method=result.method, energy=result.energy, converged=result.converged)
+    return sid
+
+
+def ensure_couple(reg: Any, *, target: Fidelity, ml_model: str | None) -> tuple[int, int]:
+    """`(water_id, hydronium_id)`, each with an energy at `target`."""
+    ids = [ensure_species(reg, name, smiles, charge, target=target, ml_model=ml_model)
+           for name, smiles, charge in COUPLE]
+    return ids[0], ids[1]
 
 
 def labile_hydrogens(g: TypedGraph) -> list[int]:

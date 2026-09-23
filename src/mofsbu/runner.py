@@ -1492,6 +1492,7 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
     if pool.total <= 1:
         work(reg, spec, run_id)
+        finalise_run(reg, spec, run_id)
         return pool
 
     import multiprocessing as mp
@@ -1533,7 +1534,43 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
             f"{len(dead)} of {pool.total} workers died before the queue was drained: "
             + ", ".join(dead) + ". Their tasks are still pending; the run can be "
             "resumed once the cause is fixed")
+    finalise_run(reg, spec, run_id)
     return pool
+
+
+def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, Any]]:
+    """Stages that need every build and relaxation in place, run once the queue drains.
+
+    Not queued tasks: the queue orders by priority and has no dependencies, so a task
+    claimed while another worker is still relaxing would link a registry that is not
+    finished yet.  Only for `pathways` runs — linking is provenance, and a run that did not
+    ask for provenance gets none.  Each stage's outcome is appended to the run's
+    diagnostics, so what it did is on the run page rather than in a terminal.
+    """
+    if not spec.pathways or not spec.metals:
+        return []
+    from mofsbu.energy.protons import ensure_couple, link_protomers
+    from mofsbu.energy.relax import MODE_FIDELITY
+    from mofsbu.registry.jobs import get_diagnostics
+
+    target = MODE_FIDELITY.get(spec.run_mode, Fidelity.RAW)
+    ml_model = resolve_ml_model(spec) if target is Fidelity.ML else None
+    water, hydronium = ensure_couple(reg, target=target, ml_model=ml_model)
+    written = link_protomers(reg, water_id=water, hydronium_id=hydronium)
+    refused: dict[str, int] = {}
+    for w in written:
+        if w["why_not"]:
+            refused[w["why_not"]] = refused.get(w["why_not"], 0) + 1
+    stages = [{"stage": "link_protomers",
+               "reason": "deprotonation edges written (one proton, H2O/H3O+ couple)",
+               "hint": "each links a structure to the same structure minus one proton",
+               "count": sum(1 for w in written if w["reaction_id"] is not None)}]
+    stages += [{"stage": "link_protomers", "reason": f"deprotonation edge refused: {why}",
+                "hint": "the pair was found but its equation did not balance", "count": n}
+               for why, n in sorted(refused.items())]
+    set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + stages)
+    reg.conn.commit()
+    return stages
 
 
 def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[str, Any]:
