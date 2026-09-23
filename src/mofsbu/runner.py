@@ -33,7 +33,7 @@ from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicit
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import (
-    GEOMETRIES, LigandPlacement, cis_vertices, place_mononuclear, to_rdkit)
+    GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
@@ -894,7 +894,9 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
     # and those builds are byte-identical to a `placement 2` one.
     cn_asked = payload.get("cn")
     n_vacant = 0 if cn_asked is None else int(cn_asked) - sum(l.denticity for l in ligands)
-    reserve = (cis_vertices(payload["geometry"], int(cn_asked), n_vacant)
+    # Chosen with the ligands in view (B21): a set picked first could strand a chelate on
+    # the one trans pair left.
+    reserve = (reserve_for(payload["geometry"], int(cn_asked), n_vacant, ligands)
                if n_vacant >= 2 else None)
     try:
         # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it

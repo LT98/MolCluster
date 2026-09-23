@@ -303,3 +303,20 @@ def test_a_chelate_still_gets_cis_vertices_when_the_rest_are_vacant():
     d1, d2 = (result.coords[i] - result.coords[0] for i in result.donor_idxs)
     cos = float(d1 @ d2 / (np.linalg.norm(d1) * np.linalg.norm(d2)))
     assert np.degrees(np.arccos(np.clip(cos, -1, 1))) < 120.0, "chelate went trans"
+
+
+@pytest.mark.parametrize("n_chelates, n_empty", [(1, 4), (2, 2)])
+def test_reserving_empty_vertices_leaves_every_chelate_a_cis_pair(n_chelates, n_empty):
+    """B21: the empty set used to be chosen before the chelates, and on an octahedron four
+    empty vertices out of six always include a trans pair — the lowest-index choice left
+    the chelate the other one and the placer refused it.  Chosen with the chelates in
+    view, the same request builds, with the empty vertices reserved."""
+    from mofsbu.geometry.placer import cis_vertices, reserve_for
+
+    chelates = [thq_chelate() for _ in range(n_chelates)]
+    with pytest.raises(ValueError, match="bite angle"):
+        place_mononuclear("Zn", chelates, geometry="octahedral", cn=6,
+                          reserve=cis_vertices("octahedral", 6, n_empty))
+    reserve = reserve_for("octahedral", 6, n_empty, chelates)
+    result = place_mononuclear("Zn", chelates, geometry="octahedral", cn=6, reserve=reserve)
+    assert len(result.vacancies) == n_empty

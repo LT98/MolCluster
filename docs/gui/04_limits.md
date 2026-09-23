@@ -62,8 +62,10 @@ lower the window, or use `fill`.
 ## Placer refusals leave holes in a co-ligand ladder
 
 A rung the placer refuses is a rejected `place`, and every step onto it is rejected with
-`pathway_parent_missing`. [B21](../BUGS.md#b21): an octahedral centre with chelates and two or
-more empty vertices is refused, and `range` asks for exactly those rungs.
+`pathway_parent_missing`. That is now an answer about the chemistry rather than the placer's
+vertex bookkeeping: an octahedral centre with chelates and empty vertices builds (B21, fixed),
+and what is still refused there — a neutral catechol chelating through its O–H, say — is
+refused for a clash QC can name.
 
 ## Columns that exist but are empty
 

@@ -12,6 +12,29 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B21 — an octahedral centre with chelates and empty vertices was refused ✅
+
+**`correctness` · `geometry/placer.py`, `runner._build_sphere` · reported with D26, fixed in the
+salt-study branch.**
+
+Zn(II) + catechol dianion, CN 6 octahedral: `place` refused Zn(cat) with four empty vertices and
+Zn(cat)₂ with two, `placer_refused` — *"best bite angle 180 deg, need 55-115"*. The suspicion in
+the report (order) was right, and it was worse than stated: **four vertices out of six always
+contain a trans pair**, so `cis_vertices(…, 4)` ties every set at 180 deg, the lowest indices
+win, and the two vertices left for the chelate are the other trans pair — the only pair it
+cannot span. With two chelates and two empty, the greedy fill could strand the second chelate
+the same way.
+
+**Fix:** `placer.reserve_for` chooses the empty set with the ligands in view — candidates in
+`cis_vertices`'s own order, the first that `_assign_targets` accepts — and `_build_sphere`
+uses it. A set that already worked is unchanged; none accepted falls back to `cis_vertices`,
+so a truly impossible request still gets the placer's reason. Both cases now build; what the
+placer still refuses there is a *neutral* catechol chelating through its O–H (an H 1.03 Å from
+Zn), which QC rejects on its own terms. Test: `tests/test_placer.py` (the old reserve refuses,
+the new one builds, for 1 chelate/4 empty and 2 chelates/2 empty).
+
+---
+
 ## B25 — a step was claimed while the rung it joins onto was still being built ✅
 
 **`correctness` · `registry/jobs.claim_task` · found in the salt-study smoke run.**

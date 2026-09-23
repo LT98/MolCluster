@@ -30,7 +30,6 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
-| [B21](#b21) | correctness | `geometry/placer.py` | CN 6 with a chelate and ≥2 reserved-empty vertices is refused (`best bite angle 180`), though cis-M(L–L)2(□)2 exists |
 
 ---
 
@@ -386,26 +385,6 @@ geometry-scoped row would.
 
 **Fix direction:** have `onchange` re-render the panel rather than only the viewer, or move the
 geometry-scoped rows into `showGeometry` so there is one writer for them.
-
----
-
-## B21
-
-**An octahedral centre carrying chelates and two or more empty vertices is refused.**
-`correctness` · `geometry/placer.py` (`place_mononuclear` with `reserve=`)
-
-Zn(II) + catechol (5-ring, dianionic chelate), CN 6 octahedral, construct: `place` refuses
-Zn(cat)2 with two empty vertices and Zn(cat) with four, both `placer_refused` — *"no vertex
-set on this geometry can host a 2-dentate ligand: best bite angle 180 deg, need 55-115"*.
-Reproduced on main with `co_ligand: null, allow_unsaturated: true`, so it predates D26. The
-geometry exists: reserve one cis pair and the four vertices left still hold two cis pairs.
-The suspicion is the order — `cis_vertices` reserves the lowest-index cis pair and
-`_assign_targets` then fills greedily — but that is unconfirmed.
-
-Why it matters now: under `co_ligand_counts: range` (D26) these rungs are asked for by
-default, so the refusal shows up as rejected `place` tasks and, above them, `grow` steps
-rejected with `pathway_parent_missing`. The ladder is incomplete there, loudly.
-`test_the_co_ligand_saturated_series_connects` pins `fill` for that reason.
 
 ---
 
