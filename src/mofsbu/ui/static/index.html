@@ -460,7 +460,11 @@ function shortLabel(full){
    is labelled `[tHQ] q0`; a coordination sphere leads with its metal, `Ni[H2O]2[...]`.
    Where that does not decide it, the bigger label is the sphere. */
 function splitReagents(step){
-  const rs = ((step && step.terms) || []).filter(t => t.side === "reagent");
+  // `solvent` and `leaving` are the proton's carrier, not species being built in — a
+  // deprotonation would otherwise read as "added water", which is true of the arithmetic
+  // and wrong about the chemistry.
+  const rs = ((step && step.terms) || [])
+    .filter(t => t.side === "reagent" && (t.role || "reagent") === "reagent");
   if(rs.length < 2) return {source: rs[0] || null, added: null, rest: rs.slice(1)};
   const free = rs.filter(t => /^\s*\[/.test(t.display_label || ""));
   if(free.length === 1){
@@ -508,6 +512,16 @@ function routeHead(r){
   return `#${esc(r.id)} · ${esc(r.kind)} · depth ${esc(r.depth ?? "— (M8)")}`
        + (r.note ? " · " + esc(r.note) : "");
 }
+/* A deprotonation adds nothing — it shifts a proton onto the carrier and the carrier
+   leaves.  The `leaving` stoichiometry is how many went. */
+function protonsShed(step){
+  const n = ((step && step.terms) || [])
+    .filter(t => t.role === "leaving")
+    .reduce((s, t) => s + Number(t.stoich || 1), 0);
+  if(!n) return null;
+  return `<span class="caveat">&minus;${esc(n)}&nbsp;H<sup>+</sup></span>`;
+}
+
 /* A species cell: short enough to read across, with the stored label one hover away and
    the id still the thing you click. */
 function speciesCell(term){
@@ -528,9 +542,11 @@ function renderRouteGroup(g, gi){
   // (C15).  Two bare dashes would read as missing data rather than as what happened.
   const built = !source && !added
     ? `<span class="muted">— (built whole, no reagents recorded)</span>` : null;
+  // What a deprotonation adds is nothing; what it LOSES is the point.
+  const shed = protonsShed((r.steps && r.steps[0]) || {});
   let html = `<tr class="rgroup" data-gi="${esc(gi)}"${tip}>`
     + `<td class="num">${routeEnergy(r)}</td>`
-    + `<td>${built ? "" : speciesCell(added)}</td>`
+    + `<td>${built ? "" : (shed || speciesCell(added))}</td>`
     + `<td><span class="caret">${many ? (open ? "▾" : "▸") : ""}</span>`
     + `${built || speciesCell(source)}${placements}</td>`
     + `<td>${routeRung(r)}</td>`

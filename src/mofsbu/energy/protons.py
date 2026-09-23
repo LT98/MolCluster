@@ -93,7 +93,13 @@ def link_protomers(reg: Any, *, water_id: int, hydronium_id: int,
         try:
             entry["reaction_id"] = put_balanced_reaction(
                 reg, deprotonated,
-                reagents=[(protonated, 1), (water_id, n)],
+                reagents=[(protonated, 1)],
+                # The couple is the proton's CARRIER, not a piece being built in: water
+                # takes the H+ away and leaves as H3O+.  Recording it as a reagent makes
+                # a reader see "added water", which is true of the arithmetic and wrong
+                # about the chemistry.  `solvent` is reagent-side, so balance is
+                # unchanged (REAGENT_SIDE_ROLES).
+                solvents=[(water_id, n)],
                 leaving=[(hydronium_id, n)],
                 kind="deprotonation",
                 note=f"deprotonation x{n} (H2O/H3O+ couple)")
@@ -109,6 +115,7 @@ def _already_linked(reg: Any) -> set[tuple[int, int]]:
     out: set[tuple[int, int]] = set()
     for row in reg.conn.execute(
             "SELECT id, product_structure_id FROM reactions WHERE kind = 'deprotonation'"):
+        # Only the acid is a `reagent`; the couple is solvent + leaving.
         for r in reg.conn.execute(
                 "SELECT structure_id FROM reaction_reagents "
                 "WHERE reaction_id = ? AND role = 'reagent'", (row["id"],)):
