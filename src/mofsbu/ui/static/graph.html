@@ -125,6 +125,27 @@ tbody tr.derived td{border-bottom-style:dashed}
 .diag-note{font-size:11.5px;color:var(--muted);padding:2px 0}
 .diag-note .caveat{color:var(--warn)}
 
+/* ── the route legend ──────────────────────────────────────────────────── */
+.tg{font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;
+    margin-left:10px;cursor:pointer;white-space:nowrap}
+.tg input{margin:0}
+.rt{display:flex;align-items:baseline;gap:7px;padding:4px 5px;border-radius:4px;
+    cursor:pointer;font-size:11.5px;border:1px solid transparent}
+.rt:hover{background:var(--accent-soft)}
+.rt.active{border-color:var(--line);background:var(--bg)}
+.swatch{flex:0 0 auto;width:11px;height:11px;border-radius:3px;
+        align-self:center;border:1px solid rgba(0,0,0,.18)}
+.rt-name{font-weight:600;max-width:12em;overflow:hidden;text-overflow:ellipsis;
+         white-space:nowrap}
+.rt-bits{flex:1;color:var(--muted);min-width:0}
+.rt-x{flex:0 0 auto;padding:0 5px;line-height:1.4;color:var(--muted);
+      background:none;border:1px solid transparent}
+.rt-x:hover:not(:disabled){border-color:var(--warn);color:var(--warn)}
+.rt-x:disabled{opacity:.3;cursor:default}
+.basis-ok{color:var(--muted);font-size:10.5px;white-space:nowrap}
+.basis-off{color:var(--warn);font-size:10.5px;white-space:nowrap;
+           border:1px dashed var(--warn);border-radius:8px;padding:0 5px}
+
 /* The number, then what qualifies it, on two lines — see `stepEnergy`. */
 .dE{display:block}
 .dE-note{display:block;font-size:10.5px;line-height:1.25;white-space:normal;
@@ -237,14 +258,9 @@ function stepEnergy(r){
 /* Every region of the finished page, and the increment that fills it.  Retiring a
    stub is deleting a row here and rendering into the same host.  The order is the
    order they are built in, so this table doubles as the remaining work. */
-const STUBS = [
-  {host: "toggles", inc: "U3", inline: true, what: "what the chart draws",
-   why: "energy labels, colour, the y-anchor, and — at U5 — derived routes."},
-  {host: "routes", inc: "U3", what: "one line per route on the chart",
-   why: "its colour, where it bottoms out, its total dE and its worst single step. "
-      + "Routes that branch off each other get neighbouring hues. U4 adds the badge "
-      + "for a route whose accounting does not match the others'."},
-];
+/* Empty: every region named in the plan is built.  The mechanism stays, because the
+   next unwritten region should say so in place rather than be a blank rectangle. */
+const STUBS = [];
 
 function mountStubs(){
   for(const s of STUBS){
@@ -263,9 +279,18 @@ function mountStubs(){
    that was walked to reach it.  It lives in the URL, so a reload keeps it and a
    link carries it — the viewer has no write path, so there is nowhere else it
    could live.  `data` is the last fetched hop, `cache` the ones before it. */
-const state = {trail: [], data: null, path: null, cache: new Map(),
-               showLabels: true, showDerived: false};
-const here = () => state.trail.length ? state.trail[state.trail.length - 1] : null;
+/* `routes` are the walks on the chart.  They all begin at the same target and diverge
+   leftwards, so they form a tree rooted at it — which is what lets a branch be coloured
+   next to the branch it came off.  `active`/`at` is where the picker is standing: the
+   route being extended and how far along it, because a fork is what happens when you
+   step back into the middle of a route and choose differently. */
+const state = {target: null, routes: [], active: 0, at: 0,
+               data: null, cache: new Map(),
+               prefs: {labels: true, colour: true, anchor: "target", derived: false}};
+
+const route = () => state.routes[state.active] || null;
+const here = () => { const r = route(); return r ? r.trail[state.at] : null; };
+const trailOf = (i) => state.routes[i].trail;
 
 /* ── composition, for deciding which reagent is the scaffold ───────────────
    A step names two reagents and the walk follows one of them.  The registry
@@ -416,11 +441,56 @@ function niceTicks(lo, hi, want){
   return out;
 }
 
+/* ── colour, by where a route branched ────────────────────────────────────
+   The routes are a tree rooted at the target.  Give the whole tree an arc of the
+   hue circle, split each divergence's arc among its children, and take a route's
+   colour from the middle of the arc it ends up with.  Two routes that branch off
+   each other therefore land next to each other in hue, and the deeper the
+   divergence the closer they are — which is the rule, rather than a palette
+   somebody has to keep in step with the branching. */
+const HUE0 = 205;                      // the page's accent, so one route looks native
+
+function routeColours(){
+  const out = new Array(state.routes.length).fill(HUE0);
+  const legKey = (t, d) => t[d] ? `${t[d].via}>${t[d].sid}` : "\u0000end";
+  const assign = (idxs, depth, lo, hi) => {
+    if(idxs.length === 1){ out[idxs[0]] = (lo + hi) / 2; return; }
+    const groups = new Map();
+    for(const i of idxs){
+      const k = legKey(trailOf(i), depth + 1);
+      (groups.get(k) || groups.set(k, []).get(k)).push(i);
+    }
+    if(groups.size === 1){            // still one route so far: look further back
+      assign(idxs, depth + 1, lo, hi);
+      return;
+    }
+    const each = (hi - lo) / groups.size;
+    [...groups.values()].forEach((g, k) =>
+      assign(g, depth + 1, lo + each * k, lo + each * (k + 1)));
+  };
+  if(state.routes.length) assign(state.routes.map((_, i) => i), 0, HUE0, HUE0 + 330);
+  return out;
+}
+
+const DARK = () => matchMedia("(prefers-color-scheme: dark)").matches;
+
+function hueCss(h, {dim = false} = {}){
+  if(!state.prefs.colour)
+    return dim ? "var(--muted)" : (DARK() ? "#cfd4da" : "#43484f");
+  const l = DARK() ? (dim ? 52 : 64) : (dim ? 52 : 40);
+  return `hsl(${((h % 360) + 360) % 360} 58% ${l}%)`;
+}
+
+/* With colour off the routes still have to be told apart, so they take dash patterns
+   instead — which is also what makes the chart survive being printed. */
+const DASHES = ["", "5 3", "2 3", "8 3 2 3", "1 3"];
+const dashFor = (i) => state.prefs.colour ? "" : DASHES[i % DASHES.length];
+
 function drawDiagram(){
   const host = $("diagram");
-  const p = state.path;
-  if(!p){
-    host.innerHTML = state.trail.length
+  const drawable = state.routes.filter(r => r.path);
+  if(!drawable.length){
+    host.innerHTML = state.routes.length
       ? `<div class="empty">pick a precursor step on the left — the route is drawn `
         + `here as it grows, with this structure at zero</div>`
       : `<div class="empty">load a target to begin</div>`;
@@ -429,17 +499,27 @@ function drawDiagram(){
   const w = host.clientWidth, h = host.clientHeight;
   if(w < 60 || h < 60){ host.innerHTML = ""; return; }
 
-  // Target-first becomes left-to-right: precursors first, product last.
-  const nodes = [...p.nodes].reverse();
-  const steps = [...p.steps].reverse();
-  const known = nodes.filter(n => n.y !== null).map(n => n.y);
-  const lo = Math.min(0, ...known), hi = Math.max(0, ...known);
+  const hues = routeColours();
+  const depth = Math.max(...drawable.map(r => r.path.nodes.length));
+  // `anchor: root` re-zeroes each route on its own left end.  Offered, and badged:
+  // routes bottom out at different species, so their zeros are different systems.
+  const shift = (r) => {
+    if(state.prefs.anchor !== "root") return 0;
+    const last = [...r.path.nodes].reverse().find(n => n.y !== null);
+    return last ? -last.y : 0;
+  };
+  const ys = [];
+  for(const r of drawable)
+    for(const n of r.path.nodes) if(n.y !== null) ys.push(n.y + shift(r));
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
   const span = (hi - lo) || 1;
   const yLo = lo - span * 0.12, yHi = hi + span * 0.12;
   const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
-  const slot = plotW / nodes.length;
-  const barW = Math.min(slot * 0.62, 150);
-  const cx = (i) => PAD.left + slot * (i + 0.5);
+  const slot = plotW / depth;
+  const barW = Math.min(slot * 0.6, 140);
+  // Index 0 is the target and it is drawn on the RIGHT; a longer route simply reaches
+  // further left, so routes of different lengths still share every node they share.
+  const cx = (i) => PAD.left + plotW - slot * (i + 0.5);
   const cy = (v) => PAD.top + plotH * (1 - (v - yLo) / (yHi - yLo));
 
   const bits = [];
@@ -452,63 +532,91 @@ function drawDiagram(){
   }
   bits.push(`<text class="ax-text" x="6" y="${PAD.top - 5}">eV</text>`);
 
-  // Connectors first, so a level is never drawn under one.
-  steps.forEach((s, i) => {
-    const a = nodes[i], b = nodes[i + 1];
-    if(a.y === null || b.y === null) return;
-    const x1 = cx(i) + barW / 2, x2 = cx(i + 1) - barW / 2;
-    bits.push(`<line class="link${s.origin === "inferred" ? " inferred" : ""}"`
-            + ` x1="${x1.toFixed(1)}" y1="${cy(a.y).toFixed(1)}"`
-            + ` x2="${x2.toFixed(1)}" y2="${cy(b.y).toFixed(1)}"/>`);
-    if(state.showLabels){
-      const mx = (x1 + x2) / 2, my = (cy(a.y) + cy(b.y)) / 2;
-      bits.push(`<text class="step-dE" x="${mx.toFixed(1)}" y="${(my - 5).toFixed(1)}"`
-              + ` text-anchor="middle">${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
-    }
+  const seen = new Set();               // a node two routes share is drawn once
+  state.routes.forEach((r, ri) => {
+    if(!r.path) return;
+    const dy = shift(r), col = hueCss(hues[ri]), dash = dashFor(ri);
+    const active = ri === state.active;
+    const at = (i) => { const n = r.path.nodes[i];
+                        return n.y === null ? null : cy(n.y + dy); };
+
+    r.path.steps.forEach((s, i) => {
+      const y1 = at(i), y2 = at(i + 1);
+      if(y1 === null || y2 === null) return;
+      const x1 = cx(i) - barW / 2, x2 = cx(i + 1) + barW / 2;
+      bits.push(`<line class="link${s.origin === "inferred" ? " inferred" : ""}"`
+              + ` stroke="${col}" stroke-width="${active ? 1.8 : 1.1}"`
+              + `${s.origin === "inferred" ? "" : ` stroke-dasharray="${dash || "4 3"}"`}`
+              + ` x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"`
+              + ` x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`);
+      if(state.prefs.labels){
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        bits.push(`<text class="step-dE" fill="${col}" x="${mx.toFixed(1)}"`
+                + ` y="${(my - 5).toFixed(1)}" text-anchor="middle">`
+                + `${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
+      }
+    });
+
+    r.path.nodes.forEach((n, i) => {
+      const key = `${i}:${n.structure_id}:${n.y === null ? "-" : (n.y + dy).toFixed(6)}`;
+      if(seen.has(key)) return;
+      seen.add(key);
+      const x = cx(i);
+      const isHere = active && i === state.at;
+      const name = shortLabel(n.display_label) || ("#" + n.structure_id);
+      if(n.y === null){
+        // No number, so no position.  A dashed column says the node is on the route and
+        // says nothing about where it sits — inventing a height would be the lie.
+        bits.push(`<line class="gap" x1="${x.toFixed(1)}" y1="${PAD.top}"`
+                + ` x2="${x.toFixed(1)}" y2="${(PAD.top + plotH).toFixed(1)}"/>`
+                + `<text class="gap-text" x="${x.toFixed(1)}"`
+                + ` y="${(PAD.top + plotH / 2).toFixed(1)}" text-anchor="middle">`
+                + `no number</text>`);
+      } else {
+        const y = cy(n.y + dy).toFixed(1);
+        bits.push(`<line class="level" stroke="${col}"`
+                + ` stroke-width="${isHere ? 4 : 2.5}"`
+                + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+                + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}"/>`
+                + `<line class="level-hit" data-sid="${esc(n.structure_id)}"`
+                + ` data-route="${esc(ri)}" data-at="${esc(i)}"`
+                + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+                + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}">`
+                + `<title>${esc(n.display_label || "")}\n`
+                + `y = ${(n.y + dy).toFixed(4)} eV\n`
+                + `shed so far: ${esc(n.basis === "—" ? "nothing" : n.basis)}`
+                + `</title></line>`);
+      }
+      if(i === 0 || i === r.path.nodes.length - 1 || isHere || depth <= 6){
+        const label = name.length > 20 ? name.slice(0, 19) + "…" : name;
+        bits.push(`<text class="node-label${isHere ? " here" : ""}"`
+                + ` x="${x.toFixed(1)}" y="${(PAD.top + plotH + 14).toFixed(1)}"`
+                + ` text-anchor="middle"><title>${esc(n.display_label || "")}</title>`
+                + `${esc(label)}</text>`);
+      }
+    });
   });
 
-  nodes.forEach((n, i) => {
-    const x = cx(i), isHere = n.structure_id === (here() || {}).sid;
-    const name = shortLabel(n.display_label) || ("#" + n.structure_id);
-    if(n.y === null){
-      // No number, so no position.  A dashed column says the node is on the route and
-      // says nothing about where it sits — inventing a height would be the lie.
-      bits.push(`<line class="gap" x1="${x.toFixed(1)}" y1="${PAD.top}"`
-              + ` x2="${x.toFixed(1)}" y2="${PAD.top + plotH}"/>`
-              + `<text class="gap-text" x="${x.toFixed(1)}" y="${PAD.top + plotH / 2}"`
-              + ` text-anchor="middle">no number</text>`);
-    } else {
-      const y = cy(n.y).toFixed(1);
-      bits.push(`<line class="level" x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
-              + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}"/>`
-              + `<line class="level-hit" data-sid="${esc(n.structure_id)}"`
-              + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
-              + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}">`
-              + `<title>${esc(n.display_label || "")}\n`
-              + `y = ${n.y.toFixed(4)} eV relative to the target</title></line>`);
-    }
-    const label = name.length > 22 ? name.slice(0, 21) + "…" : name;
-    bits.push(`<text class="node-label${isHere ? " here" : ""}" x="${x.toFixed(1)}"`
-            + ` y="${(PAD.top + plotH + 14).toFixed(1)}" text-anchor="middle">`
-            + `<title>${esc(n.display_label || "")}</title>${esc(label)}</text>`);
-  });
-
-  host.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"`
-    + ` role="img" aria-label="formation energy along the route">${bits.join("")}</svg>`;
+  host.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img"`
+    + ` aria-label="formation energy along ${state.routes.length} route(s)">`
+    + bits.join("") + `</svg>`;
 }
 
 /* ── the trail ─────────────────────────────────────────────────────────── */
 function renderTrail(){
-  const t = $("trail");
-  if(state.trail.length < 1){ t.innerHTML = ""; return; }
-  t.innerHTML = state.trail.map((n, i) => {
-    const last = i === state.trail.length - 1;
+  const t = $("trail"), r = route();
+  if(!r){ t.innerHTML = ""; return; }
+  t.innerHTML = r.trail.map((n, i) => {
     const name = shortLabel(n.label) || ("#" + n.sid);
+    const via = n.via == null ? "" : String(n.via).startsWith("d")
+      ? "\nvia a derived split" : `\nvia reaction #${n.via}`;
     return (i ? `<span class="sep">←</span>` : "")
-         + `<span class="crumb${last ? " here" : ""}" data-i="${esc(i)}"`
-         + ` title="${esc(n.label || "")}${n.via ? `\nvia reaction #${n.via}` : ""}">`
-         + `${esc(name)}</span>`;
-  }).join("");
+         + `<span class="crumb${i === state.at ? " here" : ""}" data-i="${esc(i)}"`
+         + ` title="${esc(n.label || "")}${esc(via)}">${esc(name)}</span>`;
+  }).join("")
+  + (state.at < r.trail.length - 1
+     ? ` <span class="muted" style="font-size:11px">· choosing a different step here `
+       + `forks a new route</span>` : "");
 }
 
 /* ── loading ──────────────────────────────────────────────────────────── */
@@ -536,74 +644,113 @@ async function fetchHop(sid, inferred){
 async function showHere(){
   const n = here();
   if(!n){
-    state.data = state.path = null;
-    renderFocus(null); renderTrail(); drawDiagram();
+    state.data = null;
+    renderFocus(null); renderTrail(); drawDiagram(); renderLegend();
     return;
   }
   let d;
   try {
-    d = await fetchHop(n.sid, state.showDerived);
-    if(!state.showDerived && !walkable(d.routes)) d = await fetchHop(n.sid, true);
+    d = await fetchHop(n.sid, state.prefs.derived);
+    if(!state.prefs.derived && !walkable(d.routes)) d = await fetchHop(n.sid, true);
   } catch(e){ say(e.message); return; }
   state.data = d;
   n.label = d.structure.display_label || d.structure.formula || ("structure " + n.sid);
   renderTrail();
   renderFocus(d.structure);
   $("steps").innerHTML = renderSteps(d.routes, d.derived || [], d.species);
-  await pricePath();
+  await priceAll();
 }
 
 /* Composing the steps is the backend's job — it is arithmetic over stored energies and
    it is the part that has tests.  The page asks for the answer and draws it. */
-async function pricePath(){
-  if(state.trail.length < 2){
-    state.path = null; drawDiagram(); renderPathNote(); return;
-  }
-  const nodes = state.trail.map(n => n.sid).join(",");
-  const via = state.trail.slice(1).map(n => n.via).join(",");
+async function priceOne(r){
+  if(r.trail.length < 2){ r.path = null; return; }
+  const nodes = r.trail.map(n => n.sid).join(",");
+  const via = r.trail.slice(1).map(n => n.via).join(",");
   try {
-    const r = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}`);
-    if(!r.ok){
-      const body = await r.json().catch(() => ({}));
-      say(body.detail || "this route could not be priced");
-      state.path = null;
+    const res = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}`);
+    if(!res.ok){
+      const body = await res.json().catch(() => ({}));
+      r.path = null;
+      r.why_not = body.detail || "this route could not be priced";
+      say(r.why_not);
     } else {
-      state.path = await r.json();
+      r.path = await res.json();
+      r.why_not = null;
     }
   } catch(e){
-    say(`could not price this route — ${e.message}`);
-    state.path = null;
+    r.path = null;
+    r.why_not = `could not price this route — ${e.message}`;
+    say(r.why_not);
   }
-  drawDiagram();
-  renderPathNote();
 }
 
-/* What the whole route came to, beside the chart rather than on it.  A dE here is never
-   isodesmic, so the total carries the same caveat every single step does. */
-function renderPathNote(){
-  const p = state.path, host = $("path-note");
-  if(!p){ host.innerHTML = ""; return; }
-  const bits = [];
-  if(p.can_price){
-    bits.push(`<b>${esc(p.total_dE.toFixed(4))} eV</b> over ${esc(p.steps.length)} `
-            + `step${p.steps.length === 1 ? "" : "s"}`);
-    bits.push(`rung ${esc(p.fidelity_name || "—")}`);
-    if(p.worst_step)
-      bits.push(`worst step ${p.worst_step.dE > 0 ? "+" : ""}`
-              + `${esc(p.worst_step.dE.toFixed(4))}`);
-  } else {
-    bits.push(`<span class="caveat">no total — ${esc(p.n_unpriced)} of `
-            + `${esc(p.steps.length)} steps have no number</span>`);
+async function priceAll(){
+  await Promise.all(state.routes.map(priceOne));
+  drawDiagram();
+  renderLegend();
+}
+
+/* ── the legend ───────────────────────────────────────────────────────────
+   One line per route: its colour, where it bottoms out, what it came to, and — the
+   part that is not decoration — whether its numbers are measured against the same
+   thing as the others'.  Two totals set side by side are an invitation to subtract
+   them, and across different bases that subtraction is not a number about chemistry. */
+function renderLegend(){
+  const host = $("routes"), note = $("path-note");
+  if(!state.routes.length){
+    note.innerHTML = "";
+    host.innerHTML = `<div class="empty">each route you build appears here — step back `
+      + `into the middle of one and choose differently to add a second</div>`;
+    return;
   }
-  if(p.isodesmic !== true) bits.push(`<span class="caveat">not isodesmic</span>`);
-  if(p.caveats.length)
-    bits.push(`<span class="caveat">`
-            + `${esc(p.caveats.map(c => String(c).replace(/_/g, " ")).join(", "))}</span>`);
-  if(p.steps.some(s => s.origin === "inferred"))
-    bits.push(`<span class="badge-inferred">contains a derived step</span>`);
-  host.innerHTML = `<div class="diag-note">${bits.join(" · ")}</div>`
-    + `<div class="diag-note">shed so far: ${esc(p.basis === "—" ? "nothing" : p.basis)}`
-    + `</div>`;
+  const hues = routeColours();
+  const bases = new Set(state.routes.filter(r => r.path).map(r => r.path.basis));
+  const common = bases.size ? [...bases].sort((a, b) =>
+    (a === "—" ? -1 : b === "—" ? 1 : 0))[0] : null;
+
+  note.innerHTML = bases.size > 1
+    ? `<div class="diag-note"><span class="caveat">these routes do not shed the same `
+      + `things, so the vertical gap between them is not a comparison</span> — `
+      + `hover a badge for what differs</div>`
+    : `<div class="diag-note muted">${esc(state.routes.length)} route`
+      + `${state.routes.length === 1 ? "" : "s"}, all on one basis — vertical gaps `
+      + `between them are comparable</div>`;
+
+  host.innerHTML = state.routes.map((r, i) => {
+    const p = r.path, active = i === state.active;
+    const end = r.trail[r.trail.length - 1];
+    const bits = [];
+    if(!p){
+      bits.push(`<span class="muted">${esc(r.why_not || "one node — no steps yet")}</span>`);
+    } else if(p.can_price){
+      bits.push(`<b>${esc(p.total_dE.toFixed(3))} eV</b>`);
+      bits.push(`${esc(p.steps.length)} step${p.steps.length === 1 ? "" : "s"}`);
+      bits.push(`rung ${esc(p.fidelity_name || "—")}`);
+      if(p.worst_step)
+        bits.push(`worst ${p.worst_step.dE > 0 ? "+" : ""}`
+                + `${esc(p.worst_step.dE.toFixed(3))}`);
+    } else {
+      bits.push(`<span class="caveat">no total — ${esc(p.n_unpriced)} of `
+              + `${esc(p.steps.length)} steps have no number</span>`);
+    }
+    const badge = !p ? ""
+      : p.basis === common
+        ? `<span class="basis-ok" title="same accounting as the other routes: nothing `
+          + `else has left along the way">✓ basis</span>`
+        : `<span class="basis-off" title="this route sheds ${esc(p.basis)} and the `
+          + `others do not, so its y values are energies of a different system — the `
+          + `gap between the curves is not a comparison">⚠ basis ${esc(p.basis)}</span>`;
+    return `<div class="rt${active ? " active" : ""}" data-route="${esc(i)}">`
+         + `<span class="swatch" style="background:${hueCss(hues[i])}"></span>`
+         + `<span class="rt-name" title="${esc(end.label || "")}">`
+         + `${esc(shortLabel(end.label) || "#" + end.sid)}</span>`
+         + `<span class="rt-bits">${bits.join(" · ")} ${badge}`
+         + `${p && p.steps.some(s => s.origin === "inferred")
+             ? ` <span class="badge-inferred">derived</span>` : ""}</span>`
+         + `<button class="rt-x" data-drop="${esc(i)}" title="take this route off the `
+         + `chart"${state.routes.length < 2 ? " disabled" : ""}>×</button></div>`;
+  }).join("");
 }
 
 function renderFocus(s){
@@ -628,31 +775,72 @@ function renderFocus(s){
   why.textContent = "nothing recorded reaches this structure — the walk stops here";
 }
 
-/* ── the walk ─────────────────────────────────────────────────────────── */
+/* ── the walk, and the fork ───────────────────────────────────────────────
+   Standing at the end of a route, a step extends it.  Standing in the MIDDLE of
+   one — having clicked back to a crumb or a level — a step that differs from the
+   one already there starts a new route sharing everything to its right, which is
+   how two routes end up comparable: they agree from the divergence to the target.
+   Choosing the step that is already there just moves along it. */
 async function stepTo(sid, via){
-  state.trail.push({sid: Number(sid), via: via ?? null, label: ""});
+  const r = route();
+  if(!r) return;
+  const leg = {sid: Number(sid), via: via ?? null, label: ""};
+  const next = r.trail[state.at + 1];
+  if(next && String(next.via) === String(leg.via) && next.sid === leg.sid){
+    state.at += 1;                                     // already on this route
+  } else if(state.at === r.trail.length - 1){
+    r.trail.push(leg);
+    state.at += 1;
+  } else {
+    const forked = {trail: r.trail.slice(0, state.at + 1).map(n => ({...n})).concat(leg),
+                    path: null, why_not: null};
+    state.routes.push(forked);
+    state.active = state.routes.length - 1;
+    state.at = forked.trail.length - 1;
+  }
   writeHash();
   await showHere();
 }
 
-function truncateTo(i){
-  if(i >= state.trail.length - 1) return;
-  state.trail.length = i + 1;
+/* Moving the picker without changing any route.  Truncating instead would throw away
+   the rest of a route to look at its middle, which is the opposite of comparing. */
+function focusAt(routeIx, at){
+  state.active = routeIx;
+  state.at = Math.max(0, Math.min(at, trailOf(routeIx).length - 1));
+  writeHash();
+  showHere();
+}
+
+function dropRoute(i){
+  if(state.routes.length < 2) return;
+  state.routes.splice(i, 1);
+  state.active = Math.min(state.active >= i ? state.active - 1 : state.active,
+                          state.routes.length - 1);
+  if(state.active < 0) state.active = 0;
+  state.at = Math.min(state.at, trailOf(state.active).length - 1);
   writeHash();
   showHere();
 }
 
 /* ── the URL ──────────────────────────────────────────────────────────────
-   `#target=41&p=12-80.44-75` — the target, then each step as the edge walked and
-   the species it landed on.  Both halves are needed: the edge, because an id pair
-   does not say WHICH edge joins them; the species, because one edge names two
-   reagents and stepping into either of them is a legitimate different walk. */
+   `#target=41&p=12-80.44-75&p=51-90` — the target, then one `p` per route on the
+   chart, each a chain of legs.  A leg is the edge walked and the species it landed
+   on, and both halves are needed: the edge, because an id pair does not say WHICH
+   edge joins them; the species, because one edge names two reagents and stepping
+   into either is a different walk.  The whole chart is in the link, which is the
+   only place it could live — the viewer has no write path. */
+function legsOf(r){
+  return r.trail.slice(1).filter(n => n.via != null).map(n => `${n.via}-${n.sid}`);
+}
+
 function writeHash(){
-  const t = state.trail[0];
-  if(!t){ history.replaceState(null, "", location.pathname); return; }
-  const legs = state.trail.slice(1)
-    .filter(n => n.via != null).map(n => `${n.via}-${n.sid}`);
-  const h = `#target=${t.sid}` + (legs.length ? `&p=${legs.join(".")}` : "");
+  if(!state.target){ history.replaceState(null, "", location.pathname); return; }
+  const parts = [`target=${state.target}`];
+  for(const r of state.routes){
+    const legs = legsOf(r);
+    if(legs.length) parts.push(`p=${legs.join(".")}`);
+  }
+  const h = "#" + parts.join("&");
   if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
 }
 
@@ -660,47 +848,106 @@ function readHash(){
   const h = new URLSearchParams(location.hash.replace(/^#/, ""));
   const t = Number(h.get("target"));
   // `<reaction>-<node>` for a recorded edge, `d<other part>-<node>` for a derived one.
-  const p = (h.get("p") || "").split(".").filter(Boolean).map(leg => {
+  const routes = h.getAll("p").map(chain => chain.split(".").filter(Boolean).map(leg => {
     const m = /^(d?\d+)-(\d+)$/.exec(leg.trim());
     return m ? {via: m[1], sid: Number(m[2])} : null;
-  }).filter(Boolean);
-  return {target: Number.isInteger(t) && t > 0 ? t : null, p};
+  }).filter(Boolean)).filter(c => c.length);
+  return {target: Number.isInteger(t) && t > 0 ? t : null, routes};
 }
 
 /* Replaying a link: take each recorded leg from the target outwards, checking that
    the edge still reaches where we stand and still names where the leg went.  A leg
    that no longer holds stops the replay and says so, rather than quietly producing a
    shorter walk that would look deliberate. */
-async function replay({target, p}){
-  state.trail = [];
+async function replay({target, routes}){
+  state.routes = [];
+  state.active = state.at = 0;
+  state.target = target || null;
   if(!target){ await showHere(); return; }
-  await stepTo(target, null);
-  for(const {via, sid} of p){
-    const d = state.data;
-    if(!d) break;
-    // A derived leg is not in any table to check against, so it is taken as given and
-    // the pricing endpoint is what refuses it — with the reason, which lands in `msg`.
-    if(!via.startsWith("d")){
-      const route = (d.routes || []).find(r => String(r.id) === via);
-      if(!route){
-        say(`reaction #${via} does not reach this structure — walk stopped here`); break;
+  // Rebuilt rather than trusted: a link is only as good as the registry it is opened
+  // against, and a leg that no longer holds must stop the replay and say which one,
+  // not quietly produce a shorter walk that would look deliberate.
+  for(const chain of (routes.length ? routes : [[]])){
+    state.routes.push({trail: [{sid: target, via: null, label: ""}],
+                       path: null, why_not: null});
+    state.active = state.routes.length - 1;
+    state.at = 0;
+    for(const {via, sid} of chain){
+      let d;
+      try { d = await fetchHop(here().sid, true); } catch(e){ say(e.message); break; }
+      if(!via.startsWith("d")){
+        const edge = (d.routes || []).find(r => String(r.id) === via);
+        if(!edge){
+          say(`reaction #${via} does not reach structure ${here().sid}`
+            + ` — that route stopped there`); break;
+        }
+        if(!((edge.steps && edge.steps[0] || {}).terms || [])
+             .some(t => t.side === "reagent" && Number(t.structure_id) === sid)){
+          say(`reaction #${via} does not name structure ${sid}`
+            + ` — that route stopped there`); break;
+        }
       }
-      const names = ((route.steps && route.steps[0] || {}).terms || [])
-        .some(t => t.side === "reagent" && Number(t.structure_id) === sid);
-      if(!names){
-        say(`reaction #${via} does not name structure ${sid} — walk stopped here`); break;
-      }
+      route().trail.push({sid, via, label: ""});
+      state.at = route().trail.length - 1;
     }
-    await stepTo(sid, via);
   }
+  state.active = 0;
+  state.at = trailOf(0).length - 1;
+  writeHash();
+  await showHere();
 }
 
 async function loadTarget(id){
   say("");
   state.cache.clear();
-  if(!id){ state.trail = []; writeHash(); await showHere(); return; }
+  if(!id){
+    state.routes = []; state.target = null;
+    writeHash(); await showHere(); return;
+  }
   $("target-id").value = id;
-  await replay({target: id, p: []});
+  await replay({target: id, routes: []});
+}
+
+/* ── what the chart draws ─────────────────────────────────────────────────
+   Per-viewer preferences, so they live beside the pane sizes in localStorage and
+   never in the link: a shared link should show the other reader THEIR chart of
+   the same routes, not a copy of how this one likes it. */
+const PREFS_KEY = "mofsbu.graph.prefs";
+
+function loadPrefs(){
+  try { Object.assign(state.prefs, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); }
+  catch(e){ /* private mode, or nothing saved */ }
+}
+function savePrefs(){
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); } catch(e){}
+}
+
+const TOGGLES = [
+  {key: "labels", label: "dE labels", title: "the number on every connector"},
+  {key: "colour", label: "colour",
+   title: "off puts the routes in grey and tells them apart by dash pattern instead"},
+];
+
+function mountToggles(){
+  $("toggles").innerHTML = TOGGLES.map(t =>
+    `<label class="tg" title="${esc(t.title)}"><input type="checkbox" data-pref="${esc(t.key)}"`
+    + `${state.prefs[t.key] ? " checked" : ""}> ${esc(t.label)}</label>`).join("")
+    // Root-anchored is offered and badged: routes bottom out at different species, so
+    // their zeros are different systems and only the target end is truly shared.
+    + `<label class="tg" title="each route re-zeroed on its own left end. Routes bottom`
+    + ` out at different species, so those zeros are different systems — the target is`
+    + ` the only node they all share">`
+    + `<input type="checkbox" data-pref="anchorRoot"`
+    + `${state.prefs.anchor === "root" ? " checked" : ""}> zero at root</label>`;
+  $("toggles").onchange = (e) => {
+    const k = e.target.dataset.pref;
+    if(!k) return;
+    if(k === "anchorRoot") state.prefs.anchor = e.target.checked ? "root" : "target";
+    else state.prefs[k] = e.target.checked;
+    savePrefs();
+    drawDiagram();
+    renderLegend();
+  };
 }
 
 /* ── resizable panes ──────────────────────────────────────────────────────
@@ -781,11 +1028,16 @@ function mountPanes(){
 function boot(){
   if(new URLSearchParams(location.search).get("stubs") === "off")
     document.body.classList.add("stubs-off");
+  loadPrefs();
   mountStubs();
   mountPanes();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
-  $("want-derived").onchange = (e) => { state.showDerived = e.target.checked; showHere(); };
+  mountToggles();
+  $("want-derived").checked = state.prefs.derived;
+  $("want-derived").onchange = (e) => {
+    state.prefs.derived = e.target.checked; savePrefs(); showHere();
+  };
 
   // Delegated: the table is replaced wholesale on every hop, so the listener has to
   // outlive it.  A species is a step INTO that species; the row is a step back along
@@ -808,12 +1060,21 @@ function boot(){
     if(row) { say(""); stepTo(Number(row.dataset.source), row.dataset.rid); }
   });
 
-  // A level on the chart is the same node as a crumb on the trail.
+  // A level on the chart is a node on a route; clicking it moves the picker there,
+  // which is also how you pick which route a fork comes off.
   $("diagram").addEventListener("click", (e) => {
-    const hit = e.target.closest("[data-sid]");
+    const hit = e.target.closest("[data-route]");
     if(!hit) return;
-    const i = state.trail.findIndex(n => n.sid === Number(hit.dataset.sid));
-    if(i >= 0){ say(""); truncateTo(i); }
+    say("");
+    focusAt(Number(hit.dataset.route), Number(hit.dataset.at));
+  });
+
+  $("routes").addEventListener("click", (e) => {
+    const drop = e.target.closest("[data-drop]");
+    if(drop){ say(""); dropRoute(Number(drop.dataset.drop)); return; }
+    const row = e.target.closest(".rt");
+    if(row){ say(""); focusAt(Number(row.dataset.route),
+                             trailOf(Number(row.dataset.route)).length - 1); }
   });
 
   // The splitters change the chart's size without the window changing, so the redraw
@@ -825,7 +1086,7 @@ function boot(){
 
   $("trail").addEventListener("click", (e) => {
     const c = e.target.closest(".crumb");
-    if(c){ say(""); truncateTo(Number(c.dataset.i)); }
+    if(c){ say(""); focusAt(state.active, Number(c.dataset.i)); }
   });
 
   addEventListener("hashchange", () => {
