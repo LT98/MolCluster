@@ -347,6 +347,33 @@ def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
     return out
 
 
+#: The one role that makes an edge "consume" a structure for `outgoing_routes`.  A
+#: `solvent` or `leaving` term is the proton's carrier on a deprotonation edge (H2O in,
+#: H3O+ out), not a piece being built on; counting it would make that couple a hub that
+#: "leads to" every deprotonated species in the registry.
+CONSUMING_ROLE = "reagent"
+
+
+def outgoing_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
+    """Every provenance edge that consumes this structure as a `reagent`, with its product.
+
+    The counterpart of `incoming_routes`, same projection plus `product_structure_id`.
+    Only `role = 'reagent'` counts (`CONSUMING_ROLE`); `stoich` is this structure's own.
+    """
+    out = []
+    for row in reg.conn.execute(
+            "SELECT r.id, r.kind, r.intermediate, r.depth, r.note, r.created_at, "
+            " r.choice_vector_digest, r.atom_map_json, r.product_structure_id, "
+            " rr.stoich FROM reaction_reagents rr JOIN reactions r ON r.id = rr.reaction_id "
+            "WHERE rr.structure_id = ? AND rr.role = ? ORDER BY r.id",
+            (structure_id, CONSUMING_ROLE)):
+        item = dict(row)
+        item["reagent_ids"] = [r[0] for r in reg.conn.execute(
+            "SELECT structure_id FROM reaction_reagents WHERE reaction_id = ?", (row["id"],))]
+        out.append(item)
+    return out
+
+
 def set_hidden(reg: Registry, structure_id: int, hidden: bool = True, *,
                reason: str = "") -> dict[str, Any]:
     """Hide (or restore) one structure.  Nothing is deleted and nothing cascades.

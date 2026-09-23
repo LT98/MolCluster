@@ -709,7 +709,9 @@ Each open checkpoint is scheduled at the milestone where code first forces the c
   RMSD cutoff on the rigid core + coordination sphere, and the energy window that gates a real
   minimum vs. a bad geometry. Also governs whether a basin-crossing DFT relax spawns a new L3.
 - **C6 — Barrier proxy (leaning, §6.6):** confirm v1 = ΔG + sink-detection + concurrent-bond-change
-  + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only.
+  + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only. Input constraint
+  already fixed: a **pivot** node on a composed route (`pathways.route`, `pivot: true`) is
+  bookkeeping, and its `y` must never be read as a barrier or an intermediate by any proxy.
 - **C7 — Partner-dependence (leaning, §6.6):** confirm the factorized HSAB-match model (descriptor
   vectors combined at query time) over a stored ease matrix.
 - **C15 — what tells a placed structure from a grown one (open, found by measurement):** the

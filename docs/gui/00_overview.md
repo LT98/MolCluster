@@ -28,7 +28,7 @@ the page shows which declaration is in force.
 | **Registry** | `/` | Browse, filter and inspect everything the pipeline has built |
 | **Builder** | `/builder` | Compose a spec and queue a run. Never edit JSON by hand |
 | **Run inspector** | `/runs` | Watch a run, and read why anything was refused |
-| **Energy graph** | `/graph` | Walk a structure's provenance backwards and compare the routes ([05](05_graph.md)) |
+| **Energy graph** | `/graph` | Walk a structure's provenance back and forward and compare the routes ([05](05_graph.md)) |
 
 They share one tab strip (`chrome.css` / `chrome.js`), and each page names the database it
 is pointed at, so two servers on two registries are not confusable. The registry page and the

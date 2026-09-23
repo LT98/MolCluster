@@ -25,9 +25,27 @@ as `basis`. An assembly step sheds nothing and a deprotonation sheds `n H3O+`, s
 this actually catches is a protonated route set beside a deprotonated one — where the
 vertical gap between the curves is not a comparison of anything.
 
+**Two directions.** A leg is walked one of two ways. *made from* follows an edge against
+its arrow, from its product to a reagent. *consumed by* follows it with the arrow, from a
+reagent to its product — so in the route's own direction (towards the target) the edge
+runs in reverse: it contributes `-dE`, what the edge added is released, and what it shed
+is taken up. Walking back to a shared parent and forward again composes a ligand
+exchange out of recorded assemblies.
+
+The spectators are one signed tally, so a piece shed on one leg and taken up on another
+cancels. A route's reference quality is judged on its **net equation** — every leg's
+terms summed in the route's direction, with whatever appears on both sides cancelled — and
+not on its steps, whose own diagnostics stay on them: an exchange can be isodesmic as a
+whole when every leg of it changes the coordination count.
+
+A **pivot** is a node where the walk changes direction. It is bookkeeping for the
+composition, not an intermediate the route claims to pass through, and its `y` is not a
+barrier (docs/gui/05_graph.md).
+
 A step is `recorded` (a `reactions` row) or `inferred` (a split `decompositions` derived
 from composition). The two are never merged: the distinction is what the whole reference
-scheme rests on.
+scheme rests on. A ROUTE is `recorded` only when its net equation is one row as written,
+`inferred` when any leg is, and otherwise `composed`, with the rows behind it as `witness`.
 """
 from __future__ import annotations
 
@@ -35,9 +53,12 @@ from collections.abc import Sequence
 from typing import Any
 
 from mofsbu._types import Fidelity, ReferenceSchemeError
-from mofsbu.energy.routes import decompositions, price_reaction
+from mofsbu.energy.reference import (
+    Term, balance_for_terms, energy_for_terms, quality_for_terms,
+)
+from mofsbu.energy.routes import REPORTABLE, decompositions, price_reaction
 
-__all__ = ["price_path", "DERIVED"]
+__all__ = ["price_path", "DERIVED", "CONSUMED", "MADE_FROM", "CONSUMED_BY"]
 
 #: A leg walked along a split nobody recorded: `"d"` followed by the id of the OTHER
 #: part.  Never a reaction id, and never stored.  Both parts are named because one is
@@ -46,9 +67,21 @@ __all__ = ["price_path", "DERIVED"]
 #: measured, on structure 41, where one part appears in four different splits.
 DERIVED = "d"
 
+#: A leg walked WITH a recorded edge's arrow: `"c"` followed by the reaction id.  The node
+#: the walk stands on is a `reagent` of that reaction and the next node is its product.
+#: A bare reaction id keeps meaning "made from", so every existing link reads as before.
+CONSUMED = "c"
+
+MADE_FROM = "made_from"
+CONSUMED_BY = "consumed_by"
+
 #: How far down the derived splits to look for the one a leg names.  `decompositions`
 #: stops early by default because a panel lists them; resolving a named leg must not.
 _DERIVED_SEARCH = 200
+
+#: The legs summed and the net equation priced whole must agree to this, or they drew
+#: on different energies for one species.
+_AGREE_EV = 1e-6
 
 
 def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
@@ -56,14 +89,16 @@ def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
                solvent: str | None = None) -> dict[str, Any]:
     """Price a chain of steps read backwards from `nodes[0]`, the target.
 
-    `nodes` is the walk: the target, then what each step was reached from. `via[i]` is the
-    edge joining `nodes[i+1]` to `nodes[i]` — a reaction id, or `DERIVED` for a split that
-    was derived rather than recorded.
+    `nodes` is the walk: the target, then each node the walk stepped to. `via[i]` is the
+    edge joining `nodes[i]` and `nodes[i+1]`: a reaction id (made from — the edge produces
+    `nodes[i]` from `nodes[i+1]`), `c<reaction id>` (consumed by — the edge produces
+    `nodes[i+1]` from `nodes[i]`), or `d<other part>` for a split that was derived.
 
     Raises for a malformed walk (lengths that disagree, a node that is not there, an edge
-    that does not join the two nodes it is given for). Everything a reference-scheme rule
-    refuses comes back as data, per step and on the path, because a route drawn on a chart
-    cannot be a single exception any more than a panel of them could.
+    that does not join the two nodes it is given for, a leg that walks straight back along
+    the one before it). Everything a reference-scheme rule refuses comes back as data, per
+    step and on the path, because a route drawn on a chart cannot be a single exception
+    any more than a panel of them could.
     """
     nodes = [int(n) for n in nodes]
     if not nodes:
@@ -79,99 +114,229 @@ def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
     steps = [_price_leg(reg, nodes[i], nodes[i + 1], via[i],
                         min_fidelity=min_fidelity, solvent=solvent)
              for i in range(len(via))]
+    for i in range(1, len(steps)):
+        a, b = steps[i - 1], steps[i]
+        if (a["reaction_id"] is not None and a["reaction_id"] == b["reaction_id"]
+                and nodes[i + 1] == nodes[i - 1]):
+            raise ReferenceSchemeError(
+                f"leg {i + 1} walks reaction {b['reaction_id']} straight back to structure "
+                f"{nodes[i + 1]}; that is stepping back along the trail, not a hop")
 
-    # Walk out from the target accumulating both sides of the identity above.  `y` stops
-    # at the first step that has no number and stays stopped: a gap is not a zero (D18).
-    out_nodes = [{"structure_id": nodes[0], "display_label": labels[nodes[0]],
-                  "y": 0.0, "shed": [], "free_pieces": [], "basis": _basis([])}]
-    shed: dict[int, int] = {}
-    free: dict[int, int] = {}
+    # Walk out from the target with one signed tally of spectators: positive is a piece
+    # not yet consumed, negative is something that has left.  `y` stops at the first
+    # step that has no number and stays stopped: a gap is not a zero (D18).
+    out_nodes = [_node(reg, nodes[0], labels, 0.0, {})]
+    spectators: dict[int, int] = {}
+    net: dict[int, int] = {}
     y: float | None = 0.0
     for i, step in enumerate(steps):
-        for t in step["shed"]:
-            shed[t["structure_id"]] = shed.get(t["structure_id"], 0) + t["stoich"]
-        for t in step["added"] + step["solvent"]:
-            free[t["structure_id"]] = free.get(t["structure_id"], 0) + t["stoich"]
+        for sid, n in _route_counts(step).items():
+            net[sid] = net.get(sid, 0) + n
+            spectators[sid] = spectators.get(sid, 0) - n
+        # The two chain nodes are the walk, not spectators.
+        spectators[nodes[i + 1]] = spectators.get(nodes[i + 1], 0) - 1
+        spectators[nodes[i]] = spectators.get(nodes[i], 0) + 1
         y = None if (y is None or not step["can_price"]) else y - step["dE"]
-        out_nodes.append({
-            "structure_id": nodes[i + 1], "display_label": labels[nodes[i + 1]],
-            "y": y,
-            "shed": _multiset(reg, shed), "free_pieces": _multiset(reg, free),
-            "basis": _basis(sorted(shed.items()))})
+        out_nodes.append(_node(reg, nodes[i + 1], labels, y, spectators))
+
+    pivots = []
+    for i in range(1, len(steps)):
+        if steps[i - 1]["direction"] != steps[i]["direction"]:
+            kind = "parent" if steps[i - 1]["direction"] == MADE_FROM else "product"
+            out_nodes[i].update(pivot=True, pivot_kind=kind)
+            pivots.append(i)
 
     priced = [s for s in steps if s["can_price"]]
     unpriced = [s for s in steps if not s["can_price"]]
-    caveats: list[str] = []
-    for s in steps:
-        for c in s["caveats"]:
-            if c not in caveats:
-                caveats.append(c)
+    total = sum(s["dE"] for s in priced) if steps and not unpriced else None
+    equation = (_net_equation(reg, nodes[0], net, steps, total,
+                              min_fidelity=min_fidelity, solvent=solvent)
+                if steps else None)
     # A route is only as good as its worst number, so the rung it reports is the lowest
     # one on it — not the best, which would describe a step rather than the path.
     rungs = [s["fidelity"] for s in priced if s["fidelity"] is not None]
     worst = max(priced, key=lambda s: s["dE"], default=None)
+    worst_why = None
+    if pivots:
+        worst, worst_why = None, (
+            "the route changes direction at a pivot, so the steps into and out of it are "
+            "halves of one exchange and neither alone is a step to single out")
+    if not steps:
+        origin = None
+    elif any(s["origin"] == "inferred" for s in steps):
+        origin = "inferred"
+    elif len(steps) == 1 and steps[0]["direction"] == MADE_FROM:
+        origin = "recorded"
+    else:
+        origin = "composed"
     return {
         "nodes": out_nodes, "steps": steps,
         "can_price": bool(steps) and not unpriced,
         "why_not": unpriced[0]["why_not"] if unpriced else None,
         "n_unpriced": len(unpriced),
-        "total_dE": sum(s["dE"] for s in priced) if steps and not unpriced else None,
+        "total_dE": total,
         "basis": out_nodes[-1]["basis"],
-        "caveats": caveats,
-        "isodesmic": all(s["isodesmic"] is True for s in steps) if steps else None,
+        "net_equation": equation,
+        "caveats": list(equation["caveats"]) if equation else [],
+        "isodesmic": equation["isodesmic"] if equation else None,
+        "origin": origin,
+        "witness": [{"reaction_id": s["reaction_id"], "direction": s["direction"]}
+                    for s in steps if s["reaction_id"] is not None],
+        "pivots": pivots,
         "fidelity": min(rungs) if rungs else None,
         "fidelity_name": Fidelity(min(rungs)).name if rungs else None,
         "worst_step": None if worst is None else
                       {"index": steps.index(worst), "dE": worst["dE"]},
+        "worst_step_why": worst_why,
     }
 
 
-def _price_leg(reg: Any, product_id: int, source_id: int, via: int | str, *,
+def _node(reg: Any, sid: int, labels: dict[int, str | None], y: float | None,
+          spectators: dict[int, int]) -> dict[str, Any]:
+    shed = {k: -n for k, n in spectators.items() if n < 0}
+    free = {k: n for k, n in spectators.items() if n > 0}
+    return {"structure_id": sid, "display_label": labels[sid], "y": y,
+            "shed": _multiset(reg, shed), "free_pieces": _multiset(reg, free),
+            "basis": _basis(sorted(shed.items())),
+            "pivot": False, "pivot_kind": None}
+
+
+def _route_counts(step: dict[str, Any]) -> dict[int, int]:
+    """The leg's equation in the ROUTE's direction, as signed counts (products positive)."""
+    out: dict[int, int] = {}
+    for t in step["terms"]:
+        n = step["sign"] * (1 if t["side"] == "product" else -1) * int(t["stoich"] or 1)
+        out[int(t["structure_id"])] = out.get(int(t["structure_id"]), 0) + n
+    return out
+
+
+def _net_equation(reg: Any, target: int, net: dict[int, int],
+                  steps: list[dict[str, Any]], total: float | None, *,
+                  min_fidelity: Fidelity, solvent: str | None) -> dict[str, Any]:
+    """The route as one equation, judged by the rules a single edge is judged by."""
+    out: dict[str, Any] = {"terms": [], "balanced": None, "balance": None,
+                           "isodesmic": None, "caveats": [], "dative_delta": None,
+                           "dE": None, "fidelity": None, "fidelity_name": None,
+                           "agrees_with_steps": None, "why_not": None}
+    bare = [i for i, s in enumerate(steps) if not s["terms"]]
+    if bare:
+        out["why_not"] = (f"step {bare[0] + 1} has no species recorded, so the route has "
+                          f"no net equation")
+        return out
+    kept = {sid: n for sid, n in net.items() if n}
+    if not kept:
+        out["why_not"] = "every species cancels: the walk returns to where it started"
+        return out
+    # The target first: `energy_for_terms` pins the theory to its first term, as a
+    # stored reaction's product pins it.
+    order = sorted(kept, key=lambda sid: (sid != target, kept[sid] < 0, sid))
+    terms = tuple(
+        Term(structure_id=sid, stoich=abs(kept[sid]),
+             role=("product" if sid == target else "leaving") if kept[sid] > 0
+             else "reagent",
+             side="product" if kept[sid] > 0 else "reagent")
+        for sid in order)
+    labels = _labels(reg, order)
+    out["terms"] = [{"structure_id": t.structure_id, "stoich": t.stoich, "role": t.role,
+                     "side": t.side, "display_label": labels.get(t.structure_id)}
+                    for t in terms]
+    try:
+        quality = quality_for_terms(reg, terms)
+        out.update(isodesmic=quality.isodesmic, dative_delta=quality.dative_delta,
+                   caveats=[i.code for i in quality.issues])
+        balance = balance_for_terms(reg, terms)
+        out.update(balanced=balance.balanced, balance=balance.describe())
+        if not balance.balanced:
+            out["why_not"] = balance.describe()
+            return out
+        energy = energy_for_terms(reg, terms, fidelity=None, solvent=solvent,
+                                  strict=False, subject="the route's net equation")
+        if energy.fidelity < min_fidelity:
+            out["why_not"] = (f"best available is {energy.fidelity.name}; needs "
+                              f"{min_fidelity.name} or better")
+            return out
+        out.update(dE=energy.dE, fidelity=int(energy.fidelity),
+                   fidelity_name=energy.fidelity.name)
+        if total is not None:
+            out["agrees_with_steps"] = abs(energy.dE - total) <= _AGREE_EV
+    except REPORTABLE as exc:
+        out["why_not"] = str(exc)
+    return out
+
+
+def _price_leg(reg: Any, here_id: int, next_id: int, via: int | str, *,
                min_fidelity: Fidelity, solvent: str | None) -> dict[str, Any]:
-    """One step, flattened: the number, the diagnosis, and what moved either way."""
-    if str(via).startswith(DERIVED):
-        other = str(via)[len(DERIVED):]
-        priced = _derived_leg(reg, product_id, source_id,
+    """One step, flattened: the number, the diagnosis, and what moved either way.
+
+    `dE`, `added`, `solvent` and `shed` are in the route's direction (towards the
+    target); `reaction_dE` is the edge's own, as recorded.
+    """
+    token = str(via).strip()
+    direction = MADE_FROM
+    if token.startswith(DERIVED):
+        other = token[len(DERIVED):]
+        priced = _derived_leg(reg, here_id, next_id,
                               int(other) if other else None,
                               min_fidelity=min_fidelity, solvent=solvent)
         origin, reaction_id = "inferred", None
         recorded_as = priced.get("recorded_as")
     else:
-        priced = price_reaction(reg, int(via), min_fidelity=min_fidelity, solvent=solvent)
-        origin, reaction_id, recorded_as = "recorded", int(via), None
+        if token.startswith(CONSUMED):
+            direction, token = CONSUMED_BY, token[len(CONSUMED):]
+        try:
+            reaction_id = int(token)
+        except ValueError:
+            raise ReferenceSchemeError(
+                f"{via!r} is not an edge: give a reaction id, c<reaction id> or "
+                f"d<other part>") from None
+        priced = price_reaction(reg, reaction_id, min_fidelity=min_fidelity,
+                                solvent=solvent)
+        origin, recorded_as = "recorded", None
 
     step = priced["steps"][0]
     terms = step["terms"]
     # The edge has to be the one that joins these two nodes, or the sum is of a different
     # route than the one being drawn.  Checked rather than assumed: a link can be stale.
-    if origin == "recorded":
-        _check_joins(reg, int(via), product_id, source_id, terms)
+    if origin == "recorded" and direction == MADE_FROM:
+        _check_joins(reg, reaction_id, here_id, next_id, terms)
+    elif origin == "recorded":
+        _check_joins(reg, reaction_id, next_id, here_id, terms, role="reagent")
 
     # `added` and `solvent` are both consumed, so both count in the arithmetic — but they
     # are not the same claim.  Water carrying a proton away is not a piece being built in,
     # and a step that listed it as "added" would read as chemistry it is not doing.
-    added = [_term(t) for t in terms
-             if t["side"] == "reagent" and (t["role"] or "reagent") == "reagent"
-             and int(t["structure_id"]) != source_id]
-    solvent = [_term(t) for t in terms
-               if t["side"] == "reagent" and t["role"] == "solvent"]
+    source = next_id if direction == MADE_FROM else here_id
+    put_in = [_term(t) for t in terms
+              if t["side"] == "reagent" and (t["role"] or "reagent") == "reagent"
+              and int(t["structure_id"]) != source]
+    carrier = [_term(t) for t in terms if t["side"] == "reagent" and t["role"] == "solvent"]
+    let_go = [_term(t) for t in terms if t["role"] == "leaving"]
+    sign = 1 if direction == MADE_FROM else -1
+    dE = priced["total_dE"]
+    if reaction_id is None:
+        via_out: int | str = DERIVED
+    else:
+        via_out = reaction_id if sign > 0 else f"{CONSUMED}{reaction_id}"
     return {
-        "via": reaction_id if reaction_id is not None else DERIVED,
+        "via": via_out, "direction": direction, "sign": sign,
         "origin": origin, "reaction_id": reaction_id, "recorded_as": recorded_as,
-        "product": product_id, "source": source_id,
-        "dE": priced["total_dE"], "can_price": priced["can_price"],
+        "product": here_id if sign > 0 else next_id, "source": source,
+        "dE": None if dE is None else sign * dE, "reaction_dE": dE,
+        "can_price": priced["can_price"],
         "why_not": priced["why_not"],
         "fidelity": step["fidelity"], "fidelity_name": step["fidelity_name"],
         "isodesmic": step["isodesmic"], "caveats": list(step["caveats"]),
         "all_converged": step["all_converged"],
-        "added": added, "solvent": solvent,
-        "shed": [_term(t) for t in terms if t["role"] == "leaving"],
+        # Run against its arrow, an edge takes up what it shed and releases the rest.
+        "added": put_in if sign > 0 else let_go,
+        "solvent": carrier if sign > 0 else [],
+        "shed": let_go if sign > 0 else put_in + carrier,
         "terms": terms,
     }
 
 
 def _check_joins(reg: Any, reaction_id: int, product_id: int, source_id: int,
-                 terms: list[dict[str, Any]]) -> None:
+                 terms: list[dict[str, Any]], *, role: str | None = None) -> None:
     row = reg.conn.execute("SELECT product_structure_id FROM reactions WHERE id = ?",
                            (reaction_id,)).fetchone()
     if row is None or int(row["product_structure_id"]) != product_id:
@@ -181,6 +346,13 @@ def _check_joins(reg: Any, reaction_id: int, product_id: int, source_id: int,
                for t in terms):
         raise ReferenceSchemeError(
             f"reaction {reaction_id} does not consume structure {source_id}")
+    # A consumed-by leg follows a `reagent` term only (registry.api.CONSUMING_ROLE).
+    if role is not None and not any(
+            t["side"] == "reagent" and int(t["structure_id"]) == source_id
+            and (t["role"] or "reagent") == role for t in terms):
+        raise ReferenceSchemeError(
+            f"reaction {reaction_id} takes structure {source_id} only as a proton "
+            f"carrier, not as a {role}; a consumed-by hop follows reagents only")
 
 
 def _derived_leg(reg: Any, product_id: int, source_id: int, other_id: int | None, *,

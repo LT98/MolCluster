@@ -99,10 +99,16 @@ models.
 The graph page composes routes **you** walk. It will not find them for you, and it puts no
 route above another.
 
-- **No path search.** There is no "show me the cheapest route to this structure". Every step is
-  chosen, one hop at a time, from what the registry records (plus derived splits when asked).
+- **No path search.** There is no "show me the cheapest route to this structure", and no
+  "find me an exchange". Every step is chosen, one hop at a time, from what the registry
+  records (plus derived splits when asked). Walking back to a shared parent and forward again
+  composes an exchange only because you walked it.
 - **No scoring, no ranking, no barrier.** The legend reports each route's total, its worst
   single step and its rung. It does not order routes, call one better, or estimate a barrier.
+- **A pivot is not a barrier.** Where a composed route turns, the node's `y` is how the
+  composition is booked — the bare parent plus every ligand on both sides — not a height the
+  exchange passes over. Nothing on the page says whether the exchange is dissociative. A pivot's
+  `y` must never feed a barrier proxy (C6), and the legend gives no worst step for such a route.
 
 That is a boundary rather than an omission. Ranking needs a barrier proxy and a decision about
 partner dependence — **C6** and **C7** in `DESIGN_registry_assembly.md` — and both are

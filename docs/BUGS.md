@@ -481,3 +481,19 @@ qualification everywhere, or it gets read as something it is not.
 
 **Not** in scope of the fix: the stored energies, the deprotonation edges, or
 `pathways.route`'s arithmetic. All three were checked against this case and are correct.
+
+**What consumed-by hops change here (still open).** The graph now walks edges forward as well as
+back (`c<id>` legs, docs/gui/05_graph.md), and that moves this entry in two ways:
+
+- **The basis can now differ by more than protons.** A route that turns at a shared parent
+  sheds whatever the backward legs released — Cl⁻ in the Ni/tHQ/Cl exchange, basis `7x2` — so
+  fix direction 2 cannot assume a basis token is `n H3O⁺`; it has to render any species.
+  (The spectator tally is now netted, so a piece taken up and given back no longer appears on
+  both sides; that makes a basis shorter, not different in kind.)
+- **A proton transfer can now be walked as well as subtracted.** A deprotonation edge is offered
+  as a consumed-by hop from its protonated parent, so a route can take up or give back a
+  proton explicitly and the page prices it with the route's net equation. That makes the kind
+  of gap in the table above something a reader can compose and check by hand; it is not fix
+  direction 3's common-basis view, and it changes nothing about the defect itself — the chart
+  still draws #81 at two heights with the reason only in the legend. Not re-measured on the
+  table's routes.

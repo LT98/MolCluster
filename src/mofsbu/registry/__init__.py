@@ -8,7 +8,7 @@ from mofsbu.registry.api import (
     display_label,
     export_xyz, find, formula, geometries_from_choice, geometry_xyz, get_graph,
     get_site_state, get_sites,
-    get_structure, find_method_id, incoming_routes, method_id,
+    get_structure, find_method_id, incoming_routes, method_id, outgoing_routes,
     fragment_aliases, put_geometry, put_reaction, put_site_state, put_sites, put_structure,
     relabel_all, set_hidden,
 )
@@ -22,7 +22,7 @@ __all__ = [
     "display_label", "ensure_registry", "export_xyz", "find", "formula",
     "find_method_id", "geometries_from_choice", "geometry_xyz", "get_graph",
     "get_site_state", "get_sites",
-    "get_structure", "incoming_routes", "method_id", "put_geometry",
+    "get_structure", "incoming_routes", "method_id", "outgoing_routes", "put_geometry",
     "put_reaction", "put_site_state", "put_sites", "put_structure", "relabel_all",
     "alias_fragment", "fragment_aliases", "set_hidden",
 ]

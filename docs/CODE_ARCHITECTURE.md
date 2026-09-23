@@ -93,8 +93,8 @@ charge, spin — travels with it in a `methods` row.
 | `ui/static/chrome.{js,css}` | The four pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
 | `ui/static/routes.js` | How to read a provenance edge, shared by the registry panel and the energy graph: what to call a species, when two edges are one chemistry, how a dE carries its caveat. Pure functions; each page lays them out for the width it has | ✅ |
 | `ui/static/preview.js` | Geometry without leaving the page — a hover popover and an embedded viewer, **one WebGL context each**, fed by the cheap per-structure xyz endpoint. Used by `graph.html`; `index.html` still has its own | ✅ |
-| `ui/static/graph.html` | `/graph`: walk provenance backwards, fork, and compare routes on one energy diagram. Hand-drawn SVG — an energy-level diagram is not a chart type a library ships | ✅ |
-| `pathways/route.py` | Composes what `energy/routes.py` prices one edge at a time: the running sum with the target at zero, the check that consecutive steps actually join, and the shed/unconsumed multisets that say what a `y` is an energy **of**. `basis` is the token that decides when two routes may be compared | ✅ |
+| `ui/static/graph.html` | `/graph`: walk provenance back (made from) and forward (consumed by), fork, and compare routes on one energy diagram. Hand-drawn SVG — an energy-level diagram is not a chart type a library ships | ✅ |
+| `pathways/route.py` | Composes what `energy/routes.py` prices one edge at a time: the running sum with the target at zero, the check that consecutive steps actually join, and the shed/unconsumed multisets that say what a `y` is an energy **of**. `basis` is the token that decides when two routes may be compared. Legs go either way (`c<id>` = consumed by, entering at −dE); a route's quality is its **net equation**'s, a turn is a flagged **pivot**, and a route composed from rows is `composed` with the rows as `witness` | ✅ |
 | `pathways/` (rest) | path scoring, barrier proxy, search | 🔴 **→ M8** *(the DAG's edges are written and now priced; nothing ranks them — C6, C7)* |
 
 ---

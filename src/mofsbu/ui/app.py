@@ -398,21 +398,31 @@ def create_app(db_path: Path, store_root: Path,
         except ValueError:                    # not a sha256 digest → treat as absent
             return False
 
-    # ── the incoming edges, for a walk ───────────────────────────────────────
+    # ── the edges at a node, for a walk ──────────────────────────────────────
     #: What a walk needs about a species: how to name it, what it is, and whether
     #: anything recorded reaches it — which is what says the walk can go on from there.
     SPECIES_COLS = ("id", "display_label", "formula", "net_charge", "multiplicity",
                     "n_metals", "n_incoming_routes")
+    #: How many edges consume a species, counted as `registry.api.outgoing_routes` counts
+    #: them: as a `reagent` only, never as the proton couple's solvent or leaving group.
+    SPECIES_SELECT = (", ".join(f"v.{c}" for c in SPECIES_COLS)
+                      + ", (SELECT COUNT(DISTINCT rr.reaction_id) FROM reaction_reagents rr"
+                        " WHERE rr.structure_id = v.id AND rr.role = 'reagent')"
+                        " AS n_outgoing_routes")
 
     @app.get("/api/structures/{structure_id}/routes")
     def structure_routes(structure_id: int,
                          inferred: int = Query(
                              0, description="also derive splits nobody recorded"),
                          con: sqlite3.Connection = Con) -> dict[str, Any]:
-        """The incoming edges, priced, and enough about every species they name.
+        """The edges at this structure, priced, and enough about every species they name.
 
-        `get_structure` answers this too, but it also lists every geometry and asks the
-        blob store about each one.  A backwards walk asks this once per hop and wants
+        `routes` arrive here (made from); `consumed_by` leave from here, taking this
+        structure as a `reagent` (`registry.api.outgoing_routes`).  A walk offers both,
+        and each entry says which it is in `direction`.
+
+        `get_structure` answers the incoming half too, but it also lists every geometry
+        and asks the blob store about each one.  A walk asks this once per hop and wants
         neither, so it gets its own door.  `species` carries one row per structure the
         terms mention, so a candidate can be named and its own reachability shown
         without a request per candidate.
@@ -423,7 +433,9 @@ def create_app(db_path: Path, store_root: Path,
         it is made of, and keeping it in a separate key is what stops it being read as
         a record.
         """
-        row = con.execute("SELECT * FROM v_structures WHERE id = ?",
+        from mofsbu.registry import ReadOnlyRegistry, outgoing_routes
+
+        row = con.execute(f"SELECT {SPECIES_SELECT} FROM v_structures v WHERE v.id = ?",
                           (structure_id,)).fetchone()
         if row is None:
             raise HTTPException(404, f"no structure {structure_id}")
@@ -433,10 +445,18 @@ def create_app(db_path: Path, store_root: Path,
                FROM reactions WHERE product_structure_id = ? ORDER BY id""",
             (structure_id,)))
         _price_routes(con, routes)
+        for r in routes:
+            r["direction"] = "made_from"
+        keep = ("id", "kind", "intermediate", "depth", "note", "created_at",
+                "choice_vector_digest", "product_structure_id")
+        consumed = [{k: r[k] for k in keep} | {"direction": "consumed_by"}
+                    for r in outgoing_routes(ReadOnlyRegistry(conn=con, store=store),
+                                             structure_id)]
+        _price_routes(con, consumed)
         derived = _derived_routes(con, structure_id) if inferred else []
-        return {"structure": {k: row[k] for k in SPECIES_COLS},
-                "routes": routes, "derived": derived,
-                "species": _species(con, routes + derived)}
+        return {"structure": dict(row),
+                "routes": routes, "consumed_by": consumed, "derived": derived,
+                "species": _species(con, routes + consumed + derived)}
 
     def _derived_routes(con: sqlite3.Connection,
                         structure_id: int) -> list[dict[str, Any]]:
@@ -450,7 +470,8 @@ def create_app(db_path: Path, store_root: Path,
     @app.get("/api/paths/price")
     def price_path_route(
             nodes: str = Query(..., description="the walk: target first, comma separated"),
-            via: str = Query("", description="one edge per gap — a reaction id, or 'd'"),
+            via: str = Query("", description="one edge per gap — a reaction id (made "
+                                             "from), c<id> (consumed by), or d<part>"),
             con: sqlite3.Connection = Con) -> dict[str, Any]:
         """What a whole route costs, node by node, with the target at zero.
 
@@ -464,7 +485,7 @@ def create_app(db_path: Path, store_root: Path,
 
         try:
             walk = [int(n) for n in nodes.split(",") if n.strip()]
-            edges: list[int | str] = [e.strip() if e.strip().startswith("d") else int(e)
+            edges: list[int | str] = [e.strip() if e.strip()[:1] in ("c", "d") else int(e)
                                       for e in via.split(",") if e.strip()]
         except ValueError as exc:
             raise HTTPException(400, f"malformed path: {exc}") from exc
@@ -481,7 +502,7 @@ def create_app(db_path: Path, store_root: Path,
             return {}
         marks = ",".join("?" * len(ids))
         rows = con.execute(
-            f"SELECT {', '.join(SPECIES_COLS)} FROM v_structures WHERE id IN ({marks})",
+            f"SELECT {SPECIES_SELECT} FROM v_structures v WHERE v.id IN ({marks})",
             tuple(ids))
         return {str(r["id"]): dict(r) for r in rows}
 

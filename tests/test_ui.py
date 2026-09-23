@@ -135,6 +135,52 @@ def test_a_priced_path_puts_the_target_at_zero(client):
     assert body["steps"][0]["origin"] == "recorded"
 
 
+def test_the_walk_offers_what_consumes_a_node_in_a_key_of_its_own(client):
+    """Stepping forward is the other half of a hop menu: every edge that takes the node
+    as a reagent, priced, with its product named so the walk knows where it lands."""
+    step = _a_recorded_step(client)
+    if step is None:
+        pytest.skip("the demo registry seeded no edge with a reagent")
+    product, source, rid = step
+    walk = client.get(f"/api/structures/{source}/routes").json()
+    assert all(r["direction"] == "made_from" for r in walk["routes"])
+    consumed = {r["id"]: r for r in walk["consumed_by"]}
+    assert rid in consumed
+    assert consumed[rid]["direction"] == "consumed_by"
+    assert consumed[rid]["product_structure_id"] == product
+    assert "can_price" in consumed[rid] and "steps" in consumed[rid]
+    assert walk["structure"]["n_outgoing_routes"] == len(walk["consumed_by"])
+    mentioned = {str(t["structure_id"]) for r in walk["consumed_by"]
+                 for s in r["steps"] for t in s["terms"]}
+    assert mentioned <= set(walk["species"])
+    for s in walk["species"].values():
+        assert "n_outgoing_routes" in s
+
+
+def test_a_consumed_by_leg_prices_through_the_api(client):
+    """`c<id>` walks an edge forward.  It enters the route at minus its own dE, and the
+    route carries its net equation and says it was composed."""
+    step = _a_recorded_step(client)
+    if step is None:
+        pytest.skip("the demo registry seeded no edge with a reagent")
+    product, source, rid = step
+    r = client.get("/api/paths/price",
+                   params={"nodes": f"{source},{product}", "via": f"c{rid}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    leg = body["steps"][0]
+    assert leg["direction"] == "consumed_by" and leg["via"] == f"c{rid}"
+    if leg["can_price"]:
+        assert leg["dE"] == pytest.approx(-leg["reaction_dE"])
+    assert body["origin"] == "composed"
+    assert "net_equation" in body and "pivots" in body
+
+    backwards = client.get("/api/paths/price",
+                           params={"nodes": f"{product},{source}", "via": f"c{rid}"})
+    assert backwards.status_code == 400
+    assert "does not produce" in backwards.json()["detail"]
+
+
 def test_a_malformed_path_is_refused_with_a_reason_not_a_stack_trace(client):
     for params, expect in (({"nodes": "1,2", "via": ""}, "edges"),
                            ({"nodes": "1,2", "via": "not-a-number"}, "malformed"),
