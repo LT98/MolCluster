@@ -106,16 +106,25 @@ function speciesCell(term){
 }
 
 /* A dE here is never isodesmic (an assembly step forms a metal-donor bond, D17), so the
-   caveat travels with the number rather than being left to the reader to remember. */
-function routeEnergy(r){
+   qualification travels with the number rather than being left to the reader to
+   remember.  The number and its qualifiers come back apart, because how much width
+   they have is the caller's problem: a wide panel sets them on one line, a six-column
+   picker stacks them.  What they SAY is decided once, here. */
+function energyParts(r){
   const s = (r.steps && r.steps[0]) || {};
   if(!r.can_price)
-    return `<span class="muted">— (${esc(firstClause(r.why_not) || "no energy")})</span>`;
-  let out = fmtE(r.total_dE);
-  if(s.isodesmic === false)         out += ` <span class="caveat">· not isodesmic</span>`;
-  else if(s.isodesmic !== true)     out += ` <span class="caveat">· isodesmic unchecked</span>`;
-  if(s.all_converged === false)     out += ` <span class="caveat">· unconverged</span>`;
-  return out;
+    return {value: null, why: firstClause(r.why_not) || "no energy", notes: []};
+  const notes = [];
+  if(s.isodesmic === false)        notes.push("not isodesmic");
+  else if(s.isodesmic !== true)    notes.push("isodesmic unchecked");
+  if(s.all_converged === false)    notes.push("unconverged");
+  return {value: fmtE(r.total_dE), why: null, notes};
+}
+
+function routeEnergy(r){
+  const p = energyParts(r);
+  if(p.value === null) return `<span class="muted">— (${esc(p.why)})</span>`;
+  return p.value + p.notes.map(n => ` <span class="caveat">· ${esc(n)}</span>`).join("");
 }
 
 function routeRung(r){
@@ -147,6 +156,6 @@ function routeHead(r){
 }
 
 return {esc, fmtE, FIDELITY, firstClause, shortLabel, renderTerms, groupRoutes,
-        protonsShed, speciesCell, routeEnergy, routeRung, routeCaveats, routeWhen,
-        routeHead};
+        protonsShed, speciesCell, energyParts, routeEnergy, routeRung, routeCaveats,
+        routeWhen, routeHead};
 })();

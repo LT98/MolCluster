@@ -21,14 +21,32 @@ html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
      display:flex;flex-direction:column}
 /* Two columns.  The right one splits: the diagram does not need the whole height, and
-   the routes on it read better underneath it than beside it. */
-#app{display:grid;grid-template-columns:340px minmax(420px,1fr);flex:1;min-height:0}
+   the routes on it read better underneath it than beside it.  Every pane is resizable,
+   so the three sizes are custom properties the splitters write and the grid reads —
+   nothing else has to know a number.  Unset means "use the default track", which is
+   what a double-click on a splitter puts back. */
+#app{display:grid;grid-template-columns:var(--w-pick,340px) 5px minmax(320px,1fr);
+     flex:1;min-height:0}
 .pane{overflow:auto;padding:12px 14px}
-#picker{border-right:1px solid var(--line);background:var(--panel);
-        display:flex;flex-direction:column;gap:8px}
-#right{display:flex;flex-direction:column;min-height:0;min-width:0}
-#chart{flex:3 1 0;min-height:230px;display:flex;flex-direction:column;gap:8px}
-#routes-pane{flex:2 1 0;min-height:130px;border-top:1px solid var(--line);background:var(--panel)}
+#picker{background:var(--panel);display:flex;flex-direction:column;gap:8px;min-width:0}
+#right{display:grid;grid-template-rows:var(--h-chart,3fr) 5px minmax(110px,2fr);
+       min-height:0;min-width:0}
+#chart{min-height:0;display:flex;flex-direction:column;gap:8px}
+#routes-pane{min-height:0;background:var(--panel)}
+
+/* A splitter is a line you can grab.  It is 5px so the layout does not lurch, with a
+   hit area either side of it, and it takes focus so the panes are adjustable without a
+   pointer at all. */
+.splitter{background:var(--line);position:relative;touch-action:none}
+.splitter::after{content:"";position:absolute;inset:-4px;z-index:2}
+.splitter:hover,.splitter:focus-visible{background:var(--accent);outline:none}
+.splitter.v{cursor:col-resize}
+.splitter.v::after{inset:0 -4px}
+.splitter.h{cursor:row-resize}
+.splitter.h::after{inset:-4px 0}
+/* While dragging, nothing else on the page should select or take the pointer. */
+body.dragging{user-select:none}
+body.dragging iframe,body.dragging .pane{pointer-events:none}
 h1{font-size:14px;margin:0;letter-spacing:.02em;overflow-wrap:anywhere}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
    margin:6px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
@@ -79,6 +97,10 @@ a.term{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--a
 a.term:hover{background:var(--accent-soft)}
 .onward{color:var(--muted);font-size:10.5px;white-space:nowrap}
 .rnote{font-size:11px;color:var(--muted);margin-top:6px}
+/* The number, then what qualifies it, on two lines — see `stepEnergy`. */
+.dE{display:block}
+.dE-note{display:block;font-size:10.5px;line-height:1.25;white-space:normal;
+         font-family:system-ui,-apple-system,Segoe UI,sans-serif}
 
 /* ── stubs ─────────────────────────────────────────────────────────────────
    A region that is planned but not written says so, in place, with the
@@ -133,6 +155,10 @@ body.stubs-off .stub{display:none}
     <div id="steps"></div>
   </section>
 
+  <div id="split-pick" class="splitter v" role="separator" tabindex="0"
+       aria-orientation="vertical" aria-label="resize the step picker"
+       title="drag to resize · double-click to reset"></div>
+
   <!-- ── the diagram, and the routes drawn on it ──────────────────────── -->
   <div id="right">
     <section id="chart" class="pane">
@@ -142,6 +168,9 @@ body.stubs-off .stub{display:none}
       </div>
       <div id="diagram" class="stub-grow"></div>
     </section>
+    <div id="split-chart" class="splitter h" role="separator" tabindex="0"
+         aria-orientation="horizontal" aria-label="resize the diagram"
+         title="drag to resize · double-click to reset"></div>
     <section id="routes-pane" class="pane">
       <h2>routes</h2>
       <div id="routes"></div>
@@ -152,18 +181,24 @@ body.stubs-off .stub{display:none}
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const {esc, firstClause, shortLabel, groupRoutes, protonsShed, speciesCell,
-       routeEnergy, routeRung, routeCaveats} = mofsbuRoutes;
+const {esc, shortLabel, groupRoutes, protonsShed, speciesCell,
+       energyParts, routeRung, routeCaveats} = mofsbuRoutes;
 
-/* The viewer's provenance panel has the width to print a refusal as a clause; this
-   column is one of six in a 340px pane, and a balance report set in it is the whole
-   table.  The reason is not dropped — it is what the cell and the row both say on
-   hover — it just stops being the widest thing on screen. */
+/* The number on its own line, what qualifies it on the next.  Set inline they make one
+   long unbreakable string — `td.num` cannot wrap a number — and that one cell then sets
+   the width of a six-column table in a pane this narrow, squeezing out the species the
+   row exists to show.  Stacked, the column is as wide as the number.
+
+   A refusal is cut to its head for the same reason; the whole of it is on hover, and on
+   the row, so nothing is dropped — it just stops being the widest thing on screen. */
 function stepEnergy(r){
-  if(r.can_price) return routeEnergy(r);
-  const why = firstClause(r.why_not) || "no energy";
-  const head = why.split(":")[0];
-  return `<span class="muted" title="${esc(r.why_not || why)}">&mdash; (${esc(head)})</span>`;
+  const p = energyParts(r);
+  if(p.value === null)
+    return `<span class="muted" title="${esc(r.why_not || p.why)}">`
+         + `&mdash; (${esc(p.why.split(":")[0])})</span>`;
+  return `<span class="dE">${esc(p.value)}</span>`
+       + (p.notes.length
+          ? `<span class="dE-note caveat">${esc(p.notes.join(" · "))}</span>` : "");
 }
 
 /* Every region of the finished page, and the increment that fills it.  Retiring a
@@ -450,10 +485,86 @@ async function loadTarget(id){
   await replay({target: id, p: []});
 }
 
+/* ── resizable panes ──────────────────────────────────────────────────────
+   Each splitter writes one CSS custom property and the grid does the rest.  The
+   sizes are a per-viewer convenience, so they go to localStorage the way the
+   registry page keeps its open filter sections — wrapped, because a private
+   window throws on the read rather than returning nothing. */
+const PANES_KEY = "mofsbu.graph.panes";
+const panes = (() => {
+  try { return JSON.parse(localStorage.getItem(PANES_KEY) || "{}") || {}; }
+  catch(e){ return {}; }
+})();
+const PANE_VAR = {pick: "--w-pick", chart: "--h-chart"};
+
+function savePanes(){
+  try { localStorage.setItem(PANES_KEY, JSON.stringify(panes)); } catch(e){ /* private mode */ }
+}
+function setPane(key, px){
+  panes[key] = Math.round(px);
+  document.documentElement.style.setProperty(PANE_VAR[key], panes[key] + "px");
+}
+function clearPane(key){
+  delete panes[key];
+  document.documentElement.style.removeProperty(PANE_VAR[key]);
+}
+
+/* `measure` turns a pointer coordinate into the size the pane should be, `bounds`
+   keeps both neighbours usable, and `natural` reads back what the default track
+   resolved to so the arrow keys have somewhere to start. */
+function mountSplitter(el, spec){
+  const put = (px) => {
+    const [lo, hi] = spec.bounds();
+    setPane(spec.key, Math.max(lo, Math.min(hi, px)));
+  };
+  const current = () => panes[spec.key] ?? spec.natural();
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+    el.onpointermove = (ev) =>
+      put(spec.measure(spec.axis === "x" ? ev.clientX : ev.clientY));
+    el.onpointerup = el.onpointercancel = () => {
+      el.onpointermove = el.onpointerup = el.onpointercancel = null;
+      document.body.classList.remove("dragging");
+      savePanes();
+    };
+  });
+  el.addEventListener("dblclick", () => { clearPane(spec.key); savePanes(); });
+  el.addEventListener("keydown", (e) => {
+    const keys = spec.axis === "x" ? {ArrowLeft:-16, ArrowRight:16}
+                                   : {ArrowUp:-16, ArrowDown:16};
+    if(!(e.key in keys)) return;
+    e.preventDefault();
+    put(current() + keys[e.key]);
+    savePanes();
+  });
+}
+
+function mountPanes(){
+  for(const k of Object.keys(panes))
+    if(PANE_VAR[k] && Number.isFinite(panes[k])) setPane(k, panes[k]);
+  const appBox = () => $("app").getBoundingClientRect();
+  const rightBox = () => $("right").getBoundingClientRect();
+  mountSplitter($("split-pick"), {
+    key: "pick", axis: "x",
+    measure: (x) => x - appBox().left,
+    bounds: () => [230, Math.max(240, appBox().width - 340)],
+    natural: () => $("picker").getBoundingClientRect().width,
+  });
+  mountSplitter($("split-chart"), {
+    key: "chart", axis: "y",
+    measure: (y) => y - rightBox().top,
+    bounds: () => [120, Math.max(130, rightBox().height - 110)],
+    natural: () => $("chart").getBoundingClientRect().height,
+  });
+}
+
 function boot(){
   if(new URLSearchParams(location.search).get("stubs") === "off")
     document.body.classList.add("stubs-off");
   mountStubs();
+  mountPanes();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
 
