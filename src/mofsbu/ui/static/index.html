@@ -157,6 +157,14 @@ dd{margin:0;overflow-wrap:anywhere}
 .hashline{display:flex;align-items:center;gap:6px}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:10.5px;color:var(--muted)}
 .empty{color:var(--muted);padding:24px 8px;text-align:center}
+/* The popover follows `#toast`'s idiom — fixed, and transparent to the pointer, so it
+   can never swallow the click on the link that summoned it. */
+#preview{position:fixed;z-index:60;width:210px;padding:4px;border:1px solid var(--line);
+         border-radius:6px;background:var(--bg);box-shadow:0 4px 14px rgba(0,0,0,.2);
+         pointer-events:none;font-size:11px}
+#preview-3d{position:relative;width:202px;height:140px;overflow:hidden}
+#preview-note{padding:10px 4px}
+#preview-cap{padding:3px 4px 1px;overflow-wrap:anywhere;color:var(--muted)}
 #toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
        padding:6px 14px;border-radius:14px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:.92}
@@ -332,6 +340,11 @@ dd{margin:0;overflow-wrap:anywhere}
       <div id="d-routes"></div>
     </div>
   </aside>
+</div>
+<div id="preview" hidden>
+  <div id="preview-3d"></div>
+  <div id="preview-note" class="muted" hidden></div>
+  <div id="preview-cap"></div>
 </div>
 <div id="toast"></div>
 
@@ -1151,6 +1164,71 @@ async function showGeometry(gid){
   viewer.zoomTo(); viewer.render();
 }
 
+/* ── hover preview ────────────────────────────────────────────
+   ONE viewer for every preview ever shown: a browser caps live WebGL contexts at
+   8-16, and a context per hover would reach that in a dozen links.  `previewGen` is
+   what stops a slow fetch for one structure painting over the popover now showing
+   another — the fetch checks that it is still the current one before it draws. */
+let preview = null, previewGen = 0, previewTimer = null;
+const PREVIEW_INTENT_MS = 500;
+const previewXyz = new Map();
+
+function ensurePreviewViewer(){
+  if(preview || typeof $3Dmol === "undefined") return preview;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  preview = $3Dmol.createViewer($("preview-3d"),
+    {backgroundColor: dark ? "#16181c" : "#f7f7f8"});
+  return preview;
+}
+function hidePreview(){
+  clearTimeout(previewTimer);
+  previewGen++;                       // anything still in flight is now stale
+  $("preview").hidden = true;
+}
+function previewBody(noteHtml){
+  $("preview-note").hidden = !noteHtml;
+  $("preview-3d").hidden = !!noteHtml;
+  if(noteHtml) $("preview-note").innerHTML = noteHtml;
+}
+function placePreview(el){
+  const box = el.getBoundingClientRect(), p = $("preview");
+  const w = p.offsetWidth || 210, h = p.offsetHeight || 180;
+  p.style.left = Math.max(6, Math.min(innerWidth - w - 6, box.left)) + "px";
+  p.style.top  = (box.bottom + h + 8 > innerHeight ? box.top - h - 8 : box.bottom + 8) + "px";
+}
+async function showPreview(el, id, name){
+  const gen = ++previewGen;
+  const p = $("preview");
+  $("preview-cap").innerHTML = `<span class="mono">#${esc(id)}</span> ${esc(name)}`;
+  previewBody("");
+  p.hidden = false;
+  placePreview(el);
+  let xyz = previewXyz.get(id);
+  if(xyz === undefined){
+    try{
+      const r = await fetch(`/api/structures/${id}/xyz`);
+      xyz = r.ok ? await r.text() : null;
+    } catch(e){ xyz = null; }
+    previewXyz.set(id, xyz);
+  }
+  if(gen !== previewGen) return;       // the pointer moved on while this was in flight
+  if(xyz === null){
+    previewBody(`<span class="muted">— (no geometry in the store for this structure)</span>`);
+    placePreview(el); return;
+  }
+  if(!ensurePreviewViewer()){
+    previewBody(`<span class="muted">— (3Dmol.js did not load, so there is nothing to draw)`
+              + `</span>`);
+    placePreview(el); return;
+  }
+  preview.removeAllModels();
+  preview.addModel(xyz, "xyz");
+  preview.setStyle({}, {stick:{radius:0.13}, sphere:{scale:0.26}});
+  preview.resize();                   // the container had no size while it was hidden
+  preview.zoomTo(); preview.render();
+  placePreview(el);
+}
+
 /* ── boot ────────────────────────────────────────────────────── */
 function chips(host, values, onChange, render){
   const el = $(host); el.innerHTML = "";
@@ -1284,7 +1362,7 @@ async function boot(){
   // or a caret painted after this runs is still heard, which per-node handlers are not.
   $("d-routes").addEventListener("click", (e) => {
     const term = e.target.closest("a.term");
-    if(term){ e.preventDefault(); select(Number(term.dataset.sid)); return; }
+    if(term){ e.preventDefault(); hidePreview(); select(Number(term.dataset.sid)); return; }
     const row = e.target.closest("tr.rgroup");
     if(!row || !state.detail) return;
     const g = groupRoutes(state.detail.routes)[Number(row.dataset.gi)];
@@ -1292,6 +1370,20 @@ async function boot(){
     if(!state.openGroups.delete(g.key)) state.openGroups.add(g.key);
     $("d-routes").innerHTML = renderRoutes(state.detail.routes);
   });
+  // Hover is an intent, not a click: nothing is fetched until the pointer has rested.
+  $("d-routes").addEventListener("mouseover", (e) => {
+    const a = e.target.closest("a.term");
+    if(!a) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(
+      () => showPreview(a, Number(a.dataset.sid), a.textContent), PREVIEW_INTENT_MS);
+  });
+  $("d-routes").addEventListener("mouseout", (e) => {
+    if(e.target.closest("a.term")) hidePreview();
+  });
+  // A popover pinned to a rectangle that has moved is worse than no popover.
+  addEventListener("scroll", hidePreview, true);
+  addEventListener("resize", hidePreview);
 
   $("style-stick").onclick = () => { state.style="stick"; applyStyle(); };
   $("style-ball").onclick  = () => { state.style="ball";  applyStyle(); };
