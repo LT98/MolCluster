@@ -49,3 +49,16 @@ For every dataset added, note what it is and anything the OTHER machine must cha
   waiting on something already fixed.  Three rows (Cr/Rh/Mo paddlewheels) are not battery rows
   at all — they are there for S4's `metal_metal_distance` table, and Rh and Mo are deliberately
   metals `geometry.distances.BASE_MO` does not know.
+
+- **`spec_salt_nicl2_thq.json`, `spec_salt_nioac2_thq.json`** (and `_k1` fallbacks) — the
+  NiCl₂ vs Ni(OAc)₂ salt study: which nickel salt forms THQ complexes more readily.
+  Both machines: nothing to configure. Run both into one database, chloride first, so the
+  second run reuses every THQ/water-only structure the first one built.
+  **Input rule — every species is entered in the form it exists in water under the study
+  conditions, and `max_deprotonations` says how far below that form it may go.** So chloride
+  is `[Cl-]` with 0 (HCl does not exist in water, pKa ≈ −6 — entering it as `Cl` with one
+  deprotonation is what put Ni–ClH species into `mvp_ni_thq_cl.db`); acetic acid is `CC(=O)O`
+  with 1 (both HOAc and OAc⁻ are real at pKa ≈ 4.8); tHQ is neutral with 2 (1 in `_k1`).
+  THQ is listed first in both specs because placement payloads name molecules by spec index,
+  and reuse between the two runs depends on those payloads matching. Square-planar is left
+  out: d8 Ni(II) there is low-spin, and these specs model Ni(II) high-spin only.

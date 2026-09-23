@@ -119,7 +119,7 @@ def _compositions(kinds: list[dict[str, Any]], total: int,
 #: `MAX_COMPOSITIONS`: the ladder of a homoleptic sweep is short, the sub-multiset lattice
 #: of a mixed one is not, and hitting the ceiling is reported through the diagnostics
 #: rather than silently truncating the chain.
-MAX_PATHWAY_TASKS = 4000
+MAX_PATHWAY_TASKS = 12000
 
 #: A step runs after every rung is built (`place` is 0) and before the relaxations: it
 #: builds nothing the place tasks do not build, and what it adds is the EDGE.
