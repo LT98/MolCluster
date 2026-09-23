@@ -93,7 +93,9 @@ class Registry:
         reported rather than guessed at.
         """
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        before = self._tables()
         self.conn.executescript(schema)
+        created = sorted(self._tables() - before) if before else []
         self._recreate_views(schema)
         # Before the column reconciliation, not after: the rebuild recreates the table
         # from the target schema, so it delivers `role` and `slot` itself and there is
@@ -118,6 +120,14 @@ class Registry:
                 "ON CONFLICT(version) DO NOTHING",
                 (SCHEMA_VERSION * 1000 + self._next_migration_slot(len(added) + 1),
                  utcnow(), "rebuilt site_catalog: UNIQUE now includes slot"))
+        # A table new to an EXISTING database is a migration too; a fresh one records
+        # only its schema version, since every table in it is new.
+        for table in created:
+            self.conn.execute(
+                "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
+                "ON CONFLICT(version) DO NOTHING",
+                (SCHEMA_VERSION * 1000 + self._next_migration_slot(1), utcnow(),
+                 f"created table {table}"))
         cur = self.conn.execute("SELECT 1 FROM migrations WHERE version = ?", (SCHEMA_VERSION,))
         if cur.fetchone() is None:
             self.conn.execute(
@@ -126,6 +136,11 @@ class Registry:
             )
         self.record_algo_versions()
         self.conn.commit()
+
+    def _tables(self) -> set[str]:
+        return {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND name NOT LIKE '_probe_%'")}
 
     def _next_migration_slot(self, offset: int) -> int:
         """A free slot above whatever this database has already recorded.

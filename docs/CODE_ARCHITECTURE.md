@@ -71,7 +71,7 @@ charge, spin — travels with it in a `methods` row.
 | **energy/** | | |
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
-| `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
+| `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. `charge_separation` blocks in gas, is a caveat in a continuum; `solvent='alpb:water'` is met by energies computed in it or by stored corrections, never both (C16–C18) Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
 | `energy/routes.py` | Prices one edge **for a reader**: a refusal comes back as data, not as an exception, because a panel listing twelve routes cannot be one raise. `decompositions` answers what a structure could have been made from — arithmetic over the registry, flagged `inferred`, never mixed with what was recorded (C15) | ✅ |
 | `energy/protons.py` | Finds protomer pairs and links them with a balanced `AH + n H2O → A(n−) + n H3O+`. The H₂O/H₃O⁺ couple exists because a bare proton has no electrons to price; these are the **only isodesmic edges in the project** | ✅ |
 | **assembly/** | | |
@@ -108,6 +108,8 @@ structures      one row per IDENTITY (L0/L1/L2).  UNIQUE(l0, l1, l2_isomer_tag)
   site_state    one per (site, geometry).  status + ease.  Recomputed per geometry
   reactions     provenance edges INTO a product.  atom_map_json, choice_vector_digest
 methods         what produced a number.  Referenced by every stored value
+  solvation_corrections  dG_solv on ONE geometry from a named 'model:solvent' method.
+                absent = not computed there; methods.solvent NULL = gas phase
 runs / tasks    the queue.  plan() writes, work() drains
                 a run has FOUR endings: done, failed, cancelled (asked for) and
                 interrupted (the process stopped existing — derived, never written

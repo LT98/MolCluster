@@ -171,6 +171,28 @@ CREATE INDEX IF NOT EXISTS ix_geometries_structure ON geometries (structure_id, 
 CREATE INDEX IF NOT EXISTS ix_geometries_energy    ON geometries (energy);
 CREATE INDEX IF NOT EXISTS ix_geometries_choice    ON geometries (choice_vector_digest);
 
+-- ── solvation corrections: a medium on a stored energy (docs/WORKPLAN_solvation.md) ─
+--
+-- A geometry's own energy is in the medium its `methods.solvent` names, and NULL there
+-- means GAS PHASE — stated, not unknown.  This table adds a continuum to an energy
+-- computed without one: dG_solv = E(model, solvent) - E(gas) from ONE correction method
+-- on THIS geometry's coordinates.  The medium is the correction method's `solvent`
+-- token, 'model:solvent' (e.g. 'alpb:water'); a bare solvent name is refused, because
+-- two continuum models on one solvent differ by up to ~1 eV on a charged equation.
+-- Absent row = not computed in that medium, never zero.  C16/C17, D-TBD.
+CREATE TABLE IF NOT EXISTS solvation_corrections (
+    id           INTEGER PRIMARY KEY,
+    geometry_id  INTEGER NOT NULL REFERENCES geometries(id) ON DELETE CASCADE,
+    method_id    INTEGER NOT NULL REFERENCES methods(id),
+    e_gas        REAL    NOT NULL,              -- the correction method, no continuum
+    e_solv       REAL    NOT NULL,              -- the correction method, in the continuum
+    dG_solv      REAL    NOT NULL,              -- e_solv - e_gas, written by the api only
+    created_at   TEXT    NOT NULL,
+    UNIQUE (geometry_id, method_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_solvation_geometry ON solvation_corrections (geometry_id);
+
 -- ── sites: perceive once, refresh accessibility (RESERVED, M4) ───────────────
 
 -- A site is a place a BOND CAN FORM, and that is two things, not one: a donor atom on a

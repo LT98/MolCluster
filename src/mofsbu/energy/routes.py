@@ -88,7 +88,7 @@ def price_reaction(reg: Any, reaction_id: int, *,
 
     # The diagnosis first, so it is attached whether or not a number follows.
     try:
-        quality = check_reference_quality(reg, reaction_id)
+        quality = check_reference_quality(reg, reaction_id, medium=solvent)
         step["isodesmic"] = quality.isodesmic
         step["caveats"] = [i.code for i in quality.issues]
     except REPORTABLE:
@@ -233,7 +233,7 @@ def _derived(reg: Any, target: Any, a: Any, b: Any, recorded: int | None, *,
                       "role": t.role, "side": t.side, "label": t.label} for t in terms]
     subject = f"{a['display_label']} + {b['display_label']}"
     try:
-        quality = quality_for_terms(reg, terms)
+        quality = quality_for_terms(reg, terms, medium=solvent)
         step["isodesmic"] = quality.isodesmic
         step["caveats"] = [i.code for i in quality.issues]
     except REPORTABLE:

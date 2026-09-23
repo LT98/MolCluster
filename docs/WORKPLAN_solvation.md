@@ -66,7 +66,7 @@ minimum for the Ni complex).
 1. The gas-phase numbers are dominated by charge separation in vacuum: the continuum removes
    5.8 eV of R1's 7.4 and 13.9 eV of R2's 17.2. `check_reference_quality` passed both as
    isodesmic with no caveat. That is the defect §3 C18 closes.
-2. The continuum does **not** make them right. R1 at +1.6 eV corresponds to a pKa near 27; the
+2. The continuum does **not** make them right. R1 at +1.6 eV corresponds to a pKa about 27 units above H₃O⁺'s; the
    ligand is a moderately strong acid (a pKa₁ near 5 would mean ~+0.4 eV, *to be sourced before
    anyone quotes it*). The residual is the continuum's known weakness on small ions — H₃O⁺
    above all — plus missing thermal terms. That is what (b), explicit solvation of H₃O⁺ and the

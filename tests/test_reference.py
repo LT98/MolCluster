@@ -9,21 +9,23 @@ this module have let that number be produced silently?
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
-from mofsbu._types import Fidelity, MethodSpec, ReferenceSchemeError
+from mofsbu._types import Fidelity, MethodSpec, ReferenceSchemeError, split_medium
 from mofsbu.energy.backends import NullBackend
 from mofsbu.energy.reference import (
-    BARE_ION, COORDINATION_CHANGE, NAKED_POLYANION, check_balance,
+    BARE_ION, CHARGE_SEPARATION, COORDINATION_CHANGE, NAKED_POLYANION, check_balance,
     check_reference_quality, put_balanced_reaction, reaction_balanced_energy,
-    reaction_terms, store_reaction_energy,
+    Term, quality_for_terms, reaction_terms, store_reaction_energy,
 )
 from mofsbu.energy.protons import deprotonation_pairs, link_protomers
 from mofsbu.energy.routes import decompositions, price_incoming_routes, price_reaction
 from mofsbu.graph import EdgeType, TypedGraph
 from mofsbu.registry import (
-    Provenance, ReadOnlyRegistry, Registry, put_geometry, put_reaction, put_structure,
+    Provenance, ReadOnlyRegistry, Registry, RegistryError, get_graph, put_geometry,
+    put_reaction, put_solvation_correction, put_structure, solvation_corrections,
 )
 
 XTB = MethodSpec(code="tblite", code_version="0.4.0", method="GFN2-xTB")
@@ -132,7 +134,9 @@ def test_the_legacy_equation_balances_and_is_still_refused(reg):
 
     quality = check_reference_quality(reg, rid)
     assert not quality.isodesmic
-    assert {i.code for i in quality.issues} == {BARE_ION, COORDINATION_CHANGE}
+    # Ni2+ + OH- pair up: the ion count changes too, which gas phase gets wrong by eV.
+    assert {i.code for i in quality.issues} == {BARE_ION, COORDINATION_CHANGE,
+                                                CHARGE_SEPARATION}
     assert quality.dative_delta == 2          # two bonds appear out of nothing
 
     with pytest.raises(ReferenceSchemeError, match="not isodesmic"):
@@ -248,7 +252,7 @@ def balanced(reg):
 
 def test_energy_is_products_minus_reagents(reg, balanced):
     rid, _ = balanced
-    result = reaction_balanced_energy(reg, rid)
+    result = reaction_balanced_energy(reg, rid, strict=False)
     assert result.dE == pytest.approx((-100.0 + -14.0) - (-60.0 + -15.0))
     assert result.method.method == "GFN2-xTB"
     assert result.fidelity is Fidelity.XTB
@@ -261,7 +265,8 @@ def test_stoichiometry_is_honoured(reg):
     h3o = _store(reg, hydronium(), energy=-14.0)
     oh = _store(reg, hydroxide(), energy=-13.0)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
-    assert reaction_balanced_energy(reg, rid).dE == pytest.approx((-14.0 + -13.0) - 2 * -15.0)
+    energy = reaction_balanced_energy(reg, rid, strict=False)
+    assert energy.dE == pytest.approx((-14.0 + -13.0) - 2 * -15.0)
 
 
 def test_mixed_levels_of_theory_are_refused(reg, balanced):
@@ -271,7 +276,7 @@ def test_mixed_levels_of_theory_are_refused(reg, balanced):
                  fidelity=Fidelity.XTB, method=XTB_WATER, energy=-16.0, converged=True)
     # Asking for the aqueous medium now finds water solvated and everything else absent.
     with pytest.raises(ReferenceSchemeError, match="no energy"):
-        reaction_balanced_energy(reg, rid, solvent="water")
+        reaction_balanced_energy(reg, rid, strict=False, solvent="water")
 
 
 def test_a_missing_energy_is_named_not_skipped(reg):
@@ -282,7 +287,7 @@ def test_a_missing_energy_is_named_not_skipped(reg):
     rid = put_balanced_reaction(reg, product, reagents=[(aqua, 1), (bare, 1)],
                                 leaving=[(h3o, 1)])
     with pytest.raises(ReferenceSchemeError, match="has no energy"):
-        reaction_balanced_energy(reg, rid)
+        reaction_balanced_energy(reg, rid, strict=False)
 
 
 def test_the_null_backend_cannot_score_a_reaction_by_accident(reg):
@@ -292,8 +297,9 @@ def test_the_null_backend_cannot_score_a_reaction_by_accident(reg):
     oh = _store(reg, hydroxide(), energy=-13.0, method=null, fidelity=Fidelity.RAW)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
     with pytest.raises(ReferenceSchemeError, match="non-physical"):
-        reaction_balanced_energy(reg, rid)
-    assert reaction_balanced_energy(reg, rid, allow_null=True).dE == pytest.approx(-27.0 + 30.0)
+        reaction_balanced_energy(reg, rid, strict=False)
+    energy = reaction_balanced_energy(reg, rid, strict=False, allow_null=True)
+    assert energy.dE == pytest.approx(-27.0 + 30.0)
 
 
 def test_a_charge_blind_backend_is_refused_on_a_charged_equation(reg):
@@ -303,7 +309,7 @@ def test_a_charge_blind_backend_is_refused_on_a_charged_equation(reg):
     oh = _store(reg, hydroxide(), energy=-13.0, method=MACE, fidelity=Fidelity.ML)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
     with pytest.raises(ReferenceSchemeError, match="charge-blind"):
-        reaction_balanced_energy(reg, rid)
+        reaction_balanced_energy(reg, rid, strict=False)
 
 
 def test_a_charge_blind_backend_is_fine_on_a_neutral_equation(reg):
@@ -325,7 +331,7 @@ def test_a_charge_aware_mlip_is_accepted_on_a_charged_equation(reg):
     h3o = _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)
     oh = _store(reg, hydroxide(), energy=-13.0, method=OMOL, fidelity=Fidelity.ML)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
-    energy = reaction_balanced_energy(reg, rid)
+    energy = reaction_balanced_energy(reg, rid, strict=False)
     assert energy.dE == pytest.approx(-14.0 - 13.0 - 2 * -15.0)
     assert energy.method.method == "MACE-OMOL-0"
 
@@ -344,7 +350,7 @@ def test_two_mlips_on_one_rung_are_never_mixed_into_one_equation(reg):
     h3o = _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)
     oh = _store(reg, hydroxide(), energy=-13.0, method=OMOL, fidelity=Fidelity.ML)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
-    energy = reaction_balanced_energy(reg, rid)
+    energy = reaction_balanced_energy(reg, rid, strict=False)
     # -3000 is the numerically lowest energy in the table and must not appear.
     assert energy.dE == pytest.approx(-14.0 - 13.0 - 2 * -15.0)
     assert energy.method.method == "MACE-OMOL-0"
@@ -357,7 +363,7 @@ def test_a_species_missing_from_the_pinned_theory_is_named_not_substituted(reg):
     oh = _store(reg, hydroxide(), energy=-13.0, method=MACE, fidelity=Fidelity.ML)
     rid = put_balanced_reaction(reg, h3o, reagents=[(wat, 2)], leaving=[(oh, 1)])
     with pytest.raises(ReferenceSchemeError, match="MACE-OMOL-0"):
-        reaction_balanced_energy(reg, rid)
+        reaction_balanced_energy(reg, rid, strict=False)
 
 
 def test_the_weakest_rung_sets_the_fidelity(reg):
@@ -368,7 +374,7 @@ def test_the_weakest_rung_sets_the_fidelity(reg):
     h3o = _store(reg, hydronium(), energy=-14.0)
     rid = put_balanced_reaction(reg, product, reagents=[(aqua, 1), (wat, 1)],
                                 leaving=[(h3o, 1)])
-    assert reaction_balanced_energy(reg, rid).fidelity is Fidelity.RAW
+    assert reaction_balanced_energy(reg, rid, strict=False).fidelity is Fidelity.RAW
 
 
 def test_unconverged_geometries_are_flagged_and_can_be_refused(reg):
@@ -378,9 +384,9 @@ def test_unconverged_geometries_are_flagged_and_can_be_refused(reg):
     h3o = _store(reg, hydronium(), energy=-14.0)
     rid = put_balanced_reaction(reg, product, reagents=[(aqua, 1), (wat, 1)],
                                 leaving=[(h3o, 1)])
-    assert reaction_balanced_energy(reg, rid).all_converged is False
+    assert reaction_balanced_energy(reg, rid, strict=False).all_converged is False
     with pytest.raises(ReferenceSchemeError, match="upper bound"):
-        reaction_balanced_energy(reg, rid, allow_unconverged=False)
+        reaction_balanced_energy(reg, rid, strict=False, allow_unconverged=False)
 
 
 # ── writing it back ──────────────────────────────────────────────────────────
@@ -402,8 +408,8 @@ def test_a_non_isodesmic_energy_cannot_be_stored_silently(reg):
 def test_storing_an_energy_records_its_method(reg, balanced):
     """Ground rule 3, at the reaction level: no bare float in the dG column."""
     rid, _ = balanced
-    result = reaction_balanced_energy(reg, rid)
-    store_reaction_energy(reg, rid, result)
+    result = reaction_balanced_energy(reg, rid, strict=False)
+    store_reaction_energy(reg, rid, result, force=True)     # gas-phase charge separation
     row = reg.conn.execute("SELECT dG, method_id, fidelity FROM reactions WHERE id=?",
                            (rid,)).fetchone()
     assert row["dG"] == pytest.approx(result.dE)
@@ -543,13 +549,10 @@ def test_protomers_of_one_molecule_are_found_by_arithmetic(reg):
     assert (acid, base, 1) in deprotonation_pairs(reg)
 
 
-def test_a_deprotonation_edge_is_isodesmic(reg):
-    """The first equations here that `strict=True` accepts.
-
-    No metal-donor bond changes across a proton transfer, so the rule that refuses every
-    assembly edge has nothing to object to — which is the whole reason the couple exists
-    rather than a bare H+.
-    """
+def test_a_deprotonation_edge_is_isodesmic_and_charge_separating(reg):
+    """No metal-donor bond changes across a proton transfer, so the bond-type rules have
+    nothing to object to — which is the whole reason the couple exists rather than a bare
+    H+.  It still separates one ion into two, so in gas phase `strict` refuses it (C18)."""
     acid = _store(reg, aqua_ion(2), energy=-100.0)
     base = _store(reg, hydroxo_complex(), energy=-95.0)
     wat = _store(reg, water(), energy=-15.0)
@@ -560,8 +563,11 @@ def test_a_deprotonation_edge_is_isodesmic(reg):
                 if (w["protonated"], w["deprotonated"]) == (acid, base))
     assert edge["why_not"] is None
 
-    energy = reaction_balanced_energy(reg, edge["reaction_id"], strict=True)
+    with pytest.raises(ReferenceSchemeError, match=CHARGE_SEPARATION):
+        reaction_balanced_energy(reg, edge["reaction_id"], strict=True)
+    energy = reaction_balanced_energy(reg, edge["reaction_id"], strict=False)
     assert energy.quality.isodesmic is True
+    assert [i.code for i in energy.quality.issues] == [CHARGE_SEPARATION]
     assert energy.dE == pytest.approx((-95.0 + -14.0) - (-100.0 + -15.0))
 
 
@@ -593,3 +599,179 @@ def test_a_split_below_the_floor_is_refused_not_hidden(reg):
     assert found                                   # still offered, not silently dropped
     assert all(not d["can_price"] for d in found)
     assert all("XTB" in d["why_not"] and "DFT" in d["why_not"] for d in found)
+
+
+# ── a medium on a stored energy (C16–C18, docs/WORKPLAN_solvation.md) ─────────
+
+ALPB = "alpb:water"
+
+
+def _xtb_alpb(charge, multiplicity, version="0.7.0"):
+    return MethodSpec(code="tblite", code_version=version, method="GFN2-xTB", solvent=ALPB,
+                      charge=charge, multiplicity=multiplicity)
+
+
+def _geometry_of(reg, sid):
+    return int(reg.conn.execute(
+        "SELECT best_geometry_id FROM structures WHERE id=?", (sid,)).fetchone()[0])
+
+
+def _correct(reg, sid, dG, *, version="0.7.0"):
+    g = get_graph(reg, sid)
+    return put_solvation_correction(
+        reg, _geometry_of(reg, sid), method=_xtb_alpb(g.charge, g.multiplicity, version),
+        e_gas=-10.0, e_solv=-10.0 + dG)
+
+
+@pytest.fixture()
+def deprotonation(reg):
+    """[Ni(H2O)2]2+ + H2O -> [Ni(OH)(H2O)]+ + H3O+ on OMOL-0: one ion becomes two."""
+    ids = {"product": _store(reg, hydroxo_complex(), energy=-100.0, method=OMOL,
+                             fidelity=Fidelity.ML),
+           "aqua": _store(reg, aqua_ion(2), energy=-60.0, method=OMOL, fidelity=Fidelity.ML),
+           "water": _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML),
+           "h3o": _store(reg, hydronium(), energy=-14.0, method=OMOL, fidelity=Fidelity.ML)}
+    rid = put_balanced_reaction(reg, ids["product"], reagents=[(ids["aqua"], 1),
+                                                               (ids["water"], 1)],
+                                leaving=[(ids["h3o"], 1)])
+    return rid, ids
+
+
+DG = {"product": -2.0, "aqua": -6.0, "water": -0.4, "h3o": -4.4}
+
+
+def test_charge_separation_blocks_in_gas_and_travels_as_a_caveat_in_a_continuum(
+        reg, deprotonation):
+    rid, _ = deprotonation
+    gas = check_reference_quality(reg, rid)
+    assert gas.isodesmic                              # no bond-type rule is broken
+    assert gas.ion_delta == 1 and not gas.acceptable
+    assert [(i.code, i.blocking) for i in gas.issues] == [(CHARGE_SEPARATION, True)]
+    wet = check_reference_quality(reg, rid, medium=ALPB)
+    assert wet.acceptable
+    assert [(i.code, i.blocking) for i in wet.issues] == [(CHARGE_SEPARATION, False)]
+    assert "caveat" in wet.describe()
+
+
+def test_the_rule_reads_only_the_terms_so_a_net_equation_is_weighed_the_same(reg):
+    """A composed route's net equation: the carrier on both sides cancels, the ions count."""
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+    oh = _store(reg, hydroxide(), energy=-13.0)
+    through = (Term(h3o, 1, "reagent", "reagent"), Term(h3o, 1, "leaving", "product"))
+    assert quality_for_terms(reg, through).ion_delta == 0
+    net = (Term(wat, 2, "reagent", "reagent"), Term(h3o, 1, "leaving", "product"),
+           Term(oh, 1, "leaving", "product"))
+    assert quality_for_terms(reg, net).ion_delta == 2
+    assert quality_for_terms(reg, net[::-1]).ion_delta == 2      # order is irrelevant
+
+
+def test_a_gas_phase_charge_separation_needs_force_to_be_stored(reg, deprotonation):
+    rid, _ = deprotonation
+    with pytest.raises(ReferenceSchemeError, match="not usable in gas phase"):
+        reaction_balanced_energy(reg, rid)
+    result = reaction_balanced_energy(reg, rid, strict=False)
+    with pytest.raises(ReferenceSchemeError, match="refusing to store"):
+        store_reaction_energy(reg, rid, result)
+    store_reaction_energy(reg, rid, result, force=True)
+    note = reg.conn.execute("SELECT note FROM reactions WHERE id=?", (rid,)).fetchone()["note"]
+    assert f"CAVEAT:{CHARGE_SEPARATION}" in note and "NOT-ISODESMIC" not in note
+
+
+def test_a_corrected_medium_adds_each_species_correction_on_its_own_geometry(
+        reg, deprotonation):
+    rid, ids = deprotonation
+    for name, sid in ids.items():
+        assert _correct(reg, sid, DG[name]).created
+    energy = reaction_balanced_energy(reg, rid, solvent=ALPB)       # strict: a caveat now
+    gas = (-100.0 + -14.0) - (-60.0 + -15.0)
+    assert energy.dE == pytest.approx(gas + DG["product"] + DG["h3o"] - DG["aqua"]
+                                      - DG["water"])
+    assert energy.method.method == "MACE-OMOL-0" and energy.method.solvent == ALPB
+    assert energy.method.extras["solvation_correction"]["method"] == "GFN2-xTB"
+    assert "(caveat)" in energy.describe()
+
+
+def test_a_species_without_a_correction_is_named_not_left_in_gas(reg, deprotonation):
+    rid, ids = deprotonation
+    for name in ("product", "aqua", "h3o"):
+        _correct(reg, ids[name], DG[name])
+    with pytest.raises(ReferenceSchemeError, match=f"{ids['water']} .*no energy.*{ALPB}"):
+        reaction_balanced_energy(reg, rid, solvent=ALPB)
+
+
+def test_a_direct_and_a_corrected_energy_are_never_mixed(reg, deprotonation):
+    rid, ids = deprotonation
+    for name in ("product", "aqua", "h3o"):
+        _correct(reg, ids[name], DG[name])
+    put_geometry(reg, ids["water"], "3\nH2O-aq\nO 9.0 0.0 0.0\nH 9.9 0.0 0.0\nH 8.7 0.9 0.0\n",
+                 fidelity=Fidelity.XTB, method=_xtb_alpb(0, 1), energy=-16.0, converged=True)
+    with pytest.raises(ReferenceSchemeError, match="by one route"):
+        reaction_balanced_energy(reg, rid, solvent=ALPB)
+
+
+def test_the_correction_theory_is_pinned_across_the_equation(reg, deprotonation):
+    rid, ids = deprotonation
+    for name in ("product", "aqua", "h3o"):
+        _correct(reg, ids[name], DG[name])
+    _correct(reg, ids["water"], DG["water"], version="0.6.0")
+    with pytest.raises(ReferenceSchemeError, match="pinned to the first term's correction"):
+        reaction_balanced_energy(reg, rid, solvent=ALPB)
+
+
+def test_a_correction_is_never_borrowed_from_a_sibling_geometry(reg):
+    """The energy and its correction come from ONE geometry, whichever that is."""
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    first = _geometry_of(reg, wat)
+    second = put_geometry(reg, wat, "3\nH2O-b\nO 5.0 0.0 0.0\nH 5.9 0.0 0.0\nH 4.7 0.9 0.0\n",
+                          fidelity=Fidelity.ML, method=OMOL, energy=-14.5,
+                          converged=True).id
+    put_solvation_correction(reg, second, method=_xtb_alpb(0, 1), e_gas=-10.0, e_solv=-10.3)
+    assert _geometry_of(reg, wat) == first != second    # the correction is not on the best
+    rid = put_balanced_reaction(reg, wat, reagents=[(wat, 2)], leaving=[(wat, 1)])
+    energy = reaction_balanced_energy(reg, rid, solvent=ALPB)
+    assert {round(e, 9) for _, _, e in energy.contributions} == {round(-14.5 - 0.3, 9)}
+
+
+def test_a_correction_states_its_model_charge_and_starting_point(reg):
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    gid = _geometry_of(reg, wat)
+    bare = MethodSpec(code="tblite", code_version="0.7.0", method="GFN2-xTB",
+                      solvent="water", charge=0, multiplicity=1)
+    with pytest.raises(RegistryError, match="model:solvent"):
+        put_solvation_correction(reg, gid, method=bare, e_gas=-1.0, e_solv=-1.4)
+    with pytest.raises(RegistryError, match="gas phase"):
+        put_solvation_correction(reg, gid, method=replace(bare, solvent=None),
+                                 e_gas=-1.0, e_solv=-1.4)
+    with pytest.raises(RegistryError, match="charge"):
+        put_solvation_correction(reg, gid, method=_xtb_alpb(1, 1), e_gas=-1.0, e_solv=-1.4)
+    with pytest.raises(RegistryError, match="must be stated"):
+        put_solvation_correction(reg, gid, method=replace(_xtb_alpb(0, 1), charge=None),
+                                 e_gas=-1.0, e_solv=-1.4)
+    solvated = put_geometry(reg, wat, "3\nH2O-aq\nO 9.0 0.0 0.0\nH 9.9 0.0 0.0\nH 8.7 0.9 0.0\n",
+                            fidelity=Fidelity.XTB, method=_xtb_alpb(0, 1), energy=-16.0).id
+    with pytest.raises(RegistryError, match="counts solvation twice"):
+        put_solvation_correction(reg, solvated, method=_xtb_alpb(0, 1), e_gas=-1.0,
+                                 e_solv=-1.4)
+
+
+def test_a_repeated_correction_is_one_row_and_a_disagreeing_one_is_refused(reg):
+    wat = _store(reg, water(), energy=-15.0, method=OMOL, fidelity=Fidelity.ML)
+    gid = _geometry_of(reg, wat)
+    first = put_solvation_correction(reg, gid, method=_xtb_alpb(0, 1), e_gas=-1.0,
+                                     e_solv=-1.4)
+    again = put_solvation_correction(reg, gid, method=_xtb_alpb(0, 1), e_gas=-1.0,
+                                     e_solv=-1.4)
+    assert first.created and not again.created and first.id == again.id
+    [row] = solvation_corrections(reg, gid, ALPB)
+    assert row["dG_solv"] == pytest.approx(-0.4) and row["medium"] == ALPB
+    assert solvation_corrections(reg, gid, "gbsa:water") == []          # absent, not zero
+    with pytest.raises(RegistryError, match="disagrees"):
+        put_solvation_correction(reg, gid, method=_xtb_alpb(0, 1), e_gas=-1.0, e_solv=-1.5)
+
+
+def test_a_medium_must_name_its_model():
+    assert split_medium("ALPB:Water") == ("alpb", "water")
+    for token in ("water", ":water", "alpb:"):
+        with pytest.raises(ValueError, match="model:solvent"):
+            split_medium(token)

@@ -51,7 +51,7 @@ ALGO_VERSIONS: dict[str, str] = {
     #    algo=1 and are never re-labelled (ground rule 6); they are simply not the same
     #    method as anything computed from here on, which is correct — they are not.
     "energy_backends":  "2",      # backend protocol + how a MethodSpec is filled in
-    "reference_scheme": "balanced1",   # reaction-balanced energies (M7)
+    "reference_scheme": "balanced2",   # + charge_separation, corrected media (C16-C18)
     "spin_convention":  "hs1",    # high_spin_multiplicity: d-count table + charge
     "descriptor_tables": "1",     # curated donor table + generated metal table (M1, C8)
     # The C5 floor as ratified in D18: which components exist, how they are weighted,

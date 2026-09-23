@@ -691,6 +691,13 @@ Each open checkpoint is scheduled at the milestone where code first forces the c
   under a role that the ladder walk ignores.
   *Note:* `put_reaction` can now express stoichiometry, which was the blocking prerequisite
   either way — a diaqua complex has to be able to say *two* waters.
+- **C16–C21 — solvation, cluster-continuum (open, measured):** where a medium is recorded
+  (C16), whether ML energy + xTB continuum correction on the same geometry is an acceptable
+  medium (C17), charge separation as a reference-quality rule (C18), how an explicit solvent
+  count attaches to a species without touching L0/L1 (C19), the reference count and its ±2
+  window (C20), and the proton reference and standard state (C21). Options, measurements and
+  recommendations in [`WORKPLAN_solvation.md`](WORKPLAN_solvation.md) §3; S1 builds C16–C18's
+  recommendations provisionally. Ledger entry **D-TBD**.
 *(C8 — descriptor-layer sourcing — was here; resolved in M1 in favour of curated tables with
 per-row `source` + `source_version`. See `archive/PLAN_completed.md` rev 19.)*
 
