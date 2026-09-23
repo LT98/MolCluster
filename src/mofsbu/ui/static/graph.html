@@ -57,6 +57,10 @@ h2:first-child{margin-top:0}
 .h2-opt{float:right;text-transform:none;letter-spacing:0;font-size:10.5px;
         cursor:pointer;display:inline-flex;align-items:center;gap:3px}
 .h2-opt input{margin:0;vertical-align:middle}
+.h2-btn{float:right;text-transform:none;letter-spacing:0;font-size:10.5px;
+        padding:1px 7px;margin-top:-2px}
+.h2-btn:hover:not(:disabled){border-color:var(--warn);color:var(--warn)}
+.h2-btn:disabled{opacity:.35;cursor:default}
 .chart-head{display:flex;align-items:flex-end;gap:12px}
 .chart-head h2{flex:1;margin:0}
 .mono{font-family:var(--mono)}
@@ -93,8 +97,14 @@ button.primary{background:var(--accent-soft);border-color:var(--accent);color:va
 #focus-3d{position:relative;height:170px;margin-top:8px;border:1px solid var(--line);
   border-radius:5px;overflow:hidden;background:var(--bg)}
 .mv-stage{position:absolute;inset:0}
+/* The note covers the stage, so it must not take the pointer: 3Dmol reads drag events
+   off the canvas underneath, and anything sitting over it makes the model unturnable.
+   `[hidden]` needs saying too — an author `display:flex` beats the UA's `[hidden]`
+   rule, so the empty note would otherwise still be there, invisible and in the way. */
 .mv-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  text-align:center;padding:0 10px;font-size:11.5px;color:var(--muted);z-index:1}
+  text-align:center;padding:0 10px;font-size:11.5px;color:var(--muted);z-index:1;
+  pointer-events:none}
+.mv-note[hidden]{display:none}
 .mv-bar{display:flex;gap:4px;margin-top:5px}
 .mv-bar button{font-size:11px;padding:2px 7px}
 .mv-bar button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
@@ -135,18 +145,20 @@ tbody tr.derived td{border-bottom-style:dashed}
 #diagram svg{display:block;width:100%;height:100%}
 .ax{stroke:var(--line);stroke-width:1}
 .ax-zero{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
-.ax-text{fill:var(--muted);font-size:10px;font-family:var(--mono)}
+/* Chart text scales off one variable set on the <svg>, so the size control is one
+   number and every label — axis, name, dE, level value — moves together. */
+.ax-text{fill:var(--muted);font-size:calc(10px * var(--fs,1));font-family:var(--mono)}
 .level{stroke:var(--accent);stroke-width:2.5;stroke-linecap:round}
 .level-hit{stroke:transparent;stroke-width:16;cursor:pointer}
 .link{stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
 .link.inferred{stroke:var(--warn);stroke-dasharray:2 3}
-.node-label{fill:var(--ink);font-size:10.5px;cursor:default}
+.node-label{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));cursor:default}
 .node-label.here{font-weight:700;fill:var(--accent)}
-.step-dE{fill:var(--ink);font-size:10.5px;font-family:var(--mono)}
-.step-species{font-size:10px}
-.level-y{font-size:9.5px;font-family:var(--mono);opacity:.85}
+.step-dE{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));font-family:var(--mono)}
+.step-species{font-size:calc(10px * var(--fs,1))}
+.level-y{font-size:calc(9.5px * var(--fs,1));font-family:var(--mono);opacity:.85}
 .gap{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
-.gap-text{fill:var(--muted);font-size:10px}
+.gap-text{fill:var(--muted);font-size:calc(10px * var(--fs,1))}
 .diag-note{font-size:11.5px;color:var(--muted);padding:2px 0}
 .diag-note .caveat{color:var(--warn)}
 
@@ -218,7 +230,10 @@ body.stubs-off .stub{display:none}
     <div id="msg"></div>
     <nav id="trail" aria-label="the walk so far"></nav>
 
-    <h2>standing on</h2>
+    <h2>standing on
+      <button id="drop-node" class="h2-btn"
+              title="take this node off the chart, and with it every route that goes
+ through it">drop node</button></h2>
     <div id="focus" class="none">
       <h1 id="focus-label">no target</h1>
       <div id="focus-sub">give a structure id, or press “graph this” on the registry page</div>
@@ -320,7 +335,8 @@ function mountStubs(){
 const state = {target: null, routes: [], active: 0, at: 0,
                data: null, cache: new Map(),
                prefs: {labels: true, levelValues: false, species: false,
-                       colour: true, anchor: "target", derived: false}};
+                       colour: true, anchor: "target", derived: false,
+                       fontScale: 1}};
 
 const route = () => state.routes[state.active] || null;
 const here = () => { const r = route(); return r ? r.trail[state.at] : null; };
@@ -465,7 +481,13 @@ function renderSteps(routes, derived, species){
    is reversed to draw it. */
 //: `bottom` carries two rows of names, because sub-columns are narrower than the
 //: names that go under them and one row would have them running into each other.
-const PAD = {top: 18, right: 18, bottom: 46, left: 56};
+//: Both margins grow with the text, or a larger font runs out of the box it is in.
+const PAD0 = {top: 18, right: 18, bottom: 46, left: 56};
+const pad = () => {
+  const f = state.prefs.fontScale || 1;
+  return {top: PAD0.top, right: PAD0.right,
+          bottom: Math.round(PAD0.bottom * f), left: Math.round(PAD0.left * f)};
+};
 
 function niceTicks(lo, hi, want){
   const span = (hi - lo) || 1;
@@ -550,6 +572,7 @@ function drawDiagram(){
   const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
   const span = (hi - lo) || 1;
   const yLo = lo - span * 0.12, yHi = hi + span * 0.12;
+  const PAD = pad(), fs = state.prefs.fontScale || 1;
   const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
   const slot = plotW / depth;
   // Index 0 is the target and it is drawn on the RIGHT; a longer route simply reaches
@@ -630,14 +653,14 @@ function drawDiagram(){
       let line = 0;
       if(state.prefs.labels){
         bits.push(`<text class="step-dE" fill="${col}" x="${mx.toFixed(1)}"`
-                + ` y="${(my - 5).toFixed(1)}" text-anchor="middle">`
+                + ` y="${(my - 5 * fs).toFixed(1)}" text-anchor="middle">`
                 + `${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
         line += 1;
       }
       const moved = state.prefs.species ? movement(s) : "";
       if(moved)
         bits.push(`<text class="step-species" fill="${col}" x="${mx.toFixed(1)}"`
-                + ` y="${(my - 5 - line * 11).toFixed(1)}" text-anchor="middle">`
+                + ` y="${(my - (5 + line * 11) * fs).toFixed(1)}" text-anchor="middle">`
                 + `${esc(moved)}</text>`);
     });
 
@@ -674,7 +697,7 @@ function drawDiagram(){
         // of these, and reading one off the axis by eye is an estimate.
         if(state.prefs.levelValues)
           bits.push(`<text class="level-y" fill="${col}" x="${x.toFixed(1)}"`
-                  + ` y="${(Number(y) - 6).toFixed(1)}" text-anchor="middle">`
+                  + ` y="${(Number(y) - 6 * fs).toFixed(1)}" text-anchor="middle">`
                   + `${(n.y + dy) > 0 ? "+" : ""}${(n.y + dy).toFixed(2)}</text>`);
       }
       // Names stagger over two rows: sub-columns are narrower than the names in them.
@@ -682,13 +705,14 @@ function drawDiagram(){
       const label = name.length > 20 ? name.slice(0, 19) + "…" : name;
       bits.push(`<text class="node-label${isHere ? " here" : ""}"`
               + ` data-sid="${esc(n.structure_id)}" x="${x.toFixed(1)}"`
-              + ` y="${(PAD.top + plotH + 13 + (row % 2) * 12).toFixed(1)}"`
+              + ` y="${(PAD.top + plotH + (13 + (row % 2) * 12) * fs).toFixed(1)}"`
               + ` text-anchor="middle"><title>${esc(n.display_label || "")}</title>`
               + `${esc(label)}</text>`);
     });
   });
 
   host.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img"`
+    + ` style="--fs:${fs}"`
     + ` aria-label="formation energy along ${state.routes.length} route(s)">`
     + bits.join("") + `</svg>`;
 }
@@ -851,6 +875,8 @@ let focusViewer = null;
 function renderFocus(s){
   const box = $("focus"), why = $("focus-why");
   if(focusViewer) focusViewer.show(s ? s.id : null);
+  // Dropping the target is loading a different one, which has its own control.
+  $("drop-node").disabled = !s || s.id === state.target;
   if(!s){
     box.classList.add("none");
     $("focus-label").textContent = "no target";
@@ -903,6 +929,33 @@ async function stepTo(sid, via){
 function focusAt(routeIx, at){
   state.active = routeIx;
   state.at = Math.max(0, Math.min(at, trailOf(routeIx).length - 1));
+  writeHash();
+  showHere();
+}
+
+/* Take a node off the chart, and with it every route that goes through it.  A route
+   is a claim about how this structure is reached; if the node is wrong, so is each of
+   them, and leaving the rest of a route behind would be a route nobody built.  The
+   target is excluded — it is where every route ends, so dropping it is loading a
+   different target, which is a different action with its own control. */
+function dropNode(sid){
+  sid = Number(sid);
+  if(!state.target) return;
+  if(sid === state.target){
+    say("the target is where every route ends — load a different one instead");
+    return;
+  }
+  const before = state.routes.length;
+  const keep = state.routes.filter(r => !r.trail.some(n => n.sid === sid));
+  if(keep.length === before){ say(`no route on the chart passes through #${sid}`); return; }
+  state.routes = keep.length ? keep
+    : [{trail: [{sid: state.target, via: null, label: ""}], path: null, why_not: null}];
+  state.active = 0;
+  state.at = trailOf(0).length - 1;
+  say(keep.length
+    ? `dropped #${sid} and ${before - keep.length} route`
+      + `${before - keep.length === 1 ? "" : "s"} through it`
+    : `every route went through #${sid} — back to the target alone`);
   writeHash();
   showHere();
 }
@@ -1018,6 +1071,8 @@ function savePrefs(){
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); } catch(e){}
 }
 
+const FONT_SCALES = [[0.85, "S"], [1, "M"], [1.2, "L"], [1.45, "XL"], [1.8, "XXL"]];
+
 const TOGGLES = [
   {key: "labels", label: "dE", title: "the step's energy change, on every connector"},
   {key: "levelValues", label: "level value",
@@ -1039,8 +1094,19 @@ function mountToggles(){
     + ` out at different species, so those zeros are different systems — the target is`
     + ` the only node they all share">`
     + `<input type="checkbox" data-pref="anchorRoot"`
-    + `${state.prefs.anchor === "root" ? " checked" : ""}> zero at root</label>`;
+    + `${state.prefs.anchor === "root" ? " checked" : ""}> zero at root</label>`
+    // One number drives every label on the chart, and the margins with them.
+    + `<label class="tg" title="size of every label on the chart">text `
+    + `<select id="font-scale">`
+    + FONT_SCALES.map(([v, name]) =>
+        `<option value="${v}"${Math.abs(state.prefs.fontScale - v) < 1e-6
+          ? " selected" : ""}>${esc(name)}</option>`).join("")
+    + `</select></label>`;
   $("toggles").onchange = (e) => {
+    if(e.target.id === "font-scale"){
+      state.prefs.fontScale = Number(e.target.value) || 1;
+      savePrefs(); drawDiagram(); return;
+    }
     const k = e.target.dataset.pref;
     if(!k) return;
     if(k === "anchorRoot") state.prefs.anchor = e.target.checked ? "root" : "target";
@@ -1164,6 +1230,10 @@ function boot(){
     focusViewer.style(b.dataset.style);
   });
 
+  $("drop-node").onclick = () => {
+    const n = here();
+    if(n) dropNode(n.sid);
+  };
   $("want-derived").checked = state.prefs.derived;
   $("want-derived").onchange = (e) => {
     state.prefs.derived = e.target.checked; savePrefs(); showHere();
