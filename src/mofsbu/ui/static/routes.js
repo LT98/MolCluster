@@ -70,12 +70,14 @@ function renderTerms(step){
    `tests/test_ui_controls.py` pins, and it must not move. */
 function groupRoutes(routes){
   const seen = new Map(), out = [];
+  // Both sides are in the key: edges that CONSUME one structure share their reagents
+  // and can still make different products (two isomers of one adduct).
+  const side = (terms, s) => terms.filter(t => t.side === s)
+    .map(t => Number(t.structure_id)).sort((a, b) => a - b).join(",");
   for(const r of routes){
     const step = (r.steps && r.steps[0]) || null;
-    const ids = ((step && step.terms) || [])
-      .filter(t => t.side === "reagent").map(t => Number(t.structure_id))
-      .sort((a, b) => a - b);
-    const key = ids.join(",");
+    const terms = (step && step.terms) || [];
+    const key = side(terms, "reagent") + ">" + side(terms, "product");
     let g = seen.get(key);
     if(!g){ g = {key, rep:r, members:[], vectors:new Set()}; seen.set(key, g); out.push(g); }
     g.members.push(r);

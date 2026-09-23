@@ -152,6 +152,12 @@ tbody tr.derived td{border-bottom-style:dashed}
 .level-hit{stroke:transparent;stroke-width:16;cursor:pointer}
 .link{stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
 .link.inferred{stroke:var(--warn);stroke-dasharray:2 3}
+/* A pivot is where the walk turned: bookkeeping for a composed exchange, not an
+   intermediate, so its bar is drawn hollow and its height must not be read as a barrier. */
+.level.pivot{stroke-dasharray:3 3;opacity:.55}
+.pivot-tag{fill:var(--warn);font-size:calc(9.5px * var(--fs,1));font-style:italic}
+.badge-composed{font-size:10px;letter-spacing:.04em;border:1px solid var(--muted);
+  color:var(--muted);border-radius:8px;padding:0 5px;margin-left:4px;white-space:nowrap}
 .node-label{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));cursor:default}
 .node-label.here{font-weight:700;fill:var(--accent)}
 .step-dE{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));font-family:var(--mono)}
@@ -248,12 +254,17 @@ body.stubs-off .stub{display:none}
       </div>
     </div>
 
-    <h2>precursor steps
+    <h2>made from · step back
       <label class="h2-opt" title="also offer splits derived from composition that no
  edge records — asked for on demand because it scans every structure, and asked for
  automatically where nothing recorded reaches this node">
         <input type="checkbox" id="want-derived"> derived too</label></h2>
     <div id="steps"></div>
+
+    <h2 title="edges that take this structure as a reagent. Walking one goes forward to
+ its product, which is how a route turns at a shared parent and composes an exchange">
+      consumed by · step forward</h2>
+    <div id="consumed"></div>
   </section>
 
   <div id="split-pick" class="splitter v" role="separator" tabindex="0"
@@ -374,25 +385,126 @@ function splitStep(step, species){
   return {source: byWeight[0], added: byWeight[1]};
 }
 
-/* Whether the walk can go on from a species, said in the cell you would click. */
-function onward(term, species){
+/* How many hops lead on from a species named in a row, not counting the row's own edge
+   (every species in a row is on that edge once, as a reagent or as its product). */
+function movesFrom(sid, species){
+  const s = species[String(sid)] || {};
+  return {made: Number(s.n_incoming_routes || 0), consumed: Number(s.n_outgoing_routes || 0)};
+}
+
+/* Whether the walk can go on from a species, said in the cell you would click.  `on` is
+   which count the row's own edge sits in: "consumed" for a reagent, "made" for a product. */
+function onward(term, species, on = "consumed"){
   if(!term) return "";
-  const s = species[String(term.structure_id)] || {};
-  const n = Number(s.n_incoming_routes || 0);
-  return n
-    ? ` <span class="onward" title="${esc(n)} recorded edges reach it">↩${esc(n)}</span>`
-    : ` <span class="onward" title="nothing recorded reaches it — the walk ends here">·end</span>`;
+  const m = movesFrom(term.structure_id, species);
+  m[on] = Math.max(0, m[on] - 1);
+  const bits = [];
+  if(m.made) bits.push(`<span class="onward" title="${esc(m.made)} recorded edges make it`
+                     + ` — steps back from it">↩${esc(m.made)}</span>`);
+  if(m.consumed) bits.push(`<span class="onward" title="${esc(m.consumed)} other recorded`
+                         + ` edges consume it — steps forward from it">↪${esc(m.consumed)}</span>`);
+  return bits.length ? " " + bits.join(" ")
+    : ` <span class="onward" title="no other recorded edge makes or consumes it — the walk`
+      + ` ends there">·end</span>`;
+}
+
+/* Two protomers of one ligand differ only in WHICH oxygen lost the proton, and
+   `shortLabel` drops exactly that bookkeeping — so a dozen genuinely different species
+   can print the same name in one table.  Where that happens the id is shown, and only
+   there: an id on every row is noise, an id on none is a table of rows that look like
+   duplicates of each other. */
+function namer(terms){
+  const byName = new Map();
+  for(const t of terms)
+    if(t){
+      const k = shortLabel(t.display_label);
+      (byName.get(k) || byName.set(k, new Set()).get(k)).add(Number(t.structure_id));
+    }
+  const ambiguous = new Set(
+    [...byName].filter(([, ids]) => ids.size > 1).map(([k]) => k));
+  return (t) => {
+    if(!t) return speciesCell(t);
+    return speciesCell(t) + (ambiguous.has(shortLabel(t.display_label))
+      ? ` <span class="onward" title="two species here share a short name">`
+        + `#${esc(t.structure_id)}</span>` : "");
+  };
+}
+
+/* The edge the walk arrived here by, as the id it would carry in the OTHER list — it is
+   the step back along the trail, which the trail itself already offers. */
+function cameBy(){
+  const r = route();
+  const n = r && r.trail[state.at];
+  if(!n || n.via == null) return {made: null, consumed: null};
+  const v = String(n.via);
+  if(v.startsWith("c")) return {made: v.slice(1), consumed: null};
+  if(v.startsWith("d")) return {made: null, consumed: null};
+  return {made: null, consumed: v};
+}
+
+/* ── the "consumed by" table ──────────────────────────────────────────────
+   The edges that take this node as a reagent, walked WITH their arrow to the product.
+   In the route's direction that edge runs in reverse, so it enters the route at −dE;
+   the table shows the edge's own dE, as recorded, and says so in its header. */
+function renderConsumed(consumed, species, hereSid){
+  const skip = cameBy().consumed;
+  const shown = consumed.filter(r => String(r.id) !== skip);
+  if(!shown.length)
+    return `<div class="empty">no ${consumed.length ? "other " : ""}recorded edge takes `
+         + `this structure as a reagent</div>`;
+  const groups = groupRoutes(shown).sort((a, b) =>
+    ((a.rep.can_price && a.rep.total_dE !== null ? 0 : 1)
+     - (b.rep.can_price && b.rep.total_dE !== null ? 0 : 1))
+    || ((a.rep.total_dE ?? Infinity) - (b.rep.total_dE ?? Infinity)));
+  const parts = groups.map(g => {
+    const terms = ((g.rep.steps && g.rep.steps[0]) || {}).terms || [];
+    return {
+      product: terms.find(t => t.side === "product" && t.role === "product") || null,
+      withs: terms.filter(t => t.side === "reagent" && (t.role || "reagent") === "reagent"
+                               && Number(t.structure_id) !== Number(hereSid)),
+    };
+  });
+  const cell = namer(parts.flatMap(p => [p.product, ...p.withs]));
+  const rows = groups.map((g, gi) => {
+    const r = g.rep, step = (r.steps && r.steps[0]) || {};
+    const {product, withs} = parts[gi];
+    const shed = protonsShed(step);
+    const placements = g.placements > 1
+      ? ` <span class="muted">(${esc(g.placements)} pl.)</span>` : "";
+    return `<tr class="${product ? "step" : "dead"} consumed" data-rid="c${esc(r.id)}"`
+         + `${product ? ` data-source="${esc(product.structure_id)}"` : ""}`
+         + `${r.why_not ? ` title="${esc(r.why_not)}"` : ""}>`
+         + `<td class="num">${stepEnergy(r)}</td>`
+         + `<td>${withs.length ? withs.map(t => cell(t)).join(" + ")
+                 : (shed || `<span class="muted">—</span>`)}</td>`
+         + `<td>${cell(product) + onward(product, species, "made") + placements}</td>`
+         + `<td>${routeRung(r)}</td>`
+         + `<td class="caveat-cell">${routeCaveats(r)}</td>`
+         + `<td class="num">${g.count > 1 ? "×" + esc(g.count)
+             : `<span class="muted">×1</span>`}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th class="num" title="the edge's own dE, forward as`
+       + ` recorded — walked this way it enters the route with the opposite sign">`
+       + `dE (edge)</th><th>with</th><th>makes</th>`
+       + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead>`
+       + `<tbody>${rows}</tbody></table>`
+       + `<div class="rnote">click a row to step forward to what it makes — walked this way `
+       + `the edge runs in reverse, so it adds −dE to the route and releases what it `
+       + `added${skip ? " · the edge you came by is the crumb to your right, not a row" : ""}`
+       + `</div>`;
 }
 
 /* ── the precursor table ───────────────────────────────────────────────── */
 function renderSteps(routes, derived, species){
+  const skip = cameBy().made;
+  routes = routes.filter(r => String(r.id) !== skip);
   // A derived split is offered beside the recorded edges and never merged into them:
   // the list is one list because it is one question — what could this have come from —
   // and every derived row says so, on the row.
   routes = routes.concat(derived.map(d => Object.assign({}, d, {id: null})));
   if(!routes.length)
-    return `<div class="empty">no recorded route reaches this structure — `
-         + `it is where a walk stops</div>`;
+    return `<div class="empty">no ${skip ? "other " : ""}recorded edge makes this `
+         + `structure — the walk can only go forward from here</div>`;
   // dE is what the row is being chosen on, so it orders them: cheapest step first,
   // then the ones with no number, then the `place` edges that cite nothing and are
   // not a step at all.  Reaction id — the order the rows arrive in — would put the
@@ -408,27 +520,7 @@ function renderSteps(routes, derived, species){
         || ((a.rep.total_dE ?? Infinity) - (b.rep.total_dE ?? Infinity));
   });
   const split = groups.map(g => splitStep((g.rep.steps && g.rep.steps[0]) || {}, species));
-
-  /* Two protomers of one ligand differ only in WHICH oxygen lost the proton, and
-     `shortLabel` drops exactly that bookkeeping — so a dozen genuinely different
-     precursors can print the same name in this table.  Where that happens the id is
-     shown, and only there: an id on every row is noise, an id on none is a table of
-     rows that look like duplicates of each other. */
-  const byName = new Map();
-  for(const {source, added} of split)
-    for(const t of [source, added])
-      if(t){
-        const k = shortLabel(t.display_label);
-        (byName.get(k) || byName.set(k, new Set()).get(k)).add(Number(t.structure_id));
-      }
-  const ambiguous = new Set(
-    [...byName].filter(([, ids]) => ids.size > 1).map(([k]) => k));
-  const cell = (t) => {
-    if(!t) return speciesCell(t);
-    return speciesCell(t) + (ambiguous.has(shortLabel(t.display_label))
-      ? ` <span class="onward" title="two precursors here share a short name">`
-        + `#${esc(t.structure_id)}</span>` : "");
-  };
+  const cell = namer(split.flatMap(({source, added}) => [source, added]));
 
   const rows = groups.map((g, gi) => {
     const r = g.rep, step = (r.steps && r.steps[0]) || {};
@@ -621,15 +713,14 @@ function drawDiagram(){
   /* What a step did to the molecule, for the connector: what was built in, and what
      left.  Water is the proton's carrier and not a piece being added, so a
      deprotonation reads as what it loses. */
-  const movement = (s) => {
-    const bits = [];
-    for(const t of s.added)
-      bits.push(`+${t.stoich > 1 ? t.stoich + " " : ""}`
-              + (shortLabel(t.display_label) || "#" + t.structure_id));
-    for(const t of s.shed)
-      bits.push(`−${t.stoich > 1 ? t.stoich + " " : ""}H⁺`);
-    return bits.join("  ");
-  };
+  // `added` and `shed` are in the route's direction, so a consumed-by leg lists what the
+  // edge added as shed.  A `leaving` term is a proton's carrier and reads as H⁺ either way.
+  const moved1 = (t, sign) => `${sign}${t.stoich > 1 ? t.stoich + " " : ""}`
+    + (t.role === "leaving" ? "H⁺" : (shortLabel(t.display_label) || "#" + t.structure_id));
+  const movement = (s) => [
+    ...s.added.map(t => moved1(t, "+")),
+    ...s.shed.filter(t => t.role !== "solvent").map(t => moved1(t, "−")),
+  ].join("  ");
 
   const seen = new Set();               // a node two routes share is drawn once
   state.routes.forEach((r, ri) => {
@@ -681,7 +772,11 @@ function drawDiagram(){
                 + `no number</text>`);
       } else {
         const y = cy(n.y + dy).toFixed(1);
-        bits.push(`<line class="level" stroke="${col}"`
+        const pivotNote = n.pivot
+          ? `\npivot (shared ${n.pivot_kind}) — where the walk turned. Bookkeeping for`
+            + ` the composed exchange, not an intermediate: this height is not a barrier`
+          : "";
+        bits.push(`<line class="level${n.pivot ? " pivot" : ""}" stroke="${col}"`
                 + ` stroke-width="${isHere ? 4 : 2.5}"`
                 + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
                 + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}"/>`
@@ -692,13 +787,20 @@ function drawDiagram(){
                 + `<title>${esc(n.display_label || "")}\n`
                 + `y = ${(n.y + dy).toFixed(4)} eV\n`
                 + `shed so far: ${esc(n.basis === "—" ? "nothing" : n.basis)}`
-                + `</title></line>`);
+                + `${esc(pivotNote)}</title></line>`);
+        if(n.pivot)
+          bits.push(`<text class="pivot-tag" x="${x.toFixed(1)}"`
+                  + ` y="${(Number(y) + 12 * fs).toFixed(1)}" text-anchor="middle">`
+                  + `pivot · not a barrier</text>`);
         // The level's own coordinate, on the bar: the chart's whole point is the height
-        // of these, and reading one off the axis by eye is an estimate.
-        if(state.prefs.levelValues)
+        // of these, and reading one off the axis by eye is an estimate.  A pivot's is
+        // bracketed: it is a number, and not one to read as a height the route climbs.
+        if(state.prefs.levelValues){
+          const v = `${(n.y + dy) > 0 ? "+" : ""}${(n.y + dy).toFixed(2)}`;
           bits.push(`<text class="level-y" fill="${col}" x="${x.toFixed(1)}"`
                   + ` y="${(Number(y) - 6 * fs).toFixed(1)}" text-anchor="middle">`
-                  + `${(n.y + dy) > 0 ? "+" : ""}${(n.y + dy).toFixed(2)}</text>`);
+                  + `${n.pivot ? `(${v})` : v}</text>`);
+        }
       }
       // Names stagger over two rows: sub-columns are narrower than the names in them.
       const row = (columns[i] && columns[i].get(nodeKey(n, dy)) || {}).order || 0;
@@ -721,11 +823,15 @@ function drawDiagram(){
 function renderTrail(){
   const t = $("trail"), r = route();
   if(!r){ t.innerHTML = ""; return; }
+  // The arrow points the way the chemistry runs, target first: `←` for a node the one
+  // before was made from, `→` for a node that consumed it.
   t.innerHTML = r.trail.map((n, i) => {
     const name = shortLabel(n.label) || ("#" + n.sid);
-    const via = n.via == null ? "" : String(n.via).startsWith("d")
-      ? "\nvia a derived split" : `\nvia reaction #${n.via}`;
-    return (i ? `<span class="sep">←</span>` : "")
+    const v = n.via == null ? "" : String(n.via);
+    const via = !v ? "" : v.startsWith("d") ? "\nvia a derived split"
+      : v.startsWith("c") ? `\nconsumed by reaction #${v.slice(1)}`
+      : `\nmade from, via reaction #${v}`;
+    return (i ? `<span class="sep">${v.startsWith("c") ? "→" : "←"}</span>` : "")
          + `<span class="crumb${i === state.at ? " here" : ""}" data-i="${esc(i)}"`
          + ` title="${esc(n.label || "")}${esc(via)}">${esc(name)}</span>`;
   }).join("")
@@ -773,6 +879,7 @@ async function showHere(){
   renderTrail();
   renderFocus(d.structure);
   $("steps").innerHTML = renderSteps(d.routes, d.derived || [], d.species);
+  $("consumed").innerHTML = renderConsumed(d.consumed_by || [], d.species, n.sid);
   await priceAll();
 }
 
@@ -811,6 +918,28 @@ async function priceAll(){
    part that is not decoration — whether its numbers are measured against the same
    thing as the others'.  Two totals set side by side are an invitation to subtract
    them, and across different bases that subtraction is not a number about chemistry. */
+/* A route that turns at a pivot is neither one recorded edge nor a derived split: its
+   net equation was composed from the edges it names, and it is judged on that equation
+   rather than on its legs — so the badge carries the equation and its verdict. */
+function composedBadge(p){
+  const eq = p.net_equation || {};
+  const side = (s) => (eq.terms || []).filter(t => t.side === s)
+    .map(t => `${t.stoich > 1 ? t.stoich + " " : ""}${shortLabel(t.display_label)
+              || "#" + t.structure_id}`).join(" + ");
+  const verdict = eq.isodesmic === true ? "isodesmic"
+    : eq.isodesmic === false ? (eq.caveats || []).join(", ").replace(/_/g, " ")
+    : `not assessed${eq.why_not ? " — " + eq.why_not : ""}`;
+  const witness = (p.witness || []).map(w =>
+    `${w.direction === "consumed_by" ? "−" : "+"}#${w.reaction_id}`).join(" ");
+  const title = `composed from recorded edges ${witness} (− = consumed by: the edge runs `
+    + `in reverse along the route and enters it at −dE)\n`
+    + `net: ${side("reagent")} → ${side("product")}\n`
+    + `net equation: ${verdict}. Each leg keeps its own caveats; this is the route's.`;
+  return ` <span class="badge-composed" title="${esc(title)}">composed · net `
+    + `${esc(eq.isodesmic === true ? "isodesmic" : eq.isodesmic === false
+                ? "not isodesmic" : "unchecked")}</span>`;
+}
+
 function renderLegend(){
   const host = $("routes"), note = $("path-note");
   if(!state.routes.length){
@@ -824,13 +953,17 @@ function renderLegend(){
   const common = bases.size ? [...bases].sort((a, b) =>
     (a === "—" ? -1 : b === "—" ? 1 : 0))[0] : null;
 
-  note.innerHTML = bases.size > 1
+  note.innerHTML = (bases.size > 1
     ? `<div class="diag-note"><span class="caveat">these routes do not shed the same `
       + `things, so the vertical gap between them is not a comparison</span> — `
       + `hover a badge for what differs</div>`
     : `<div class="diag-note muted">${esc(state.routes.length)} route`
       + `${state.routes.length === 1 ? "" : "s"}, all on one basis — vertical gaps `
-      + `between them are comparable</div>`;
+      + `between them are comparable</div>`)
+    + (state.routes.some(r => r.path && (r.path.pivots || []).length)
+      ? `<div class="diag-note"><span class="caveat">a hollow bar is a pivot</span> — `
+        + `where a walk turned at a shared species to compose an exchange. It is `
+        + `bookkeeping, not an intermediate, and its height is not a barrier</div>` : "");
 
   host.innerHTML = state.routes.map((r, i) => {
     const p = r.path, active = i === state.active;
@@ -845,6 +978,9 @@ function renderLegend(){
       if(p.worst_step)
         bits.push(`worst ${p.worst_step.dE > 0 ? "+" : ""}`
                 + `${esc(p.worst_step.dE.toFixed(3))}`);
+      else if(p.worst_step_why)
+        bits.push(`<span class="muted" title="${esc(p.worst_step_why)}">no worst step`
+                + ` (pivot)</span>`);
     } else {
       bits.push(`<span class="caveat">no total — ${esc(p.n_unpriced)} of `
               + `${esc(p.steps.length)} steps have no number</span>`);
@@ -862,7 +998,8 @@ function renderLegend(){
          + `${esc(shortLabel(end.label) || "#" + end.sid)}</span>`
          + `<span class="rt-bits">${bits.join(" · ")} ${badge}`
          + `${p && p.steps.some(s => s.origin === "inferred")
-             ? ` <span class="badge-inferred">derived</span>` : ""}</span>`
+             ? ` <span class="badge-inferred">derived</span>` : ""}`
+         + `${p && (p.pivots || []).length ? composedBadge(p) : ""}</span>`
          + `<button class="rt-x" data-drop="${esc(i)}" title="take this route off the `
          + `chart"${state.routes.length < 2 ? " disabled" : ""}>×</button></div>`;
   }).join("");
@@ -892,9 +1029,13 @@ function renderFocus(s){
   $("focus-sub").textContent =
     [`#${s.id}`, s.formula, `q ${s.net_charge >= 0 ? "+" : ""}${s.net_charge}`,
      s.multiplicity ? `2S+1 ${s.multiplicity}` : null,
-     `${s.n_incoming_routes} incoming`].filter(Boolean).join("  ·  ");
-  why.hidden = Number(s.n_incoming_routes) > 0;
-  why.textContent = "nothing recorded reaches this structure — the walk stops here";
+     `${s.n_incoming_routes} made from`, `${s.n_outgoing_routes ?? "—"} consumed by`]
+      .filter(Boolean).join("  ·  ");
+  const made = Number(s.n_incoming_routes), used = Number(s.n_outgoing_routes || 0);
+  why.hidden = made > 0;
+  why.textContent = used
+    ? "nothing recorded makes this structure — the walk can only go forward from here"
+    : "nothing recorded makes or consumes this structure — the walk stops here";
 }
 
 /* ── the walk, and the fork ───────────────────────────────────────────────
@@ -972,9 +1113,9 @@ function dropRoute(i){
 }
 
 /* ── the URL ──────────────────────────────────────────────────────────────
-   `#target=41&p=12-80.44-75&p=51-90` — the target, then one `p` per route on the
-   chart, each a chain of legs.  A leg is the edge walked and the species it landed
-   on, and both halves are needed: the edge, because an id pair does not say WHICH
+   `#target=41&p=12-80.c44-75&p=51-90` — the target, then one `p` per route on the
+   chart, each a chain of legs.  A leg is the edge walked (`c` in front when it was
+   walked forward, consumed by) and the species it landed on, and both halves are needed: the edge, because an id pair does not say WHICH
    edge joins them; the species, because one edge names two reagents and stepping
    into either is a different walk.  The whole chart is in the link, which is the
    only place it could live — the viewer has no write path. */
@@ -996,9 +1137,10 @@ function writeHash(){
 function readHash(){
   const h = new URLSearchParams(location.hash.replace(/^#/, ""));
   const t = Number(h.get("target"));
-  // `<reaction>-<node>` for a recorded edge, `d<other part>-<node>` for a derived one.
+  // `<reaction>-<node>` made from a recorded edge, `c<reaction>-<node>` consumed by one,
+  // `d<other part>-<node>` along a derived split.
   const routes = h.getAll("p").map(chain => chain.split(".").filter(Boolean).map(leg => {
-    const m = /^(d?\d+)-(\d+)$/.exec(leg.trim());
+    const m = /^([cd]?\d+)-(\d+)$/.exec(leg.trim());
     return m ? {via: m[1], sid: Number(m[2])} : null;
   }).filter(Boolean)).filter(c => c.length);
   return {target: Number.isInteger(t) && t > 0 ? t : null, routes};
@@ -1024,7 +1166,17 @@ async function replay({target, routes}){
     for(const {via, sid} of chain){
       let d;
       try { d = await fetchHop(here().sid, true); } catch(e){ say(e.message); break; }
-      if(!via.startsWith("d")){
+      if(via.startsWith("c")){
+        const edge = (d.consumed_by || []).find(r => String(r.id) === via.slice(1));
+        if(!edge){
+          say(`reaction #${via.slice(1)} does not consume structure ${here().sid}`
+            + ` — that route stopped there`); break;
+        }
+        if(Number(edge.product_structure_id) !== sid){
+          say(`reaction #${via.slice(1)} does not make structure ${sid}`
+            + ` — that route stopped there`); break;
+        }
+      } else if(!via.startsWith("d")){
         const edge = (d.routes || []).find(r => String(r.id) === via);
         if(!edge){
           say(`reaction #${via} does not reach structure ${here().sid}`
@@ -1211,6 +1363,7 @@ function boot(){
     return sp.display_label || `structure ${sid}`;
   };
   mofsbuPreview.bind($("steps"), {caption});
+  mofsbuPreview.bind($("consumed"), {caption});
   mofsbuPreview.bind($("diagram"), {caption: (sid) => {
     for(const r of state.routes)
       for(const n of (r.path ? r.path.nodes : []))
@@ -1239,18 +1392,27 @@ function boot(){
     state.prefs.derived = e.target.checked; savePrefs(); showHere();
   };
 
-  // Delegated: the table is replaced wholesale on every hop, so the listener has to
-  // outlive it.  A species is a step INTO that species; the row is a step back along
-  // the edge, which is the scaffold.
-  $("steps").addEventListener("click", (e) => {
+  // Delegated: the tables are replaced wholesale on every hop, so the listener has to
+  // outlive them.  In "made from" a species is a step back INTO that species and the
+  // row is a step back along the edge to the scaffold.  In "consumed by" the only place
+  // an edge leads is its product, so a co-reagent is not a step.
+  const pick = (e) => {
     const term = e.target.closest("a.term");
     const row = e.target.closest("tr.step");
+    const forward = !!(row && row.classList.contains("consumed"));
     if(term){
       e.preventDefault();
       const sid = Number(term.dataset.sid);
       const s = (state.data && state.data.species[String(sid)]) || {};
-      if(!Number(s.n_incoming_routes)){
-        say(`nothing recorded reaches ${shortLabel(s.display_label) || "#" + sid}`);
+      const name = shortLabel(s.display_label) || "#" + sid;
+      if(forward && String(sid) !== row.dataset.source){
+        say(`${name} is a co-reagent of that edge — walking it forward leads only to `
+          + `what it makes`);
+        return;
+      }
+      const m = movesFrom(sid, (state.data && state.data.species) || {});
+      if(m.made + m.consumed - 1 <= 0){
+        say(`no other recorded edge makes or consumes ${name}`);
         return;
       }
       say("");
@@ -1258,7 +1420,9 @@ function boot(){
       return;
     }
     if(row) { say(""); stepTo(Number(row.dataset.source), row.dataset.rid); }
-  });
+  };
+  $("steps").addEventListener("click", pick);
+  $("consumed").addEventListener("click", pick);
 
   // A level on the chart is a node on a route; clicking it moves the picker there,
   // which is also how you pick which route a fork comes off.

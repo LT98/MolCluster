@@ -25,12 +25,13 @@ file says what to do. **It resizes it from S to M.**
 |---|---|
 | `energy/backends.py`, `energy/relax.py` | built, general |
 | `energy/reference.py` — `reaction_balanced_energy(reg, reaction_id)` | built; one reaction, any reaction |
-| walking the DAG to get a **route** | `registry.incoming_routes` returns one step; nothing composes steps |
-| per-step energies along a route | does not exist |
+| walking the DAG to get a **route** | `pathways/route.py` `price_path` composes a walk the **user** chooses, one hop at a time, over `registry.incoming_routes` and `outgoing_routes` (both directions). The automatic enumeration S3 asks for (`routes_to`) does not exist |
+| per-step energies along a route | `price_path` prices each step (a consumed-by leg at −dE) and the route's net equation; S4's `route_energies` with its seams does not exist |
 | any decision point between building and computing | does not exist (§2) |
 | `scripts/regress_m7.py` | built, Fe only, never recorded |
 
-`pathways/__init__.py` is a docstring with no module behind it.
+`pathways/route.py` exists and holds `price_path` only; `routes_to` (S3), `pathways/evaluate.py`
+(S4) and `pathways/policy.py` do not.
 
 ---
 
