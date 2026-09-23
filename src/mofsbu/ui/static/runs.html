@@ -248,6 +248,7 @@ async function render(force){
     ['pending', (c.pending || 0) + (c.claimed || 0), ''],
     ['new structures', s.new_structures, 'b-good'],
     ['reused (skipped)', s.reused_structures, 'b-info'],
+    ['relaxes skipped (already computed)', s.relax_reused || 0, 'b-info'],
     ['re-attempted', s.retried_tasks, s.retried_tasks ? 'b-warn' : ''],
     ['embed retries', s.embed_retries, s.embed_retries ? 'b-warn' : ''],
   ];
@@ -299,6 +300,21 @@ async function render(force){
       ${run.planner_skips.map(d => `<div class="group" style="cursor:default">
         <b>×${d.count}</b> ${esc(d.reason)}
         <div class="msg">→ ${esc(d.hint || '')}</div></div>`).join('')}` : ''}
+
+    ${run.after_run && run.after_run.length ? `
+      <h2>after the run</h2>
+      ${run.after_run.map(d => `<div class="group" style="cursor:default">
+        <b>×${d.count}</b> ${esc(d.reason)}
+        <div class="msg">${esc(d.stage)} · ${esc(d.hint || '')}</div></div>`).join('')}` : ''}
+
+    ${s.timing && Object.keys(s.timing).length ? `
+      <h2>time per task <span class="muted" style="font-weight:400">worker wall time,
+        including tasks that were rejected</span></h2>
+      <table class="mono"><tr><th>kind</th><th>n</th><th>total s</th><th>median ms</th>
+        <th>p90 ms</th></tr>
+      ${Object.entries(s.timing).map(([k, t]) => `<tr><td>${esc(k)}</td><td>${t.n}</td>
+        <td>${t.total_s}</td><td>${t.median_ms}</td><td>${t.p90_ms}</td></tr>`).join('')}
+      </table>` : ''}
 
     ${s.by_code && s.by_code.length ? `
       <h2>outcomes by cause ${state.code ? `<span class="filterchip">${esc(state.code)} ✕</span>` : ''}</h2>

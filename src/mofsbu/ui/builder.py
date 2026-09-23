@@ -600,9 +600,13 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             item["diagnostics"] = json.loads(item.pop("diagnostics_json", "[]") or "[]")
             item["thread"] = running.get(run_id, "")
             item["liveness"] = _liveness(shim, item)
+            diagnostics = get_diagnostics(shim, run_id)
+            # A `stage` entry is what `runner.finalise_run` did after the queue drained —
+            # not a candidate the planner declined, so it is not reported as one.
             return {"run": item, "spec": spec,
                     "summary": outcome_summary(shim, run_id),
-                    "planner_skips": get_diagnostics(shim, run_id)}
+                    "planner_skips": [d for d in diagnostics if "stage" not in d],
+                    "after_run": [d for d in diagnostics if "stage" in d]}
         finally:
             con.close()
 

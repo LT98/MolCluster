@@ -81,6 +81,16 @@ What makes this page the useful one:
   `donor_index_stale` and `chelate_cannot_span`.
 - **"never queued (planner)"** — a section for what the planner decided not to emit, so
   the absence of a product is explained rather than silent.
+- **What a run did not recompute.** "reused (skipped)" counts builds that landed on an
+  identity the registry already had; "relaxes skipped (already computed)" counts builds whose
+  relaxation already existed at this level of theory (`detail.relax_reused` names the
+  geometry). A second run into the same database — the NiCl₂ then Ni(OAc)₂ salt study — shows
+  its saving here rather than as a smaller task count.
+- **Time per task.** Each task records its own wall time (`detail.duration_ms`); the table
+  gives n, total seconds, median and p90 per kind. Rejected tasks count, because their time
+  was spent. Tasks from before this was recorded are left out rather than counted as zero.
+- **"after the run"** — what `runner.finalise_run` did once the queue drained: for a
+  `pathways` run, how many one-proton deprotonation edges it wrote and why any were refused.
 - **Liveness is computed, never stored.** The page asks whether a pid still exists rather
   than believing the row — because a row is written by a process that, if it died, is by
   definition no longer able to correct it. Finished runs show no liveness verdict at all,

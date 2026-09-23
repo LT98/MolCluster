@@ -1328,8 +1328,11 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     target = MODE_FIDELITY.get(spec.run_mode)
     if target is None:
         return None
-    if existing_relaxation(reg, out.geometry_id, target, out.structure_id,
-                           None, spec.ml_model) is not None:
+    reused = existing_relaxation(reg, out.geometry_id, target, out.structure_id,
+                                 None, spec.ml_model)
+    if reused is not None:
+        # Recorded on the build task, so a run can say how much it did not recompute.
+        out.detail["relax_reused"] = reused
         # Re-running an unchanged spec rebuilds the same constructs, recognises them by
         # identity (D2), and hands back the geometry ids it already had.  Without this,
         # every one of them was queued for relaxation again -- the same starting
@@ -1377,24 +1380,29 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
                 time.sleep(poll)
                 continue
             break
+        # Wall time of this task alone, in ms: `claimed_at`/`finished_at` are whole seconds.
+        started = time.perf_counter()
         try:
             out = execute(reg, task, spec)
+            out.detail["duration_ms"] = round((time.perf_counter() - started) * 1000)
+            queue_relax(reg, spec, task, out)        # before completing: it notes a reuse
             complete_task(reg, task.id, structure_id=out.structure_id,
                           geometry_id=out.geometry_id,
                           structure_created=out.structure_created,
                           geometry_created=out.geometry_created,
                           detail=out.detail)
-            queue_relax(reg, spec, task, out)
         except _Rejected as exc:
-            fail_task(reg, task.id, str(exc), rejected=True,
-                      code=exc.code, detail=exc.detail)
+            fail_task(reg, task.id, str(exc), rejected=True, code=exc.code,
+                      detail={**(exc.detail or {}), "duration_ms":
+                              round((time.perf_counter() - started) * 1000)})
         except Exception as exc:                                   # noqa: BLE001
             # An unexpected exception is a bug, and the type is the most useful thing to
             # group by — twenty tasks dying of one IndexError is one problem, not twenty.
             fail_task(reg, task.id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                       code=type(exc).__name__,
                       detail={"traceback": traceback.format_exc()[-4000:],
-                              "task_kind": task.kind, "payload": task.payload})
+                              "task_kind": task.kind, "payload": task.payload,
+                              "duration_ms": round((time.perf_counter() - started) * 1000)})
         # After the task, not only at the claim: a worker part-way through a long queue
         # is the case a heartbeat exists to distinguish from one that died at the first.
         touch_run(reg, run_id)

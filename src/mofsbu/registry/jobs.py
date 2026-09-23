@@ -321,6 +321,9 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
         "FROM tasks WHERE run_id=?", (run_id,)).fetchone()
     built = marginal["built"] or 0
     unresolved = marginal["unresolved"] or 0
+    relax_reused = reg.conn.execute(
+        "SELECT COUNT(*) AS n FROM tasks WHERE run_id=? "
+        "AND json_extract(detail_json, '$.relax_reused') IS NOT NULL", (run_id,)).fetchone()
     return {
         "counts": counts,
         "by_code": by_code,
@@ -333,7 +336,31 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
         "marginal_built": built,
         "marginal_unresolved": unresolved,
         "marginal_rescued": max(0, built - unresolved),
+        "relax_reused": relax_reused["n"] or 0,
+        "timing": task_timing(reg, run_id),
     }
+
+
+def task_timing(reg: Registry, run_id: int) -> dict[str, dict[str, Any]]:
+    """Per task kind: how many were timed, total seconds, median and p90 in ms.
+
+    From `detail.duration_ms` — the worker's own wall time for the task, including a
+    failed or rejected one, since that time was spent too.  A task from before timing was
+    recorded has none and is not counted, rather than counted as zero.
+    """
+    by_kind: dict[str, list[int]] = {}
+    for r in reg.conn.execute(
+            "SELECT kind, json_extract(detail_json, '$.duration_ms') AS ms FROM tasks "
+            "WHERE run_id=? AND json_extract(detail_json, '$.duration_ms') IS NOT NULL",
+            (run_id,)):
+        by_kind.setdefault(r["kind"], []).append(int(r["ms"]))
+    out: dict[str, dict[str, Any]] = {}
+    for kind, ms in sorted(by_kind.items()):
+        ms.sort()
+        out[kind] = {"n": len(ms), "total_s": round(sum(ms) / 1000, 1),
+                     "median_ms": ms[len(ms) // 2],
+                     "p90_ms": ms[min(len(ms) - 1, int(0.9 * len(ms)))]}
+    return out
 
 
 TERMINAL_RUN_STATUSES = (DONE, FAILED, CANCELLED, INTERRUPTED)
