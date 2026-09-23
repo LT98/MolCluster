@@ -1603,6 +1603,33 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     return pool
 
 
+#: The medium a finished run's energies are corrected into (WORKPLAN_solvation C17).
+FINALISE_MEDIUM = "alpb:water"
+
+
+def _solvate_stage(reg: Registry, target: Fidelity) -> list[dict[str, Any]]:
+    """Continuum corrections on the run's energies, or the stated reason there are none."""
+    from mofsbu.energy.backends import get_backend
+    from mofsbu.energy.solvation import correct_registry
+
+    if target < Fidelity.ML:
+        return [{"stage": "solvate", "count": 0,
+                 "reason": f"no {FINALISE_MEDIUM} corrections: this run computed no energies",
+                 "hint": "construct mode builds geometries only"}]
+    if not get_backend("xtb").available():
+        return [{"stage": "solvate", "count": 0,
+                 "reason": f"no {FINALISE_MEDIUM} corrections: xTB (tblite) is not installed",
+                 "hint": "install tblite, then run scripts/solvate.py on this database"}]
+    out = correct_registry(reg, FINALISE_MEDIUM)
+    stages = [{"stage": "solvate", "count": out["written"],
+               "reason": f"geometries given a {FINALISE_MEDIUM} correction",
+               "hint": "xTB with and without the continuum on each stored geometry"}]
+    stages += [{"stage": "solvate", "count": n, "reason": f"correction refused: {why}",
+                "hint": "that geometry's energy has no medium; routes through it stay gas-only"}
+               for why, n in sorted(out["refused"].items())]
+    return stages
+
+
 def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, Any]]:
     """Stages that need every build and relaxation in place, run once the queue drains.
 
@@ -1633,6 +1660,7 @@ def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, 
     stages += [{"stage": "link_protomers", "reason": f"deprotonation edge refused: {why}",
                 "hint": "the pair was found but its equation did not balance", "count": n}
                for why, n in sorted(refused.items())]
+    stages += _solvate_stage(reg, target)
     set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + stages)
     reg.conn.commit()
     return stages
