@@ -1019,11 +1019,22 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
 
     payload = task.payload
     parent_sid, parent_payload = _rung(reg, payload.get("parent_task"), "parent")
+    # The free ligand is a REAGENT of this step, not a decoration on it: an edge written
+    # without it balances short by exactly one ligand and is unpriceable for a reason
+    # that has nothing to do with chemistry.  Guarded like the rung below it.
     ligand_sid = None
     if payload.get("ligand_task") is not None:
-        row = reg.conn.execute("SELECT structure_id FROM tasks WHERE id=?",
+        row = reg.conn.execute("SELECT status, structure_id FROM tasks WHERE id=?",
                                (payload["ligand_task"],)).fetchone()
-        ligand_sid = None if row is None else row["structure_id"]
+        if row is None or row["structure_id"] is None:
+            raise _Rejected(
+                "the ligand this step adds was not built, so the step cannot record "
+                "what it consumed. The step is not wrong — the ligand task is missing, "
+                "and whatever rejected that task says why",
+                code="pathway_ligand_missing",
+                detail={"task": payload["ligand_task"],
+                        "status": None if row is None else row["status"]})
+        ligand_sid = int(row["structure_id"])
 
     parent = _build_sphere(spec, parent_payload)
     block = _sphere_block(parent, structure_id=parent_sid)

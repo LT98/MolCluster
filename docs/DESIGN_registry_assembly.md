@@ -673,6 +673,24 @@ Each open checkpoint is scheduled at the milestone where code first forces the c
   + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only.
 - **C7 — Partner-dependence (leaning, §6.6):** confirm the factorized HSAB-match model (descriptor
   vectors combined at query time) over a stored ease matrix.
+- **C15 — what tells a placed structure from a grown one (open, found by measurement):** the
+  ladder currently distinguishes them by **whether the edge has reagents**: a `place` edge cites
+  nothing, a `grow` edge cites the rung below and the ligand added. `test_the_step_reaches_the_
+  structure_the_place_task_built` asserts both kinds arrive at one node, and
+  `test_the_ladder_reaches_down_to_the_bare_centre` walks down by following only reagent-bearing
+  edges.
+  That discriminator is load-bearing and it is also the reason a `place` edge cannot be priced:
+  with no reagents, `reaction_terms` injects the product alone and the balance report is its
+  entire composition. Giving `place` its real reagents (the ion, the ligands, the co-ligands —
+  the runner knows all three) was **built and reverted** on this branch, because it makes every
+  edge reagent-bearing and the ladder walk then descends into the bare ion. The patch is small;
+  the decision is not.
+  *Options:* discriminate on `kind` instead of on reagent presence, and let the ladder reach the
+  literal bare centre · keep `place` citing nothing and answer "what is this made of" by
+  derivation only (`energy.routes.decompositions`, which needs no rebuild) · record the pieces
+  under a role that the ladder walk ignores.
+  *Note:* `put_reaction` can now express stoichiometry, which was the blocking prerequisite
+  either way — a diaqua complex has to be able to say *two* waters.
 *(C8 — descriptor-layer sourcing — was here; resolved in M1 in favour of curated tables with
 per-row `source` + `source_version`. See `archive/PLAN_completed.md` rev 19.)*
 

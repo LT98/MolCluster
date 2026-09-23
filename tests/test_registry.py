@@ -369,3 +369,42 @@ def test_two_writers_registering_the_same_method_do_not_collide(tmp_path):
         id_b = method_id(b, XTB)
         b.conn.commit()
     assert id_a == id_b
+
+
+# ── a reagent can appear more than once ──────────────────────────────────────
+
+def test_put_reaction_records_how_many(reg):
+    """A diaqua complex consumes TWO waters, and the equation has to be able to say so.
+
+    The reagent key is (reaction, structure, role), so a repeated bare id collapses to a
+    single row; without a count the balance check is short an atom and the edge is
+    unpriceable for a reason that has nothing to do with chemistry.
+    """
+    from mofsbu.registry import put_reaction
+
+    product = put_structure(reg, fx.ALL["water"]()).id
+    water = put_structure(reg, fx.ALL["formate"]()).id
+
+    rid = put_reaction(reg, product, Provenance(reagent_ids=((water, 2),)))
+    rows = list(reg.conn.execute(
+        "SELECT structure_id, stoich FROM reaction_reagents WHERE reaction_id=?", (rid,)))
+    assert [(r["structure_id"], r["stoich"]) for r in rows] == [(water, 2)]
+
+
+def test_a_repeated_bare_id_is_the_same_claim_as_a_count(reg):
+    from mofsbu.registry import put_reaction
+
+    product = put_structure(reg, fx.ALL["water"]()).id
+    water = put_structure(reg, fx.ALL["formate"]()).id
+    rid = put_reaction(reg, product, Provenance(reagent_ids=(water, water)))
+    row = reg.conn.execute(
+        "SELECT stoich FROM reaction_reagents WHERE reaction_id=?", (rid,)).fetchone()
+    assert row["stoich"] == 2
+
+
+def test_a_reagent_consumed_zero_times_is_refused(reg):
+    from mofsbu.registry import put_reaction
+
+    product = put_structure(reg, fx.ALL["water"]()).id
+    with pytest.raises(RegistryError, match="not consumed is absent"):
+        put_reaction(reg, product, Provenance(reagent_ids=((product, 0),)))

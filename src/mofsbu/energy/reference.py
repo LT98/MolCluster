@@ -172,7 +172,15 @@ def check_balance(reg: Registry, reaction_id: int) -> BalanceReport:
     identity is allowed to come from (ground rule 2), and a formula string parsed back
     into counts is a second encoding of the same fact waiting to disagree.
     """
-    terms = reaction_terms(reg, reaction_id)
+    return balance_for_terms(reg, reaction_terms(reg, reaction_id))
+
+
+def balance_for_terms(reg: Registry, terms: tuple[Term, ...]) -> BalanceReport:
+    """`check_balance` for an equation that is not (yet) a row.
+
+    A derived decomposition is weighed by exactly the rules a stored one is, which is the
+    only way the two can be compared at all.
+    """
     elements: Counter[str] = Counter()
     charge = 0
     for term in terms:
@@ -244,7 +252,13 @@ def check_reference_quality(reg: Registry, reaction_id: int, *,
       the metal stays coordinated throughout and the errors cancel, from a
       formation-from-free-ions equation, where six bonds appear out of nothing.
     """
-    terms = reaction_terms(reg, reaction_id)
+    return quality_for_terms(reg, reaction_terms(reg, reaction_id),
+                             max_naked_charge=max_naked_charge)
+
+
+def quality_for_terms(reg: Registry, terms: tuple[Term, ...], *,
+                      max_naked_charge: int = 1) -> ReferenceQuality:
+    """`check_reference_quality` for an equation that is not (yet) a row."""
     issues: list[QualityIssue] = []
     dative = 0
     for term in terms:
@@ -344,20 +358,42 @@ def reaction_balanced_energy(
     purpose: the value comes back with the quality report attached and `isodesmic=False`,
     so the caveat travels with the number instead of living in a report nobody re-reads.
     """
-    balance = check_balance(reg, reaction)
+    return energy_for_terms(
+        reg, reaction_terms(reg, reaction), fidelity=fidelity, solvent=solvent,
+        allow_null=allow_null, allow_unconverged=allow_unconverged, strict=strict,
+        subject=f"reaction {reaction}")
+
+
+def energy_for_terms(
+    reg: Registry,
+    terms: tuple[Term, ...],
+    *,
+    fidelity: Fidelity | None = None,
+    solvent: str | None = None,
+    allow_null: bool = False,
+    allow_unconverged: bool = True,
+    strict: bool = True,
+    subject: str = "this equation",
+) -> ReactionEnergy:
+    """`reaction_balanced_energy` for an equation that is not (yet) a row.
+
+    `subject` names the equation in every refusal, so a derived decomposition says what
+    it is instead of quoting a reaction id it does not have.
+    """
+    balance = balance_for_terms(reg, terms)
     if not balance.balanced:
         raise ReferenceSchemeError(
-            f"reaction {reaction} is {balance.describe()}. A formation energy from an "
+            f"{subject} is {balance.describe()}. A formation energy from an "
             f"unbalanced equation is the charged-ion reference problem by another name — "
             f"add the missing species (displaced solvent, the proton acceptor, a "
             f"counter-ion) as `leaving` reagents so both sides carry the same atoms and "
             f"the same charge.")
 
-    quality = check_reference_quality(reg, reaction)
+    quality = quality_for_terms(reg, terms)
     if strict and not quality.isodesmic:
         lines = "\n".join(f"  - {i.code}: {i.detail}\n    {i.hint}" for i in quality.issues)
         raise ReferenceSchemeError(
-            f"reaction {reaction} balances but is not isodesmic, so subtracting its two "
+            f"{subject} balances but is not isodesmic, so subtracting its two "
             f"sides compares different chemistry, not different arrangements of the same "
             f"chemistry:\n{lines}\n"
             f"This is the archived E(EBU) - E(M^q+) - SUM E(ligand anion) scheme, whose "
@@ -422,10 +458,10 @@ def reaction_balanced_energy(
         contributions.append((term.structure_id, signed, float(row["energy"])))
 
     if method is None:                      # unreachable: a reaction always has a product
-        raise ReferenceSchemeError(f"reaction {reaction} has no species")
+        raise ReferenceSchemeError(f"{subject} has no species")
     if not all_converged and not allow_unconverged:
         raise ReferenceSchemeError(
-            f"reaction {reaction} draws on an unconverged geometry; its energy is an "
+            f"{subject} draws on an unconverged geometry; its energy is an "
             f"upper bound, not a minimum")
 
     # The equation is only as good as its weakest term: a dE mixing an xTB product with

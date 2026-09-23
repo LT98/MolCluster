@@ -362,7 +362,8 @@ def create_app(db_path: Path, store_root: Path,
             # cheap, and it stops the UI offering a geometry whose blob is gone
             g["blob_present"] = _blob_ok(g["coords_hash"])
         routes = _rows(con.execute(
-            """SELECT id, kind, intermediate, depth, note, fidelity, created_at
+            """SELECT id, kind, intermediate, depth, note, fidelity, created_at,
+                      choice_vector_digest
                FROM reactions WHERE product_structure_id = ? ORDER BY id""",
             (structure_id,)))
         _price_routes(con, routes)
@@ -412,6 +413,25 @@ def create_app(db_path: Path, store_root: Path,
             # That is a 404 about a missing document, not a server fault.
             raise HTTPException(404, f"blob {digest} not in store") from None
         return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
+
+    @app.get("/api/structures/{structure_id}/xyz", response_class=PlainTextResponse)
+    def structure_xyz(structure_id: int, con: sqlite3.Connection = Con) -> PlainTextResponse:
+        """Coordinates alone, for a hover preview — `get_structure` prices every route."""
+        rows = con.execute(
+            """SELECT g.coords_hash FROM geometries g
+               JOIN structures s ON s.id = g.structure_id
+               WHERE g.structure_id = ?
+               ORDER BY (g.id = s.best_geometry_id) DESC, g.fidelity DESC, g.id ASC""",
+            (structure_id,)).fetchall()
+        if not rows:
+            raise HTTPException(404, f"structure {structure_id} has no geometry")
+        for row in rows:
+            try:
+                return PlainTextResponse(store.get_text(row["coords_hash"]),
+                                         media_type="text/plain; charset=utf-8")
+            except (KeyError, ValueError, OSError):
+                continue                  # the row outlived its blob; try the next rung
+        raise HTTPException(404, f"structure {structure_id}: no geometry blob is in the store")
 
     # ── run spec (copy-paste) ────────────────────────────────────────────────
     @app.get("/api/structures/{structure_id}/spec")

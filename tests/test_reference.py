@@ -19,7 +19,8 @@ from mofsbu.energy.reference import (
     check_reference_quality, put_balanced_reaction, reaction_balanced_energy,
     reaction_terms, store_reaction_energy,
 )
-from mofsbu.energy.routes import price_incoming_routes, price_reaction
+from mofsbu.energy.protons import deprotonation_pairs, link_protomers
+from mofsbu.energy.routes import decompositions, price_incoming_routes, price_reaction
 from mofsbu.graph import EdgeType, TypedGraph
 from mofsbu.registry import (
     Provenance, ReadOnlyRegistry, Registry, put_geometry, put_reaction, put_structure,
@@ -501,3 +502,94 @@ def test_every_incoming_edge_gets_an_entry(reg, balanced):
     routes = price_incoming_routes(reg, ids["product"], min_fidelity=Fidelity.XTB)
     assert [r["reaction_id"] for r in routes] == [rid]
     assert routes[0]["kind"] == "reaction"
+
+
+# ── what this could have been made from ──────────────────────────────────────
+
+def test_decompositions_finds_a_split_that_was_never_recorded(reg):
+    """A `place` edge records a construction and cites nothing; the pieces still exist.
+
+    `[M(H2O)2]2+` is `[M(H2O)]2+` plus a water, and both are in the registry — so the
+    question "what adds up to this" has an answer even though no edge asserts it.
+    """
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    rung = _store(reg, aqua_ion(1), energy=-80.0)
+    wat = _store(reg, water(), energy=-15.0)
+
+    found = decompositions(reg, product, min_fidelity=Fidelity.XTB)
+    split = next(d for d in found
+                 if sorted(p["structure_id"] for p in d["parts"]) == sorted([rung, wat]))
+    assert split["origin"] == "inferred"
+    assert split["recorded_as"] is None           # nothing wrote this down
+    assert split["can_price"] is True
+    assert split["total_dE"] == pytest.approx(-100.0 - (-80.0 + -15.0))
+
+
+def test_a_derived_split_says_when_it_is_already_recorded(reg):
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    rung = _store(reg, aqua_ion(1), energy=-80.0)
+    wat = _store(reg, water(), energy=-15.0)
+    rid = put_reaction(reg, product, Provenance(reagent_ids=(rung, wat)))
+
+    split = next(d for d in decompositions(reg, product, min_fidelity=Fidelity.XTB)
+                 if sorted(p["structure_id"] for p in d["parts"]) == sorted([rung, wat]))
+    assert split["recorded_as"] == rid
+
+
+def test_protomers_of_one_molecule_are_found_by_arithmetic(reg):
+    """`[M(H2O)2]2+` and `[M(OH)(H2O)]+` differ by one proton and one charge."""
+    acid = _store(reg, aqua_ion(2), energy=-100.0)
+    base = _store(reg, hydroxo_complex(), energy=-95.0)
+    assert (acid, base, 1) in deprotonation_pairs(reg)
+
+
+def test_a_deprotonation_edge_is_isodesmic(reg):
+    """The first equations here that `strict=True` accepts.
+
+    No metal-donor bond changes across a proton transfer, so the rule that refuses every
+    assembly edge has nothing to object to — which is the whole reason the couple exists
+    rather than a bare H+.
+    """
+    acid = _store(reg, aqua_ion(2), energy=-100.0)
+    base = _store(reg, hydroxo_complex(), energy=-95.0)
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+
+    written = link_protomers(reg, water_id=wat, hydronium_id=h3o)
+    edge = next(w for w in written
+                if (w["protonated"], w["deprotonated"]) == (acid, base))
+    assert edge["why_not"] is None
+
+    energy = reaction_balanced_energy(reg, edge["reaction_id"], strict=True)
+    assert energy.quality.isodesmic is True
+    assert energy.dE == pytest.approx((-95.0 + -14.0) - (-100.0 + -15.0))
+
+
+def test_linking_twice_writes_nothing_the_second_time(reg):
+    _store(reg, aqua_ion(2), energy=-100.0)
+    _store(reg, hydroxo_complex(), energy=-95.0)
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+
+    first = link_protomers(reg, water_id=wat, hydronium_id=h3o)
+    assert any(w["reaction_id"] is not None for w in first)
+    assert link_protomers(reg, water_id=wat, hydronium_id=h3o) == []
+
+
+def test_the_couple_is_not_linked_through_itself(reg):
+    """`H3O+ + H2O -> H2O + H3O+` is balanced, isodesmic and exactly zero."""
+    wat = _store(reg, water(), energy=-15.0)
+    h3o = _store(reg, hydronium(), energy=-14.0)
+    assert (h3o, wat, 1) in deprotonation_pairs(reg)          # the arithmetic sees it
+    assert link_protomers(reg, water_id=wat, hydronium_id=h3o) == []   # and declines it
+
+
+def test_a_split_below_the_floor_is_refused_not_hidden(reg):
+    """Absent is absent: a candidate with no ML energy is listed with its reason."""
+    product = _store(reg, aqua_ion(2), energy=-100.0)
+    _store(reg, aqua_ion(1), energy=-80.0)
+    _store(reg, water(), energy=-15.0)
+    found = decompositions(reg, product, min_fidelity=Fidelity.DFT)
+    assert found                                   # still offered, not silently dropped
+    assert all(not d["can_price"] for d in found)
+    assert all("XTB" in d["why_not"] and "DFT" in d["why_not"] for d in found)

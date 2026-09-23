@@ -128,8 +128,22 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:11px}
 .muted{color:var(--muted)}
 .caveat{color:var(--warn)}
-.route{margin-bottom:5px}
-.route-e{padding-left:10px;font-variant-numeric:tabular-nums}
+/* The detail pane is not a scrolling table region and its columns do not sort, so the
+   global `th{position:sticky;cursor:pointer}` would promise behaviour this table has not. */
+#d-routes{overflow-x:auto}
+#d-routes th{position:static;z-index:auto;cursor:default}
+#d-routes td.caveat-cell{white-space:normal;min-width:90px}
+/* dE is why the table exists, so it is first and never wraps.  The species columns are
+   capped and ellipsised: the full label is on the anchor's title and in the opened row. */
+#d-routes td.num,#d-routes th.num{white-space:nowrap}
+#d-routes td:nth-child(2),#d-routes td:nth-child(3){
+  max-width:19ch;overflow:hidden;text-overflow:ellipsis}
+#d-routes tr.rmember td{padding-left:16px;font-size:11px;color:var(--muted)}
+#d-routes .rhead,#d-routes .rnote{font-size:10.5px}
+#d-routes .rnote{margin-top:6px}
+#d-routes .caret{display:inline-block;width:11px;color:var(--muted)}
+#d-routes a.term{color:var(--accent);text-decoration:none}
+#d-routes a.term:hover{text-decoration:underline}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .spacer{flex:1}
 /* The pane itself no longer scrolls — the wrapper does.  That is what keeps the paging
@@ -148,6 +162,14 @@ dd{margin:0;overflow-wrap:anywhere}
 .hashline{display:flex;align-items:center;gap:6px}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:10.5px;color:var(--muted)}
 .empty{color:var(--muted);padding:24px 8px;text-align:center}
+/* The popover follows `#toast`'s idiom — fixed, and transparent to the pointer, so it
+   can never swallow the click on the link that summoned it. */
+#preview{position:fixed;z-index:60;width:210px;padding:4px;border:1px solid var(--line);
+         border-radius:6px;background:var(--bg);box-shadow:0 4px 14px rgba(0,0,0,.2);
+         pointer-events:none;font-size:11px}
+#preview-3d{position:relative;width:202px;height:140px;overflow:hidden}
+#preview-note{padding:10px 4px}
+#preview-cap{padding:3px 4px 1px;overflow-wrap:anywhere;color:var(--muted)}
 #toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
        padding:6px 14px;border-radius:14px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:.92}
@@ -320,9 +342,14 @@ dd{margin:0;overflow-wrap:anywhere}
       <div id="entry-msg" class="muted" style="font-size:11.5px"></div>
 
       <h2>provenance <span class="muted" style="font-weight:400;font-size:11px">· dE in eV</span></h2>
-      <div id="d-routes" class="muted"></div>
+      <div id="d-routes"></div>
     </div>
   </aside>
+</div>
+<div id="preview" hidden>
+  <div id="preview-3d"></div>
+  <div id="preview-note" class="muted" hidden></div>
+  <div id="preview-cap"></div>
 </div>
 <div id="toast"></div>
 
@@ -350,6 +377,9 @@ const state = {
   // query order are the same thing only as long as nobody sorts client-side, and this
   // does not quietly depend on that.
   pageIds:[], includeHidden:false, nHidden:0,
+  // Which collapsed route groups are open, by group key.  Kept here rather than in the
+  // DOM because the table is re-rendered from the route list on every toggle.
+  openGroups:new Set(),
 };
 let viewer = null, viewerModel = null;
 
@@ -372,25 +402,176 @@ const firstClause = (s) => {
   return t.length > 80 ? t.slice(0, 77) + "…" : t;
 };
 
-/* One provenance edge: what it is, then what it cost or why that cannot be said.
-   A dE here is never isodesmic (an assembly step forms a metal-donor bond, D17), so the
-   caveat travels with the number rather than being left to the reader to remember. */
-function renderRoute(r){
-  const head = `#${r.id} · ${esc(r.kind)} · depth ${r.depth ?? "— (M8)"}`
-             + (r.note ? " · " + esc(r.note) : "");
-  let energy;
-  if(r.can_price){
-    const s = (r.steps && r.steps[0]) || {};
-    const rung = FIDELITY[String(s.fidelity)] || s.fidelity_name || "?";
-    energy = `${fmtE(r.total_dE)} · ${esc(rung)}`;
-    if(s.isodesmic === false) energy += ` <span class="caveat">· not isodesmic</span>`;
-    if(s.all_converged === false) energy += ` <span class="caveat">· unconverged</span>`;
-  } else {
-    energy = `<span class="muted">— (${esc(firstClause(r.why_not) || "no energy")})</span>`;
+/* The species on each side of one edge's arrow.  Every id is a link because `select()`
+   fetches any structure by id, page or no page; the click is caught by delegation. */
+function renderTerms(step){
+  const terms = (step && step.terms) || [];
+  if(!terms.length)
+    return `<span class="muted">no species recorded for this edge</span>`;
+  const link = (t) => {
+    const name = (t.display_label && t.display_label.trim())
+              || (t.label && t.label.trim()) || ("#" + t.structure_id);
+    const n = Number(t.stoich) > 1 ? esc(t.stoich) + " " : "";
+    return `${n}<a href="#" class="term" data-sid="${esc(t.structure_id)}"`
+         + ` title="open structure ${esc(t.structure_id)}">${esc(name)}</a>`;
+  };
+  const left  = terms.filter(t => t.side === "reagent").map(link).join(" + ");
+  const right = terms.filter(t => t.side === "product").map(link).join(" + ");
+  return (left  || `<span class="muted">no reagent recorded for this edge</span>`)
+       + " → "
+       + (right || `<span class="muted">no product recorded for this edge</span>`);
+}
+
+/* One row per CHEMISTRY: same source, same thing added, one entry.  The choice vector
+   distinguishes two placements of those same pieces, which is a geometric fact and not a
+   different reaction — dE does not depend on it — so it is counted inside the group
+   rather than splitting it.  Collapsed in the BROWSER: the API's route count is what
+   `tests/test_ui_controls.py` pins, and it must not move. */
+function groupRoutes(routes){
+  const seen = new Map(), out = [];
+  for(const r of routes){
+    const step = (r.steps && r.steps[0]) || null;
+    const ids = ((step && step.terms) || [])
+      .filter(t => t.side === "reagent").map(t => Number(t.structure_id))
+      .sort((a, b) => a - b);
+    const key = ids.join(",");
+    let g = seen.get(key);
+    if(!g){ g = {key, rep:r, members:[], vectors:new Set()}; seen.set(key, g); out.push(g); }
+    g.members.push(r);
+    if(r.choice_vector_digest) g.vectors.add(r.choice_vector_digest);
   }
+  for(const g of out){ g.count = g.members.length; g.placements = g.vectors.size; }
+  return out;
+}
+
+/* The stored label spells out the identity work: every deprotonation orbit, the spin, the
+   identity level it was resolved to.  That is the right thing to store and the wrong thing
+   to put in six table cells — it is wider than the panel.  The full string stays one hover
+   away, and `renderTerms` in the opened row still shows it in full. */
+function shortLabel(full){
+  return String(full ?? "")
+    .replace(/cfg\([^)]*\)/g, "").replace(/sep\([^)]*\)/g, "")   // the orbit bookkeeping
+    .replace(/\s*\?L\d+\s*$/, "")                                 // identity level
+    .replace(/\s+s\d+\b/g, "")                                    // spin multiplicity
+    .replace(/\s{2,}/g, " ").trim();
+}
+
+/* Which reagent is the thing being built on, and which is the thing added.  A free ligand
+   is labelled `[tHQ] q0`; a coordination sphere leads with its metal, `Ni[H2O]2[...]`.
+   Where that does not decide it, the bigger label is the sphere. */
+function splitReagents(step){
+  // `solvent` and `leaving` are the proton's carrier, not species being built in — a
+  // deprotonation would otherwise read as "added water", which is true of the arithmetic
+  // and wrong about the chemistry.
+  const rs = ((step && step.terms) || [])
+    .filter(t => t.side === "reagent" && (t.role || "reagent") === "reagent");
+  if(rs.length < 2) return {source: rs[0] || null, added: null, rest: rs.slice(1)};
+  const free = rs.filter(t => /^\s*\[/.test(t.display_label || ""));
+  if(free.length === 1){
+    const added = free[0];
+    return {source: rs.find(t => t !== added), added, rest: rs.filter(t => t !== added).slice(1)};
+  }
+  const byLen = [...rs].sort((a, b) =>
+    String(b.display_label || "").length - String(a.display_label || "").length);
+  return {source: byLen[0], added: byLen[1], rest: byLen.slice(2)};
+}
+
+/* A dE here is never isodesmic (an assembly step forms a metal-donor bond, D17), so the
+   caveat travels with the number rather than being left to the reader to remember. */
+function routeEnergy(r){
+  const s = (r.steps && r.steps[0]) || {};
+  if(!r.can_price)
+    return `<span class="muted">— (${esc(firstClause(r.why_not) || "no energy")})</span>`;
+  let out = fmtE(r.total_dE);
+  if(s.isodesmic === false)         out += ` <span class="caveat">· not isodesmic</span>`;
+  else if(s.isodesmic !== true)     out += ` <span class="caveat">· isodesmic unchecked</span>`;
+  if(s.all_converged === false)     out += ` <span class="caveat">· unconverged</span>`;
+  return out;
+}
+function routeRung(r){
+  const s = (r.steps && r.steps[0]) || {};
+  if(s.fidelity === null || s.fidelity === undefined)
+    return `<span class="muted">— (${r.can_price ? "no rung reported" : "not priced"})</span>`;
+  return esc(FIDELITY[String(s.fidelity)] || s.fidelity_name || s.fidelity);
+}
+function routeCaveats(r){
+  const s = (r.steps && r.steps[0]) || {};
+  const codes = s.caveats || [];
+  if(!codes.length)
+    return s.isodesmic === true || s.isodesmic === false
+      ? `<span class="muted">—</span>`
+      : `<span class="muted">— (reference quality not checked)</span>`;
+  return `<span class="caveat">${codes.map(c => esc(String(c).replace(/_/g, " ")))
+    .join(", ")}</span>`;
+}
+function routeWhen(r){
+  const d = (r.created_at || "").slice(0, 10);
+  return d ? esc(d) : `<span class="muted">— (not recorded)</span>`;
+}
+function routeHead(r){
+  return `#${esc(r.id)} · ${esc(r.kind)} · depth ${esc(r.depth ?? "— (M8)")}`
+       + (r.note ? " · " + esc(r.note) : "");
+}
+/* A deprotonation adds nothing — it shifts a proton onto the carrier and the carrier
+   leaves.  The `leaving` stoichiometry is how many went. */
+function protonsShed(step){
+  const n = ((step && step.terms) || [])
+    .filter(t => t.role === "leaving")
+    .reduce((s, t) => s + Number(t.stoich || 1), 0);
+  if(!n) return null;
+  return `<span class="caveat">&minus;${esc(n)}&nbsp;H<sup>+</sup></span>`;
+}
+
+/* A species cell: short enough to read across, with the stored label one hover away and
+   the id still the thing you click. */
+function speciesCell(term){
+  if(!term) return `<span class="muted">—</span>`;
+  const full = term.display_label || ("structure " + term.structure_id);
+  const n = Number(term.stoich || 1) > 1 ? esc(term.stoich) + "&times; " : "";
+  return `${n}<a href="#" class="term" data-sid="${esc(term.structure_id)}"`
+       + ` title="${esc(full)}">${esc(shortLabel(full))}</a>`;
+}
+
+function renderRouteGroup(g, gi){
+  const r = g.rep, many = g.count > 1, open = state.openGroups.has(g.key);
   const tip = r.why_not ? ` title="${esc(r.why_not)}"` : "";
-  return `<div class="route"><div>${head}</div>`
-       + `<div class="route-e"${tip}>${energy}</div></div>`;
+  const {source, added} = splitReagents((r.steps && r.steps[0]) || {});
+  const placements = g.placements > 1
+    ? ` <span class="muted">(${esc(g.placements)} placements)</span>` : "";
+  // A `place` edge cites nothing: the sphere was constructed whole, not reacted together
+  // (C15).  Two bare dashes would read as missing data rather than as what happened.
+  const built = !source && !added
+    ? `<span class="muted">— (built whole, no reagents recorded)</span>` : null;
+  // What a deprotonation adds is nothing; what it LOSES is the point.
+  const shed = protonsShed((r.steps && r.steps[0]) || {});
+  let html = `<tr class="rgroup" data-gi="${esc(gi)}"${tip}>`
+    + `<td class="num">${routeEnergy(r)}</td>`
+    + `<td>${built ? "" : (shed || speciesCell(added))}</td>`
+    + `<td><span class="caret">${many ? (open ? "▾" : "▸") : ""}</span>`
+    + `${built || speciesCell(source)}${placements}</td>`
+    + `<td>${routeRung(r)}</td>`
+    + `<td class="caveat-cell">${routeCaveats(r)}</td>`
+    + `<td class="num">${many ? "×" + esc(g.count) : `<span class="muted">×1</span>`}</td></tr>`;
+  if(open && many)
+    for(const m of g.members)
+      html += `<tr class="rmember"><td colspan="6">`
+            + `${renderTerms((m.steps && m.steps[0]) || {})}`
+            + `<div class="muted rhead">${routeHead(m)} · ${routeWhen(m)}</div></td></tr>`;
+  return html;
+}
+
+function renderRoutes(routes){
+  if(!routes.length)
+    return `<span class="muted">no recorded route (ingested or root reagent)</span>`;
+  const groups = groupRoutes(routes);
+  const note = groups.length < routes.length
+    ? `<div class="muted rnote">${esc(routes.length)} edges · ${esc(groups.length)} distinct`
+      + ` by what was added to what — open a row for the edges behind it</div>`
+    : "";
+  return `<table><thead><tr><th class="num">dE</th><th>added</th><th>source</th>`
+       + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead><tbody>`
+       + groups.map(renderRouteGroup).join("")
+       + `</tbody></table>${note}`;
 }
 const labelOf = (r) => r.display_label && r.display_label.trim()
                        ? r.display_label : (r.formula || ("structure " + r.id));
@@ -856,9 +1037,8 @@ function renderDetail(){
     `<dt>${k}</dt><dd>${v===null||v===undefined?"—":String(v)}</dd>`).join("");
   $("d-tags").innerHTML = (s.tags||"").split(",").filter(Boolean)
     .map(t=>`<span class="tag">${t}</span>`).join("");
-  $("d-routes").innerHTML = d.routes.length
-    ? d.routes.map(renderRoute).join("")
-    : "no recorded route (ingested or root reagent)";
+  state.openGroups.clear();          // a new structure's groups start closed
+  $("d-routes").innerHTML = renderRoutes(d.routes);
   $("copy-spec").onclick = async () => {
     const q = state.geomId ? "?geometry_id="+state.geomId : "";
     const rr = await fetch(`/api/structures/${s.id}/spec${q}`);
@@ -1051,6 +1231,71 @@ async function showGeometry(gid){
   viewer.zoomTo(); viewer.render();
 }
 
+/* ── hover preview ────────────────────────────────────────────
+   ONE viewer for every preview ever shown: a browser caps live WebGL contexts at
+   8-16, and a context per hover would reach that in a dozen links.  `previewGen` is
+   what stops a slow fetch for one structure painting over the popover now showing
+   another — the fetch checks that it is still the current one before it draws. */
+let preview = null, previewGen = 0, previewTimer = null;
+const PREVIEW_INTENT_MS = 500;
+const previewXyz = new Map();
+
+function ensurePreviewViewer(){
+  if(preview || typeof $3Dmol === "undefined") return preview;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  preview = $3Dmol.createViewer($("preview-3d"),
+    {backgroundColor: dark ? "#16181c" : "#f7f7f8"});
+  return preview;
+}
+function hidePreview(){
+  clearTimeout(previewTimer);
+  previewGen++;                       // anything still in flight is now stale
+  $("preview").hidden = true;
+}
+function previewBody(noteHtml){
+  $("preview-note").hidden = !noteHtml;
+  $("preview-3d").hidden = !!noteHtml;
+  if(noteHtml) $("preview-note").innerHTML = noteHtml;
+}
+function placePreview(el){
+  const box = el.getBoundingClientRect(), p = $("preview");
+  const w = p.offsetWidth || 210, h = p.offsetHeight || 180;
+  p.style.left = Math.max(6, Math.min(innerWidth - w - 6, box.left)) + "px";
+  p.style.top  = (box.bottom + h + 8 > innerHeight ? box.top - h - 8 : box.bottom + 8) + "px";
+}
+async function showPreview(el, id, name){
+  const gen = ++previewGen;
+  const p = $("preview");
+  $("preview-cap").innerHTML = `<span class="mono">#${esc(id)}</span> ${esc(name)}`;
+  previewBody("");
+  p.hidden = false;
+  placePreview(el);
+  let xyz = previewXyz.get(id);
+  if(xyz === undefined){
+    try{
+      const r = await fetch(`/api/structures/${id}/xyz`);
+      xyz = r.ok ? await r.text() : null;
+    } catch(e){ xyz = null; }
+    previewXyz.set(id, xyz);
+  }
+  if(gen !== previewGen) return;       // the pointer moved on while this was in flight
+  if(xyz === null){
+    previewBody(`<span class="muted">— (no geometry in the store for this structure)</span>`);
+    placePreview(el); return;
+  }
+  if(!ensurePreviewViewer()){
+    previewBody(`<span class="muted">— (3Dmol.js did not load, so there is nothing to draw)`
+              + `</span>`);
+    placePreview(el); return;
+  }
+  preview.removeAllModels();
+  preview.addModel(xyz, "xyz");
+  preview.setStyle({}, {stick:{radius:0.13}, sphere:{scale:0.26}});
+  preview.resize();                   // the container had no size while it was hidden
+  preview.zoomTo(); preview.render();
+  placePreview(el);
+}
+
 /* ── boot ────────────────────────────────────────────────────── */
 function chips(host, values, onChange, render){
   const el = $(host); el.innerHTML = "";
@@ -1180,6 +1425,33 @@ async function boot(){
     state.includeHidden = $("show-hidden").checked;
     state.offset = 0; load();
   };
+  // One listener for a container whose contents are rebuilt as an HTML string: a link
+  // or a caret painted after this runs is still heard, which per-node handlers are not.
+  $("d-routes").addEventListener("click", (e) => {
+    const term = e.target.closest("a.term");
+    if(term){ e.preventDefault(); hidePreview(); select(Number(term.dataset.sid)); return; }
+    const row = e.target.closest("tr.rgroup");
+    if(!row || !state.detail) return;
+    const g = groupRoutes(state.detail.routes)[Number(row.dataset.gi)];
+    if(!g || g.count < 2) return;
+    if(!state.openGroups.delete(g.key)) state.openGroups.add(g.key);
+    $("d-routes").innerHTML = renderRoutes(state.detail.routes);
+  });
+  // Hover is an intent, not a click: nothing is fetched until the pointer has rested.
+  $("d-routes").addEventListener("mouseover", (e) => {
+    const a = e.target.closest("a.term");
+    if(!a) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(
+      () => showPreview(a, Number(a.dataset.sid), a.textContent), PREVIEW_INTENT_MS);
+  });
+  $("d-routes").addEventListener("mouseout", (e) => {
+    if(e.target.closest("a.term")) hidePreview();
+  });
+  // A popover pinned to a rectangle that has moved is worse than no popover.
+  addEventListener("scroll", hidePreview, true);
+  addEventListener("resize", hidePreview);
+
   $("style-stick").onclick = () => { state.style="stick"; applyStyle(); };
   $("style-ball").onclick  = () => { state.style="ball";  applyStyle(); };
   $("style-sphere").onclick= () => { state.style="sphere";applyStyle(); };

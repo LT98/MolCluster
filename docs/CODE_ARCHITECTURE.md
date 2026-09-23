@@ -71,7 +71,9 @@ charge, spin — travels with it in a `methods` row.
 | **energy/** | | |
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
-| `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality | ✅ |
+| `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
+| `energy/routes.py` | Prices one edge **for a reader**: a refusal comes back as data, not as an exception, because a panel listing twelve routes cannot be one raise. `decompositions` answers what a structure could have been made from — arithmetic over the registry, flagged `inferred`, never mixed with what was recorded (C15) | ✅ |
+| `energy/protons.py` | Finds protomer pairs and links them with a balanced `AH + n H2O → A(n−) + n H3O+`. The H₂O/H₃O⁺ couple exists because a bare proton has no electrons to price; these are the **only isodesmic edges in the project** | ✅ |
 | **assembly/** | | |
 | `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow`. A join takes `lone_pair=` — which lobe of an sp2 donor binds is worth 2.8 Å of M···M and has no default in the chemistry | ✅ |
 | ↳ `metal_metal_compatible`/`join_metal_metal` | vertex to vertex, no ligand between them — the **declared nucleus**. The one join whose M···M is an *input*, because there is no ligand to derive it from (D20) | ✅ |

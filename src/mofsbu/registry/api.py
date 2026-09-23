@@ -45,7 +45,10 @@ class Provenance:
     """A DAG edge: how this structure came to be.  Never part of its identity."""
 
     kind: str = "assembly"          # ingest | assembly | reaction
-    reagent_ids: tuple[int, ...] = ()
+    #: Either a bare structure id, or `(structure_id, stoich)`.  A diaqua complex needs
+    #: to say TWO waters: the reagent table's key is (reaction, structure, role), so a
+    #: repeated bare id collapses to one row and the equation loses an atom count.
+    reagent_ids: tuple[int | tuple[int, int], ...] = ()
     note: str = ""
     atom_map: dict[int, int] | None = None
     choice_vector_digest: str | None = None
@@ -283,12 +286,29 @@ def put_reaction(reg: Registry, product_id: int, prov: Provenance) -> int:
          prov.choice_vector_digest, prov.depth, prov.note, utcnow()),
     )
     rid = int(cur.lastrowid)
-    for reagent in prov.reagent_ids:
+    for sid, stoich in _reagent_counts(prov.reagent_ids).items():
         reg.conn.execute(
-            "INSERT OR IGNORE INTO reaction_reagents (reaction_id, structure_id) VALUES (?,?)",
-            (rid, reagent),
+            "INSERT INTO reaction_reagents (reaction_id, structure_id, stoich) VALUES (?,?,?)",
+            (rid, sid, stoich),
         )
     return rid
+
+
+def _reagent_counts(reagents: Iterable[int | tuple[int, int]]) -> dict[int, int]:
+    """`(id, n)` pairs and bare ids, summed into one count per structure.
+
+    A bare id repeated is the same claim as `(id, 2)`, so both spellings survive; the
+    summing is what stops `[Zn(H2O)4]` from recording one water for four.
+    """
+    counts: dict[int, int] = {}
+    for reagent in reagents:
+        sid, stoich = reagent if isinstance(reagent, tuple) else (reagent, 1)
+        if stoich < 1:
+            raise RegistryError(
+                f"reagent {sid} has stoichiometry {stoich}; a species that is not "
+                f"consumed is absent from the equation, not present zero times")
+        counts[int(sid)] = counts.get(int(sid), 0) + int(stoich)
+    return counts
 
 
 # ── hiding a structure (the soft delete) ─────────────────────────────────────
