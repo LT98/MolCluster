@@ -12,6 +12,30 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B23 — a "deprotonation" edge could also change which atom binds the metal ✅
+
+**`correctness` · `energy/protons.py` · found reviewing the MVP energies for the interim
+presentation.**
+
+`deprotonation_pairs` keyed structures on (heavy-atom formula, charge − H count), so it paired
+every protonated row with every row of the same formula one proton lighter. On
+`mvp_ni_thq_cl.db` that was 458 edges, a median of 8 and up to 21 partners per acid, and one
+edge could also move which oxygen bound Ni or which geometry frame was compared. Same-charge
+tHQ deprotonations spanned −3.65 to +5.24 eV: the number was a deprotonation plus an
+isomerisation.
+
+**Fix:** a pair is exact. `TypedGraph.without_proton(h)` removes one labile H (bonded to one
+non-carbon, non-metal atom) and lowers the charge; the result is looked up by L1 hash, charge
+and multiplicity. D15 records a delocalised charge as graph-level only, so both conventions
+(charge on the atom, charge delocalised) are tried; everything else must match exactly. Two
+protons apart is two edges through the intermediate. On the same registry: 87 pairs, at most
+one partner per distinct proton, and Ni²⁺ tHQ deprotonations now span −0.61 to +1.92 eV.
+The Ni–ClH species remain the outliers, which is B22's input rule to prevent, not this rule's.
+Tests: `tests/test_reference.py` (a formula look-alike is refused; equivalent protons give one
+edge).
+
+---
+
 ## B22 — an anion entered as one was registered as neutral ✅
 
 **`correctness` · `sites/protomers.py` · found planning the NiCl₂ vs Ni(OAc)₂ salt study.**

@@ -320,6 +320,38 @@ class TypedGraph:
                 out.add_bond(remap[u], remap[v], et, order=self._g.edges[u, v]["order"])
         return out
 
+    def without_proton(self, h: int, *, localised: bool = True) -> TypedGraph:
+        """This graph with hydrogen `h` removed as a proton (H⁺).
+
+        The net charge drops by one.  With `localised`, so does the formal charge of the
+        atom it was bonded to; without, the charge is left delocalised, which is how
+        `graph.from_mol.from_rdkit` records a conjugated anion (per-atom charge 0).  A
+        stored graph does not say which applies, so a caller matching against stored rows
+        tries both.
+        """
+        if self.label(h).element != "H":
+            raise GraphValidationError(f"atom {h} is {self.label(h).element}, not H")
+        heavy = self.neighbors(h, EdgeType.COVALENT)
+        if len(heavy) != 1 or self.is_metal(heavy[0]) or len(self.neighbors(h)) != 1:
+            raise GraphValidationError(
+                f"H {h} is not bonded to exactly one non-metal atom, so it is not a proton "
+                f"this graph can lose")
+        out = TypedGraph(charge=None if self.charge is None else self.charge - 1,
+                         multiplicity=self.multiplicity, name=self.name)
+        remap = {}
+        for i in self.nodes():
+            if i == h:
+                continue
+            lab = self.label(i)
+            remap[i] = out.add_atom(
+                lab.element,
+                formal_charge=lab.formal_charge - (1 if localised and i == heavy[0] else 0),
+                oxidation_state=lab.oxidation_state, spin_class=lab.spin_class)
+        for u, v, et in self.edges():
+            if u in remap and v in remap:
+                out.add_bond(remap[u], remap[v], et, order=self._g.edges[u, v]["order"])
+        return out
+
     def with_multiplicity(self, multiplicity: int) -> TypedGraph:
         out = self.relabel({i: i for i in self.nodes()})
         out.multiplicity = multiplicity
