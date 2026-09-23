@@ -12,6 +12,28 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B22 — an anion entered as one was registered as neutral ✅
+
+**`correctness` · `sites/protomers.py` · found planning the NiCl₂ vs Ni(OAc)₂ salt study.**
+
+`enumerate_protomers` gave every protomer `charge = −k` (k = protons removed) and built the
+parent at charge 0, so the input's own formal charge was discarded. `[Cl-]` and `CC(=O)[O-]`
+both came out **q0**, and every complex built from them carried the error into its net charge
+(`runner._build_sphere` sums component charges). Nothing refused it.
+
+It had stayed hidden because the only chloride dataset (`mvp_ni_thq_cl.db`) entered chloride as
+`Cl` (HCl) with one deprotonation — which charges correctly, but also creates Ni–ClH species
+that do not exist in water, and those produced the most negative "deprotonation" energies in
+that registry (−3.65 eV).
+
+**Fix:** the charge is read off the molecule — `Chem.GetFormalCharge` of the parent and of each
+deprotonated variant (`deprotonate` already sets the formal charges it creates). A neutral input
+is unchanged, so no stored identity moves; an anion's zero-deprotonation state is labelled
+`as_given` rather than `neutral`. Tests: `tests/test_protomers.py` (anion charges, acetic acid
+0/−1, and Ni(Cl)(H₂O)₃ +1 / NiCl₂(H₂O)₂ 0 from `_build_sphere`).
+
+---
+
 ## B18 — a `grow` step wrote an edge without the ligand it added ✅
 
 **`correctness` · `runner.py` · found while pricing provenance edges in the viewer, fixed in

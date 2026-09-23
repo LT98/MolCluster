@@ -59,7 +59,7 @@ class Protomer:
     def label(self) -> str:
         """Generated, not named.  `cfg` is the orbit representative; `sep` the profile."""
         if not self.n_deprotonated:
-            return "neutral"
+            return "neutral" if self.charge == 0 else "as_given"
         tag = f"-{self.n_deprotonated}H"
         if not self.configuration:
             return tag
@@ -138,7 +138,9 @@ def enumerate_protomers(
     limit = len(sites) if max_deprotonations is None else min(max_deprotonations, len(sites))
     # Equivalence of selections is decided on the PARENT: the un-deprotonated molecule,
     # whose symmetry is what makes two choices the same choice.
-    parent = from_rdkit(mol, charge=0, multiplicity=multiplicity)
+    # Charges are read off the molecule, never assumed neutral: an anion entered as one
+    # (`[Cl-]`, acetate) keeps its charge, and each proton removed lowers it by one (B22).
+    parent = from_rdkit(mol, charge=Chem.GetFormalCharge(mol), multiplicity=multiplicity)
     site_atoms = [s.idx for s in sites]
 
     found: dict[str, dict] = {}
@@ -147,13 +149,14 @@ def enumerate_protomers(
             variant = mol
             if selection:
                 variant, _ = deprotonate(mol, [sites[i] for i in selection])
-            graph = from_rdkit(variant, charge=-k, multiplicity=multiplicity)
+            charge = Chem.GetFormalCharge(variant)
+            graph = from_rdkit(variant, charge=charge, multiplicity=multiplicity)
             key = l1_graph_hash(graph)
             entry = found.get(key)
             if entry is None:
                 chosen_atoms = [sites[i].idx for i in selection]
                 found[key] = {
-                    "n": k, "charge": -k, "l1": key,
+                    "n": k, "charge": charge, "l1": key,
                     "configuration": configuration_key(parent, site_atoms, selection),
                     "separation": separation_profile(parent, chosen_atoms),
                     "selections": [selection], "representative": selection,

@@ -109,3 +109,35 @@ def test_neutral_thq_has_no_bindable_pocket():
 def test_protomer_identity_is_stable_across_selections(protomers):
     """Two equivalent selections give one L1, which is what made the collapse happen."""
     assert len({p.l1 for p in protomers}) == len(protomers)
+
+
+# ── B22: an anion entered as one keeps its charge ────────────────────────────
+
+
+@pytest.mark.parametrize("smiles", ["[Cl-]", "CC(=O)[O-]"])
+def test_an_anion_entered_as_one_keeps_its_charge(smiles):
+    (only,) = enumerate_protomers(mol_from_smiles(smiles), max_deprotonations=0)
+    assert only.charge == -1
+    assert only.graph.charge == -1
+    assert only.label == "as_given"          # not "neutral": it is not
+
+
+def test_each_proton_removed_lowers_the_input_charge_by_one():
+    charges = [p.charge for p in enumerate_protomers(mol_from_smiles("CC(=O)O"),
+                                                     max_deprotonations=1)]
+    assert charges == [0, -1]
+
+
+def test_a_chloride_sphere_carries_the_chloride_charge():
+    from mofsbu.runner import _build_sphere, enumerate_plan
+    from mofsbu.spec import BuildSpec
+
+    spec = BuildSpec.from_dict({
+        "spec_version": 8,
+        "molecules": [{"name": "chloride", "smiles": "[Cl-]", "max_deprotonations": 0}],
+        "metals": [{"symbol": "Ni", "oxidation_state": 2, "spin_class": "hs"}],
+        "coordination": [4], "geometries": ["tetrahedral"], "ligands_per_metal": [1, 2],
+        "binding": ["mono"], "co_ligand_counts": "fill"})
+    charges = {t.payload["components"][0]["count"]: _build_sphere(spec, t.payload).charge
+               for t in enumerate_plan(spec).tasks if t.kind == "place"}
+    assert charges == {1: 1, 2: 0}           # Ni(Cl)(H2O)3 +1, NiCl2(H2O)2 neutral
