@@ -561,6 +561,13 @@ not an endorsement of the old scheme.
 
 ### M8 — Reactions + pathways (the actual contribution) · **L**
 
+**Part of the evaluation half landed early.** `pathways/route.py` composes priced edges into a
+route: a running sum with the target at zero, a refusal when consecutive steps do not join, and
+the shed/unconsumed multisets that say what each number is an energy *of* — with `basis`, the
+token that decides when two routes may be compared at all. It is driven by the `/graph` page
+(`docs/gui/05_graph.md`) against the preserved Ni/tHQ/Cl/water dataset. It **does not** search,
+score or rank, and nothing below is pre-empted: C6 and C7 are still the first calls M8 forces.
+
 **Work** — `pathways/reaction.py`, `proxy.py`, `score.py` (max barrier, cumulative ΔG,
 rate-limiting step, **sink detection**), `search.py`, and the A-vs-B driver script.
 
