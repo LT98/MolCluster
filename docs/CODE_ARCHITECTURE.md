@@ -90,8 +90,12 @@ charge, spin — travels with it in a `methods` row.
 | `registry/verify.py` | Does every stored row still agree with its recipe? | ✅ |
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
 | `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
-| `ui/static/chrome.{js,css}` | The three pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
-| `pathways/` | reaction DAG, path scoring | 🔴 **empty → M8** *(the DAG's edges are written now — `spec.pathways` — but nothing scores them)* |
+| `ui/static/chrome.{js,css}` | The four pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
+| `ui/static/routes.js` | How to read a provenance edge, shared by the registry panel and the energy graph: what to call a species, when two edges are one chemistry, how a dE carries its caveat. Pure functions; each page lays them out for the width it has | ✅ |
+| `ui/static/preview.js` | Geometry without leaving the page — a hover popover and an embedded viewer, **one WebGL context each**, fed by the cheap per-structure xyz endpoint. Used by `graph.html`; `index.html` still has its own | ✅ |
+| `ui/static/graph.html` | `/graph`: walk provenance backwards, fork, and compare routes on one energy diagram. Hand-drawn SVG — an energy-level diagram is not a chart type a library ships | ✅ |
+| `pathways/route.py` | Composes what `energy/routes.py` prices one edge at a time: the running sum with the target at zero, the check that consecutive steps actually join, and the shed/unconsumed multisets that say what a `y` is an energy **of**. `basis` is the token that decides when two routes may be compared | ✅ |
+| `pathways/` (rest) | path scoring, barrier proxy, search | 🔴 **→ M8** *(the DAG's edges are written and now priced; nothing ranks them — C6, C7)* |
 
 ---
 

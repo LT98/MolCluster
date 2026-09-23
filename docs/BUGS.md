@@ -28,6 +28,7 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B15](#b15) | correctness | `sites/perception.py` | A bare oxide `[O-2]` types as `hydroxide_O`, so an oxo reports a hydroxide's pKa |
 | [B16](#b16) | correctness | `scripts/run_spec.py` | `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store |
 | [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
+| [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 
 ---
 
@@ -377,3 +378,54 @@ geometry-scoped row would.
 
 **Fix direction:** have `onchange` re-render the panel rather than only the viewer, or move the
 geometry-scoped rows into `showGeometry` so there is one writer for them.
+
+---
+
+## B19
+
+**Two routes draw the same structure at two different heights, and the chart does not say
+why.** `honesty` · `ui/static/graph.html`
+
+Reported as a suspected bad reference on a deprotonation step. It is not one — the numbers are
+right and self-consistent — but the chart presents them in a way that makes a reader conclude
+otherwise, which is the defect.
+
+Measured on `data/mvp_ni_thq_cl.db`, walking back from structure 17:
+
+| route | walk | y(#81) | basis |
+|---|---|---|---|
+| A | `17 ← 33 ← 74 ← 81` | **+9.92468** | `83x1` |
+| B | `17 ← 38 ← 77 ← 72 ← 81` | **+2.56853** | `83x2` |
+
+The gap is **7.35615 eV**. The free-ligand deprotonation `tHQ + H2O → tHQ⁻ + H3O⁺` (reaction
+633) is **7.35616 eV**. They agree to four decimal places, and that is the whole explanation:
+route A sheds one proton on the way to the target and route B sheds two, so the two walks
+arrive at structure 81 carrying different spectators and measured against different references.
+Both are balanced. Neither number is wrong. They are energies of different systems, and
+`pathways.route` already says so — `basis` is `83x1` against `83x2`, where 83 is H3O⁺.
+
+What fails is where that is said. `basis` is reported per node by the API and rendered **only
+in the route legend**, while the thing a reader actually looks at is two bars at two heights
+under one name. The page has the information that would stop the misreading and does not put it
+where the misreading happens.
+
+This is the same class as the free-vs-bound dE caveat: the number travels with its
+qualification everywhere, or it gets read as something it is not.
+
+**Fix direction** — three parts, in order of how much they buy:
+
+1. **Mark the node, not just the route.** When one `structure_id` appears at more than one
+   height in a drawn chart, draw both with a shared marker and say on each what its basis is.
+   The data is already there: `nodes[i].basis` per route.
+2. **Name the difference in the units a chemist reads.** `83x1` vs `83x2` is a structure id and
+   a count. It should render as `−1 H⁺` vs `−2 H⁺`, and the gap between two such nodes should
+   be offered as *"these differ by one proton transfer"* rather than left as a subtraction the
+   reader performs and then distrusts.
+3. **Decide what the chart does about it.** Two options, and this is a real call rather than an
+   oversight: either keep drawing both heights and label them, or offer a *common-basis* view
+   that re-references every route to the most-shed basis, so the curves become directly
+   comparable at the cost of no longer being the raw stored subtraction. The second is more
+   useful and more dangerous; it must never be the default and must be badged when on.
+
+**Not** in scope of the fix: the stored energies, the deprotonation edges, or
+`pathways.route`'s arithmetic. All three were checked against this case and are correct.

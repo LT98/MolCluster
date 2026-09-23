@@ -398,6 +398,93 @@ def create_app(db_path: Path, store_root: Path,
         except ValueError:                    # not a sha256 digest → treat as absent
             return False
 
+    # ── the incoming edges, for a walk ───────────────────────────────────────
+    #: What a walk needs about a species: how to name it, what it is, and whether
+    #: anything recorded reaches it — which is what says the walk can go on from there.
+    SPECIES_COLS = ("id", "display_label", "formula", "net_charge", "multiplicity",
+                    "n_metals", "n_incoming_routes")
+
+    @app.get("/api/structures/{structure_id}/routes")
+    def structure_routes(structure_id: int,
+                         inferred: int = Query(
+                             0, description="also derive splits nobody recorded"),
+                         con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """The incoming edges, priced, and enough about every species they name.
+
+        `get_structure` answers this too, but it also lists every geometry and asks the
+        blob store about each one.  A backwards walk asks this once per hop and wants
+        neither, so it gets its own door.  `species` carries one row per structure the
+        terms mention, so a candidate can be named and its own reachability shown
+        without a request per candidate.
+
+        `inferred=1` adds what `decompositions` derives from composition, in a list of
+        its own.  A `place` edge cites nothing (C15), so a structure the runner built
+        whole has no recorded precursor at all — derivation is the only answer to what
+        it is made of, and keeping it in a separate key is what stops it being read as
+        a record.
+        """
+        row = con.execute("SELECT * FROM v_structures WHERE id = ?",
+                          (structure_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, f"no structure {structure_id}")
+        routes = _rows(con.execute(
+            """SELECT id, kind, intermediate, depth, note, fidelity, created_at,
+                      choice_vector_digest
+               FROM reactions WHERE product_structure_id = ? ORDER BY id""",
+            (structure_id,)))
+        _price_routes(con, routes)
+        derived = _derived_routes(con, structure_id) if inferred else []
+        return {"structure": {k: row[k] for k in SPECIES_COLS},
+                "routes": routes, "derived": derived,
+                "species": _species(con, routes + derived)}
+
+    def _derived_routes(con: sqlite3.Connection,
+                        structure_id: int) -> list[dict[str, Any]]:
+        from mofsbu.energy.routes import decompositions
+        from mofsbu.registry import ReadOnlyRegistry
+        try:
+            return decompositions(ReadOnlyRegistry(conn=con, store=store), structure_id)
+        except Exception:                 # noqa: BLE001 - a panel must still render
+            return []
+
+    @app.get("/api/paths/price")
+    def price_path_route(
+            nodes: str = Query(..., description="the walk: target first, comma separated"),
+            via: str = Query("", description="one edge per gap — a reaction id, or 'd'"),
+            con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """What a whole route costs, node by node, with the target at zero.
+
+        A GET, and the query string is the shareable link: the viewer has no write path
+        and a stored path would need one.  Composing the steps is `pathways.route` and
+        not this module — it is arithmetic over stored energies, and it is tested.
+        """
+        from mofsbu._types import MofsbuError
+        from mofsbu.pathways.route import price_path
+        from mofsbu.registry import ReadOnlyRegistry
+
+        try:
+            walk = [int(n) for n in nodes.split(",") if n.strip()]
+            edges: list[int | str] = [e.strip() if e.strip().startswith("d") else int(e)
+                                      for e in via.split(",") if e.strip()]
+        except ValueError as exc:
+            raise HTTPException(400, f"malformed path: {exc}") from exc
+        try:
+            return price_path(ReadOnlyRegistry(conn=con, store=store), walk, edges)
+        except MofsbuError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    def _species(con: sqlite3.Connection,
+                 routes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        ids = sorted({int(t["structure_id"]) for r in routes
+                      for s in (r.get("steps") or ()) for t in (s.get("terms") or ())})
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        rows = con.execute(
+            f"SELECT {', '.join(SPECIES_COLS)} FROM v_structures WHERE id IN ({marks})",
+            tuple(ids))
+        return {str(r["id"]): dict(r) for r in rows}
+
     # ── coordinates ──────────────────────────────────────────────────────────
     @app.get("/api/geometries/{geometry_id}/xyz", response_class=PlainTextResponse)
     def geometry_xyz(geometry_id: int, con: sqlite3.Connection = Con) -> PlainTextResponse:
@@ -542,7 +629,7 @@ def create_app(db_path: Path, store_root: Path,
                               con.execute("SELECT name, version FROM algo_versions")},
         }
 
-    # ── the page ─────────────────────────────────────────────────────────────
+    # ── the pages ────────────────────────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         page = STATIC / "index.html"
@@ -550,7 +637,15 @@ def create_app(db_path: Path, store_root: Path,
             raise HTTPException(500, "index.html missing from mofsbu/ui/static")
         return HTMLResponse(page.read_text(encoding="utf-8"))
 
-    # The tab strip and the database picker are the same on all three pages, so they
+    @app.get("/graph", response_class=HTMLResponse)
+    def graph() -> HTMLResponse:
+        """Walk provenance backwards and draw what each route cost."""
+        page = STATIC / "graph.html"
+        if not page.exists():                       # pragma: no cover - packaging error
+            raise HTTPException(500, "graph.html missing from mofsbu/ui/static")
+        return HTMLResponse(page.read_text(encoding="utf-8"))
+
+    # The tab strip and the database picker are the same on all four pages, so they
     # are fetched as files rather than pasted into each one.  Mounted last: a prefix
     # mount would otherwise shadow any later route beginning with /static.
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -1,0 +1,1317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mofsbu formation-energy graph</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
+<script src="/static/routes.js"></script>
+<script src="/static/preview.js"></script>
+<style>
+:root{
+  --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
+  --accent:#2f6f9f; --accent-soft:#e6f0f8; --warn:#9a6b00; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#16181c; --panel:#1e2126; --ink:#e6e8ea; --muted:#9aa1aa; --line:#31353c;
+         --accent:#79b8e8; --accent-soft:#243444; --warn:#d9ad57; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
+     display:flex;flex-direction:column}
+/* Two columns.  The right one splits: the diagram does not need the whole height, and
+   the routes on it read better underneath it than beside it.  Every pane is resizable,
+   so the three sizes are custom properties the splitters write and the grid reads —
+   nothing else has to know a number.  Unset means "use the default track", which is
+   what a double-click on a splitter puts back. */
+#app{display:grid;grid-template-columns:var(--w-pick,340px) 5px minmax(320px,1fr);
+     flex:1;min-height:0}
+.pane{overflow:auto;padding:12px 14px}
+#picker{background:var(--panel);display:flex;flex-direction:column;gap:8px;min-width:0}
+#right{display:grid;grid-template-rows:var(--h-chart,3fr) 5px minmax(110px,2fr);
+       min-height:0;min-width:0}
+#chart{min-height:0;display:flex;flex-direction:column;gap:8px}
+#routes-pane{min-height:0;background:var(--panel)}
+
+/* A splitter is a line you can grab.  It is 5px so the layout does not lurch, with a
+   hit area either side of it, and it takes focus so the panes are adjustable without a
+   pointer at all. */
+.splitter{background:var(--line);position:relative;touch-action:none}
+.splitter::after{content:"";position:absolute;inset:-4px;z-index:2}
+.splitter:hover,.splitter:focus-visible{background:var(--accent);outline:none}
+.splitter.v{cursor:col-resize}
+.splitter.v::after{inset:0 -4px}
+.splitter.h{cursor:row-resize}
+.splitter.h::after{inset:-4px 0}
+/* While dragging, nothing else on the page should select or take the pointer. */
+body.dragging{user-select:none}
+body.dragging iframe,body.dragging .pane{pointer-events:none}
+h1{font-size:14px;margin:0;letter-spacing:.02em;overflow-wrap:anywhere}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+   margin:6px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+h2:first-child{margin-top:0}
+/* A control that belongs to a section rather than to the page, sat on its rule. */
+.h2-opt{float:right;text-transform:none;letter-spacing:0;font-size:10.5px;
+        cursor:pointer;display:inline-flex;align-items:center;gap:3px}
+.h2-opt input{margin:0;vertical-align:middle}
+.h2-btn{float:right;text-transform:none;letter-spacing:0;font-size:10.5px;
+        padding:1px 7px;margin-top:-2px}
+.h2-btn:hover:not(:disabled){border-color:var(--warn);color:var(--warn)}
+.h2-btn:disabled{opacity:.35;cursor:default}
+.chart-head{display:flex;align-items:flex-end;gap:12px}
+.chart-head h2{flex:1;margin:0}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.caveat{color:var(--warn)}
+.toolbar{display:flex;gap:6px;align-items:center}
+input,button{font:inherit;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+#target-id{width:5.5em;text-align:right;font-family:var(--mono)}
+
+/* ── the trail ─────────────────────────────────────────────────────────────
+   The walk so far, target first.  It is the route being built; U3 gives it a
+   colour and a line on the chart, but it has to be steppable back before then
+   or a wrong turn is a page reload. */
+#trail{display:flex;flex-wrap:wrap;align-items:center;gap:3px;font-size:11.5px;min-height:1.2em}
+#trail .crumb{border:1px solid var(--line);border-radius:4px;padding:1px 6px;
+  background:var(--bg);cursor:pointer;color:var(--ink);max-width:15em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#trail .crumb:hover{border-color:var(--accent);color:var(--accent)}
+#trail .crumb.here{background:var(--accent-soft);border-color:var(--accent);
+  color:var(--accent);font-weight:600;cursor:default}
+#trail .sep{color:var(--muted)}
+
+/* ── the focused node ─────────────────────────────────────────────────── */
+#focus{border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:var(--bg)}
+#focus.none{border-style:dashed;color:var(--muted)}
+#focus-sub{font-size:11.5px;color:var(--muted);margin-top:3px;font-family:var(--mono)}
+#focus-why{font-size:11.5px;color:var(--warn);margin-top:4px}
+/* The structure the walk is standing on, turnable.  Sized rather than grown: the
+   picker below it is the working surface and must not be pushed off. */
+#focus-3d{position:relative;height:170px;margin-top:8px;border:1px solid var(--line);
+  border-radius:5px;overflow:hidden;background:var(--bg)}
+.mv-stage{position:absolute;inset:0}
+/* The note covers the stage, so it must not take the pointer: 3Dmol reads drag events
+   off the canvas underneath, and anything sitting over it makes the model unturnable.
+   `[hidden]` needs saying too — an author `display:flex` beats the UA's `[hidden]`
+   rule, so the empty note would otherwise still be there, invisible and in the way. */
+.mv-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:0 10px;font-size:11.5px;color:var(--muted);z-index:1;
+  pointer-events:none}
+.mv-note[hidden]{display:none}
+.mv-bar{display:flex;gap:4px;margin-top:5px}
+.mv-bar button{font-size:11px;padding:2px 7px}
+.mv-bar button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+
+/* The hover popover.  Fixed, above everything, and never a pointer target itself —
+   catching the pointer would make it flicker as the cursor crossed onto it. */
+#mofsbu-preview{position:fixed;z-index:50;width:250px;background:var(--panel);
+  border:1px solid var(--line);border-radius:7px;box-shadow:0 8px 26px rgba(0,0,0,.22);
+  padding:6px;pointer-events:none}
+#mofsbu-preview .mp-3d{position:relative;height:190px;border-radius:4px;overflow:hidden;
+  background:var(--bg);display:flex;align-items:center;justify-content:center;
+  text-align:center;font-size:11.5px;color:var(--muted);padding:0 8px}
+#mofsbu-preview .mp-note{margin-top:5px;font-size:11px;color:var(--muted);
+  font-family:var(--mono);overflow-wrap:anywhere;max-height:2.6em;overflow:hidden}
+
+/* ── the precursor table ──────────────────────────────────────────────── */
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);font-size:10.5px;text-transform:uppercase;
+   letter-spacing:.06em;color:var(--muted);font-weight:600;z-index:1}
+td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+tbody tr.step{cursor:pointer}
+tbody tr.step:hover{background:var(--accent-soft)}
+tbody tr.dead{cursor:default}
+tbody tr.dead:hover{background:none}
+a.term{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)}
+a.term:hover{background:var(--accent-soft)}
+.onward{color:var(--muted);font-size:10.5px;white-space:nowrap}
+.rnote{font-size:11px;color:var(--muted);margin-top:6px}
+/* A derived row is offered, never recorded — so it is dashed everywhere it appears and
+   says which it is.  That line is what the whole reference scheme rests on. */
+tbody tr.derived td{border-bottom-style:dashed}
+.badge-inferred{font-size:10px;letter-spacing:.04em;border:1px dashed var(--warn);
+  color:var(--warn);border-radius:8px;padding:0 5px;margin-left:4px;white-space:nowrap}
+
+/* ── the diagram ───────────────────────────────────────────────────────── */
+#diagram{flex:1;min-height:0;position:relative}
+#diagram svg{display:block;width:100%;height:100%}
+.ax{stroke:var(--line);stroke-width:1}
+.ax-zero{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+/* Chart text scales off one variable set on the <svg>, so the size control is one
+   number and every label — axis, name, dE, level value — moves together. */
+.ax-text{fill:var(--muted);font-size:calc(10px * var(--fs,1));font-family:var(--mono)}
+.level{stroke:var(--accent);stroke-width:2.5;stroke-linecap:round}
+.level-hit{stroke:transparent;stroke-width:16;cursor:pointer}
+.link{stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
+.link.inferred{stroke:var(--warn);stroke-dasharray:2 3}
+.node-label{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));cursor:default}
+.node-label.here{font-weight:700;fill:var(--accent)}
+.step-dE{fill:var(--ink);font-size:calc(10.5px * var(--fs,1));font-family:var(--mono)}
+.step-species{font-size:calc(10px * var(--fs,1))}
+.level-y{font-size:calc(9.5px * var(--fs,1));font-family:var(--mono);opacity:.85}
+.gap{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
+.gap-text{fill:var(--muted);font-size:calc(10px * var(--fs,1))}
+.diag-note{font-size:11.5px;color:var(--muted);padding:2px 0}
+.diag-note .caveat{color:var(--warn)}
+
+/* ── the route legend ──────────────────────────────────────────────────── */
+.tg{font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;
+    margin-left:10px;cursor:pointer;white-space:nowrap}
+.tg input{margin:0}
+.rt{display:flex;align-items:baseline;gap:7px;padding:4px 5px;border-radius:4px;
+    cursor:pointer;font-size:11.5px;border:1px solid transparent}
+.rt:hover{background:var(--accent-soft)}
+.rt.active{border-color:var(--line);background:var(--bg)}
+.swatch{flex:0 0 auto;width:11px;height:11px;border-radius:3px;
+        align-self:center;border:1px solid rgba(0,0,0,.18)}
+.rt-name{font-weight:600;max-width:12em;overflow:hidden;text-overflow:ellipsis;
+         white-space:nowrap}
+.rt-bits{flex:1;color:var(--muted);min-width:0}
+.rt-x{flex:0 0 auto;padding:0 5px;line-height:1.4;color:var(--muted);
+      background:none;border:1px solid transparent}
+.rt-x:hover:not(:disabled){border-color:var(--warn);color:var(--warn)}
+.rt-x:disabled{opacity:.3;cursor:default}
+.basis-ok{color:var(--muted);font-size:10.5px;white-space:nowrap}
+.basis-off{color:var(--warn);font-size:10.5px;white-space:nowrap;
+           border:1px dashed var(--warn);border-radius:8px;padding:0 5px}
+
+/* The number, then what qualifies it, on two lines — see `stepEnergy`. */
+.dE{display:block}
+.dE-note{display:block;font-size:10.5px;line-height:1.25;white-space:normal;
+         font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+
+/* ── stubs ─────────────────────────────────────────────────────────────────
+   A region that is planned but not written says so, in place, with the
+   increment that brings it.  Same contract as a disabled filter on the
+   registry page (`reserved_inactive`) and a `soon:true` tab in chrome.js:
+   what it will be, and why it is not here yet.  Empty space is then always a
+   defect and never an unwritten feature.  `?stubs=off` hides the lot. */
+.stub{position:relative;border:1px dashed var(--line);border-radius:6px;
+      padding:14px 12px 12px;color:var(--muted);background:
+      repeating-linear-gradient(135deg,transparent,transparent 9px,var(--accent-soft) 9px,var(--accent-soft) 10px)}
+.stub-inc{position:absolute;top:-8px;right:8px;background:var(--panel);
+  border:1px solid var(--line);border-radius:9px;padding:0 7px;font-size:10px;
+  font-weight:600;letter-spacing:.04em;color:var(--muted)}
+.stub-what{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:3px}
+.stub-why{font-size:11.5px;line-height:1.5}
+.stub-grow{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}
+.stub.inline{padding:3px 9px;background:none;font-size:11.5px}
+.stub.inline .stub-inc{position:static;margin-right:6px}
+.stub.inline .stub-what{display:inline;font-size:11.5px;margin:0}
+body.stubs-off .stub{display:none}
+
+#msg{font-size:11.5px;color:var(--warn);min-height:1.2em}
+.empty{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right"><span id="meta">read-only</span></div>
+</header>
+
+<div id="app">
+  <!-- ── the walk: where we are, and what reaches it ──────────────────── -->
+  <section id="picker" class="pane">
+    <div class="toolbar">
+      <label for="target-id" class="muted" style="font-size:11px">target</label>
+      <input id="target-id" type="number" min="1" step="1" placeholder="id">
+      <button id="target-go" class="primary">load</button>
+    </div>
+    <div id="msg"></div>
+    <nav id="trail" aria-label="the walk so far"></nav>
+
+    <h2>standing on
+      <button id="drop-node" class="h2-btn"
+              title="take this node off the chart, and with it every route that goes
+ through it">drop node</button></h2>
+    <div id="focus" class="none">
+      <h1 id="focus-label">no target</h1>
+      <div id="focus-sub">give a structure id, or press “graph this” on the registry page</div>
+      <div id="focus-why" hidden></div>
+      <div id="focus-3d"></div>
+      <div class="mv-bar">
+        <button data-style="stick" class="on">stick</button
+        ><button data-style="ball">ball</button
+        ><button data-style="space">spacefill</button>
+        <span style="flex:1"></span>
+        <button id="focus-recentre" title="fit the model to the box">recentre</button>
+      </div>
+    </div>
+
+    <h2>precursor steps
+      <label class="h2-opt" title="also offer splits derived from composition that no
+ edge records — asked for on demand because it scans every structure, and asked for
+ automatically where nothing recorded reaches this node">
+        <input type="checkbox" id="want-derived"> derived too</label></h2>
+    <div id="steps"></div>
+  </section>
+
+  <div id="split-pick" class="splitter v" role="separator" tabindex="0"
+       aria-orientation="vertical" aria-label="resize the step picker"
+       title="drag to resize · double-click to reset"></div>
+
+  <!-- ── the diagram, and the routes drawn on it ──────────────────────── -->
+  <div id="right">
+    <section id="chart" class="pane">
+      <div class="chart-head">
+        <h2>formation energy · dE in eV, target at zero</h2>
+        <div id="toggles"></div>
+      </div>
+      <div id="diagram" class="stub-grow"></div>
+    </section>
+    <div id="split-chart" class="splitter h" role="separator" tabindex="0"
+         aria-orientation="horizontal" aria-label="resize the diagram"
+         title="drag to resize · double-click to reset"></div>
+    <section id="routes-pane" class="pane">
+      <h2>routes</h2>
+      <div id="path-note"></div>
+      <div id="routes"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const {esc, shortLabel, groupRoutes, protonsShed, speciesCell,
+       energyParts, routeRung, routeCaveats} = mofsbuRoutes;
+
+/* The number on its own line, what qualifies it on the next.  Set inline they make one
+   long unbreakable string — `td.num` cannot wrap a number — and that one cell then sets
+   the width of a six-column table in a pane this narrow, squeezing out the species the
+   row exists to show.  Stacked, the column is as wide as the number.
+
+   A refusal is cut to its head for the same reason; the whole of it is on hover, and on
+   the row, so nothing is dropped — it just stops being the widest thing on screen. */
+function stepEnergy(r){
+  const p = energyParts(r);
+  if(p.value === null)
+    return `<span class="muted" title="${esc(r.why_not || p.why)}">`
+         + `&mdash; (${esc(p.why.split(":")[0])})</span>`;
+  return `<span class="dE">${esc(p.value)}</span>`
+       + (p.notes.length
+          ? `<span class="dE-note caveat">${esc(p.notes.join(" · "))}</span>` : "");
+}
+
+/* Every region of the finished page, and the increment that fills it.  Retiring a
+   stub is deleting a row here and rendering into the same host.  The order is the
+   order they are built in, so this table doubles as the remaining work. */
+/* Empty: every region named in the plan is built.  The mechanism stays, because the
+   next unwritten region should say so in place rather than be a blank rectangle. */
+const STUBS = [];
+
+function mountStubs(){
+  for(const s of STUBS){
+    const host = $(s.host);
+    if(!host) continue;
+    host.innerHTML =
+      `<div class="stub${s.grow ? " stub-grow" : ""}${s.inline ? " inline" : ""}">`
+      + `<span class="stub-inc">not built yet · ${esc(s.inc)}</span>`
+      + `<div class="stub-what">${esc(s.what)}</div>`
+      + (s.inline ? "" : `<div class="stub-why">${esc(s.why)}</div>`) + `</div>`;
+  }
+}
+
+/* ── state ────────────────────────────────────────────────────────────────
+   `trail` is the walk, target first; each entry past the first records the edge
+   that was walked to reach it.  It lives in the URL, so a reload keeps it and a
+   link carries it — the viewer has no write path, so there is nowhere else it
+   could live.  `data` is the last fetched hop, `cache` the ones before it. */
+/* `routes` are the walks on the chart.  They all begin at the same target and diverge
+   leftwards, so they form a tree rooted at it — which is what lets a branch be coloured
+   next to the branch it came off.  `active`/`at` is where the picker is standing: the
+   route being extended and how far along it, because a fork is what happens when you
+   step back into the middle of a route and choose differently. */
+const state = {target: null, routes: [], active: 0, at: 0,
+               data: null, cache: new Map(),
+               prefs: {labels: true, levelValues: false, species: false,
+                       colour: true, anchor: "target", derived: false,
+                       fontScale: 1}};
+
+const route = () => state.routes[state.active] || null;
+const here = () => { const r = route(); return r ? r.trail[state.at] : null; };
+const trailOf = (i) => state.routes[i].trail;
+
+/* ── composition, for deciding which reagent is the scaffold ───────────────
+   A step names two reagents and the walk follows one of them.  The registry
+   knows which: a coordination sphere carries the metal, and where neither does
+   (or both do) the bigger piece is the one being built on.  That is a fact
+   about the species rather than a reading of its label, which is why this does
+   not reuse the viewer's `splitReagents` — that one infers "added" from a
+   leading bracket, and it is guessing. */
+function atomCount(formula){
+  let n = 0;
+  for(const m of String(formula ?? "").matchAll(/([A-Z][a-z]?)(\d*)/g))
+    if(m[1]) n += m[2] ? Number(m[2]) : 1;
+  return n;
+}
+
+function splitStep(step, species){
+  const rs = ((step && step.terms) || [])
+    // `solvent` and `leaving` are the proton's carrier, not species being built in —
+    // a deprotonation would otherwise read as "added water", which is true of the
+    // arithmetic and wrong about the chemistry.
+    .filter(t => t.side === "reagent" && (t.role || "reagent") === "reagent");
+  if(rs.length < 2) return {source: rs[0] || null, added: null};
+  const rank = (t) => {
+    const s = species[String(t.structure_id)] || {};
+    return [Number(s.n_metals || 0), atomCount(s.formula)];
+  };
+  const byWeight = [...rs].sort((a, b) => {
+    const A = rank(a), B = rank(b);
+    return (B[0] - A[0]) || (B[1] - A[1]);
+  });
+  return {source: byWeight[0], added: byWeight[1]};
+}
+
+/* Whether the walk can go on from a species, said in the cell you would click. */
+function onward(term, species){
+  if(!term) return "";
+  const s = species[String(term.structure_id)] || {};
+  const n = Number(s.n_incoming_routes || 0);
+  return n
+    ? ` <span class="onward" title="${esc(n)} recorded edges reach it">↩${esc(n)}</span>`
+    : ` <span class="onward" title="nothing recorded reaches it — the walk ends here">·end</span>`;
+}
+
+/* ── the precursor table ───────────────────────────────────────────────── */
+function renderSteps(routes, derived, species){
+  // A derived split is offered beside the recorded edges and never merged into them:
+  // the list is one list because it is one question — what could this have come from —
+  // and every derived row says so, on the row.
+  routes = routes.concat(derived.map(d => Object.assign({}, d, {id: null})));
+  if(!routes.length)
+    return `<div class="empty">no recorded route reaches this structure — `
+         + `it is where a walk stops</div>`;
+  // dE is what the row is being chosen on, so it orders them: cheapest step first,
+  // then the ones with no number, then the `place` edges that cite nothing and are
+  // not a step at all.  Reaction id — the order the rows arrive in — would put the
+  // one row you cannot act on at the top.
+  const groups = groupRoutes(routes).sort((a, b) => {
+    const rank = (g) => {
+      const r = g.rep;
+      if(!((r.steps && r.steps[0] || {}).terms || []).some(t => t.side === "reagent"))
+        return 2;                                   // built whole, nothing to walk to
+      return r.can_price && r.total_dE !== null ? 0 : 1;
+    };
+    return (rank(a) - rank(b))
+        || ((a.rep.total_dE ?? Infinity) - (b.rep.total_dE ?? Infinity));
+  });
+  const split = groups.map(g => splitStep((g.rep.steps && g.rep.steps[0]) || {}, species));
+
+  /* Two protomers of one ligand differ only in WHICH oxygen lost the proton, and
+     `shortLabel` drops exactly that bookkeeping — so a dozen genuinely different
+     precursors can print the same name in this table.  Where that happens the id is
+     shown, and only there: an id on every row is noise, an id on none is a table of
+     rows that look like duplicates of each other. */
+  const byName = new Map();
+  for(const {source, added} of split)
+    for(const t of [source, added])
+      if(t){
+        const k = shortLabel(t.display_label);
+        (byName.get(k) || byName.set(k, new Set()).get(k)).add(Number(t.structure_id));
+      }
+  const ambiguous = new Set(
+    [...byName].filter(([, ids]) => ids.size > 1).map(([k]) => k));
+  const cell = (t) => {
+    if(!t) return speciesCell(t);
+    return speciesCell(t) + (ambiguous.has(shortLabel(t.display_label))
+      ? ` <span class="onward" title="two precursors here share a short name">`
+        + `#${esc(t.structure_id)}</span>` : "");
+  };
+
+  const rows = groups.map((g, gi) => {
+    const r = g.rep, step = (r.steps && r.steps[0]) || {};
+    const {source, added} = split[gi];
+    // A `place` edge cites nothing: the sphere was constructed whole, not reacted
+    // together (C15).  There is nothing to walk to, so the row does not pretend.
+    const built = !source && !added;
+    const shed = protonsShed(step);
+    const placements = g.placements > 1
+      ? ` <span class="muted">(${esc(g.placements)} pl.)</span>` : "";
+    // A derived leg names BOTH its parts: the complement is fixed by composition only
+    // up to its formula and charge, and the registry holds protomers that share those,
+    // so "the other part" is not recoverable from where the step went.
+    const inferred = r.origin === "inferred";
+    const via = inferred ? (added ? "d" + added.structure_id : "") : String(r.id);
+    return `<tr class="${built || !via ? "dead" : "step"}${inferred ? " derived" : ""}"`
+         + ` data-rid="${esc(via)}"`
+         + `${built ? "" : ` data-source="${esc(source.structure_id)}"`}`
+         + `${r.why_not ? ` title="${esc(r.why_not)}"` : ""}>`
+         + `<td class="num">${stepEnergy(r)}</td>`
+         + `<td>${built ? "" : (shed || cell(added) + onward(added, species))}</td>`
+         + `<td>${built
+             ? `<span class="muted" title="a place edge cites no reagents: the sphere`
+               + ` was constructed whole rather than reacted together (C15)">`
+               + `— (built whole)</span>`
+             : cell(source) + onward(source, species) + placements}</td>`
+         + `<td>${routeRung(r)}${inferred
+             ? `<span class="badge-inferred" title="derived from composition — no`
+               + ` edge records this${r.recorded_as ? `; the same split IS recorded as`
+               + ` reaction #${r.recorded_as}` : ""}">inferred</span>` : ""}</td>`
+         + `<td class="caveat-cell">${routeCaveats(r)}</td>`
+         + `<td class="num">${g.count > 1 ? "×" + esc(g.count)
+             : `<span class="muted">×1</span>`}</td></tr>`;
+  }).join("");
+  const note = groups.length < routes.length
+    ? `<div class="rnote">${esc(routes.length)} edges · ${esc(groups.length)} distinct by `
+      + `what was added to what · click a row to step back, or a species to step into it</div>`
+    : `<div class="rnote">click a row to step back, or a species to step into it</div>`;
+  return `<table><thead><tr><th class="num">dE</th><th>added</th><th>source</th>`
+       + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead>`
+       + `<tbody>${rows}</tbody></table>${note}`;
+}
+
+/* ── the diagram ──────────────────────────────────────────────────────────
+   Hand-drawn SVG, because an energy-level diagram is not a chart type any library
+   ships: it is a level per node and a connector per step, and the page already
+   draws its donor sketches this way.  Read left to right, precursors to product,
+   with the target at zero on the right — every route ends there, which is what
+   pins them to a common point.  The walk is collected target-first, so the array
+   is reversed to draw it. */
+//: `bottom` carries two rows of names, because sub-columns are narrower than the
+//: names that go under them and one row would have them running into each other.
+//: Both margins grow with the text, or a larger font runs out of the box it is in.
+const PAD0 = {top: 18, right: 18, bottom: 46, left: 56};
+const pad = () => {
+  const f = state.prefs.fontScale || 1;
+  return {top: PAD0.top, right: PAD0.right,
+          bottom: Math.round(PAD0.bottom * f), left: Math.round(PAD0.left * f)};
+};
+
+function niceTicks(lo, hi, want){
+  const span = (hi - lo) || 1;
+  const raw = span / Math.max(1, want);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || mag * 10;
+  const out = [];
+  for(let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return out;
+}
+
+/* ── colour, by where a route branched ────────────────────────────────────
+   The routes are a tree rooted at the target.  Give the whole tree an arc of the
+   hue circle, split each divergence's arc among its children, and take a route's
+   colour from the middle of the arc it ends up with.  Two routes that branch off
+   each other therefore land next to each other in hue, and the deeper the
+   divergence the closer they are — which is the rule, rather than a palette
+   somebody has to keep in step with the branching. */
+const HUE0 = 205;                      // the page's accent, so one route looks native
+
+function routeColours(){
+  const out = new Array(state.routes.length).fill(HUE0);
+  const legKey = (t, d) => t[d] ? `${t[d].via}>${t[d].sid}` : "\u0000end";
+  const assign = (idxs, depth, lo, hi) => {
+    if(idxs.length === 1){ out[idxs[0]] = (lo + hi) / 2; return; }
+    const groups = new Map();
+    for(const i of idxs){
+      const k = legKey(trailOf(i), depth + 1);
+      (groups.get(k) || groups.set(k, []).get(k)).push(i);
+    }
+    if(groups.size === 1){            // still one route so far: look further back
+      assign(idxs, depth + 1, lo, hi);
+      return;
+    }
+    const each = (hi - lo) / groups.size;
+    [...groups.values()].forEach((g, k) =>
+      assign(g, depth + 1, lo + each * k, lo + each * (k + 1)));
+  };
+  if(state.routes.length) assign(state.routes.map((_, i) => i), 0, HUE0, HUE0 + 330);
+  return out;
+}
+
+const DARK = () => matchMedia("(prefers-color-scheme: dark)").matches;
+
+function hueCss(h, {dim = false} = {}){
+  if(!state.prefs.colour)
+    return dim ? "var(--muted)" : (DARK() ? "#cfd4da" : "#43484f");
+  const l = DARK() ? (dim ? 52 : 64) : (dim ? 52 : 40);
+  return `hsl(${((h % 360) + 360) % 360} 58% ${l}%)`;
+}
+
+/* With colour off the routes still have to be told apart, so they take dash patterns
+   instead — which is also what makes the chart survive being printed. */
+const DASHES = ["", "5 3", "2 3", "8 3 2 3", "1 3"];
+const dashFor = (i) => state.prefs.colour ? "" : DASHES[i % DASHES.length];
+
+function drawDiagram(){
+  const host = $("diagram");
+  const drawable = state.routes.filter(r => r.path);
+  if(!drawable.length){
+    host.innerHTML = state.routes.length
+      ? `<div class="empty">pick a precursor step on the left — the route is drawn `
+        + `here as it grows, with this structure at zero</div>`
+      : `<div class="empty">load a target to begin</div>`;
+    return;
+  }
+  const w = host.clientWidth, h = host.clientHeight;
+  if(w < 60 || h < 60){ host.innerHTML = ""; return; }
+
+  const hues = routeColours();
+  const depth = Math.max(...drawable.map(r => r.path.nodes.length));
+  // `anchor: root` re-zeroes each route on its own left end.  Offered, and badged:
+  // routes bottom out at different species, so their zeros are different systems.
+  const shift = (r) => {
+    if(state.prefs.anchor !== "root") return 0;
+    const last = [...r.path.nodes].reverse().find(n => n.y !== null);
+    return last ? -last.y : 0;
+  };
+  const ys = [];
+  for(const r of drawable)
+    for(const n of r.path.nodes) if(n.y !== null) ys.push(n.y + shift(r));
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+  const span = (hi - lo) || 1;
+  const yLo = lo - span * 0.12, yHi = hi + span * 0.12;
+  const PAD = pad(), fs = state.prefs.fontScale || 1;
+  const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
+  const slot = plotW / depth;
+  // Index 0 is the target and it is drawn on the RIGHT; a longer route simply reaches
+  // further left, so routes of different lengths still share every node they share.
+  const mid = (i) => PAD.left + plotW - slot * (i + 0.5);
+  const cy = (v) => PAD.top + plotH * (1 - (v - yLo) / (yHi - yLo));
+
+  /* Two routes at the same distance from the target are usually at DIFFERENT species,
+     and drawing both in the middle of that column stacks one bar on the other and
+     overprints their names.  So a column is divided among the distinct nodes in it:
+     they keep their own bar and their own label, and a node two routes share is still
+     one bar because the key is the species and its height, not the route. */
+  const nodeKey = (n, dy) =>
+    `${n.structure_id}:${n.y === null ? "-" : (n.y + dy).toFixed(6)}`;
+  const columns = [];
+  state.routes.forEach((r) => {
+    if(!r.path) return;
+    const dy = shift(r);
+    r.path.nodes.forEach((n, i) => {
+      const col = columns[i] || (columns[i] = new Map());
+      const k = nodeKey(n, dy);
+      if(!col.has(k)) col.set(k, {node: n, dy, order: col.size});
+    });
+  });
+  // Widest column decides the bar width, so every level on the chart is the same size.
+  const most = Math.max(1, ...columns.map(c => c.size));
+  const barW = Math.max(14, Math.min(slot * 0.62, 150) / most * 0.88);
+  const spread = Math.min(slot * 0.66, barW * most * 1.18);
+  const cx = (i, n, dy) => {
+    const col = columns[i];
+    const e = col && col.get(nodeKey(n, dy));
+    const k = e ? e.order : 0, count = col ? col.size : 1;
+    return mid(i) + (count === 1 ? 0 : (k - (count - 1) / 2) * (spread / count));
+  };
+
+  const bits = [];
+  for(const t of niceTicks(yLo, yHi, Math.max(2, Math.round(plotH / 46)))){
+    const y = cy(t).toFixed(1);
+    bits.push(`<line class="${Math.abs(t) < 1e-9 ? "ax-zero" : "ax"}" x1="${PAD.left - 6}"`
+            + ` y1="${y}" x2="${w - PAD.right}" y2="${y}"/>`
+            + `<text class="ax-text" x="${PAD.left - 9}" y="${y}" text-anchor="end"`
+            + ` dominant-baseline="middle">${t > 0 ? "+" : ""}${t.toFixed(2)}</text>`);
+  }
+  bits.push(`<text class="ax-text" x="6" y="${PAD.top - 5}">eV</text>`);
+
+  /* What a step did to the molecule, for the connector: what was built in, and what
+     left.  Water is the proton's carrier and not a piece being added, so a
+     deprotonation reads as what it loses. */
+  const movement = (s) => {
+    const bits = [];
+    for(const t of s.added)
+      bits.push(`+${t.stoich > 1 ? t.stoich + " " : ""}`
+              + (shortLabel(t.display_label) || "#" + t.structure_id));
+    for(const t of s.shed)
+      bits.push(`−${t.stoich > 1 ? t.stoich + " " : ""}H⁺`);
+    return bits.join("  ");
+  };
+
+  const seen = new Set();               // a node two routes share is drawn once
+  state.routes.forEach((r, ri) => {
+    if(!r.path) return;
+    const dy = shift(r), col = hueCss(hues[ri]), dash = dashFor(ri);
+    const active = ri === state.active;
+    const nodes = r.path.nodes;
+    const px = (i) => cx(i, nodes[i], dy);
+    const py = (i) => nodes[i].y === null ? null : cy(nodes[i].y + dy);
+
+    r.path.steps.forEach((s, i) => {
+      const y1 = py(i), y2 = py(i + 1);
+      if(y1 === null || y2 === null) return;
+      const x1 = px(i) - barW / 2, x2 = px(i + 1) + barW / 2;
+      bits.push(`<line class="link${s.origin === "inferred" ? " inferred" : ""}"`
+              + ` stroke="${col}" stroke-width="${active ? 1.8 : 1.1}"`
+              + `${s.origin === "inferred" ? "" : ` stroke-dasharray="${dash || "4 3"}"`}`
+              + ` x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"`
+              + ` x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`);
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      let line = 0;
+      if(state.prefs.labels){
+        bits.push(`<text class="step-dE" fill="${col}" x="${mx.toFixed(1)}"`
+                + ` y="${(my - 5 * fs).toFixed(1)}" text-anchor="middle">`
+                + `${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
+        line += 1;
+      }
+      const moved = state.prefs.species ? movement(s) : "";
+      if(moved)
+        bits.push(`<text class="step-species" fill="${col}" x="${mx.toFixed(1)}"`
+                + ` y="${(my - (5 + line * 11) * fs).toFixed(1)}" text-anchor="middle">`
+                + `${esc(moved)}</text>`);
+    });
+
+    nodes.forEach((n, i) => {
+      const key = `${i}:${nodeKey(n, dy)}`;
+      if(seen.has(key)) return;
+      seen.add(key);
+      const x = px(i);
+      const isHere = active && i === state.at;
+      const name = shortLabel(n.display_label) || ("#" + n.structure_id);
+      if(n.y === null){
+        // No number, so no position.  A dashed column says the node is on the route and
+        // says nothing about where it sits — inventing a height would be the lie.
+        bits.push(`<line class="gap" x1="${x.toFixed(1)}" y1="${PAD.top}"`
+                + ` x2="${x.toFixed(1)}" y2="${(PAD.top + plotH).toFixed(1)}"/>`
+                + `<text class="gap-text" x="${x.toFixed(1)}"`
+                + ` y="${(PAD.top + plotH / 2).toFixed(1)}" text-anchor="middle">`
+                + `no number</text>`);
+      } else {
+        const y = cy(n.y + dy).toFixed(1);
+        bits.push(`<line class="level" stroke="${col}"`
+                + ` stroke-width="${isHere ? 4 : 2.5}"`
+                + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+                + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}"/>`
+                + `<line class="level-hit" data-sid="${esc(n.structure_id)}"`
+                + ` data-route="${esc(ri)}" data-at="${esc(i)}"`
+                + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+                + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}">`
+                + `<title>${esc(n.display_label || "")}\n`
+                + `y = ${(n.y + dy).toFixed(4)} eV\n`
+                + `shed so far: ${esc(n.basis === "—" ? "nothing" : n.basis)}`
+                + `</title></line>`);
+        // The level's own coordinate, on the bar: the chart's whole point is the height
+        // of these, and reading one off the axis by eye is an estimate.
+        if(state.prefs.levelValues)
+          bits.push(`<text class="level-y" fill="${col}" x="${x.toFixed(1)}"`
+                  + ` y="${(Number(y) - 6 * fs).toFixed(1)}" text-anchor="middle">`
+                  + `${(n.y + dy) > 0 ? "+" : ""}${(n.y + dy).toFixed(2)}</text>`);
+      }
+      // Names stagger over two rows: sub-columns are narrower than the names in them.
+      const row = (columns[i] && columns[i].get(nodeKey(n, dy)) || {}).order || 0;
+      const label = name.length > 20 ? name.slice(0, 19) + "…" : name;
+      bits.push(`<text class="node-label${isHere ? " here" : ""}"`
+              + ` data-sid="${esc(n.structure_id)}" x="${x.toFixed(1)}"`
+              + ` y="${(PAD.top + plotH + (13 + (row % 2) * 12) * fs).toFixed(1)}"`
+              + ` text-anchor="middle"><title>${esc(n.display_label || "")}</title>`
+              + `${esc(label)}</text>`);
+    });
+  });
+
+  host.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img"`
+    + ` style="--fs:${fs}"`
+    + ` aria-label="formation energy along ${state.routes.length} route(s)">`
+    + bits.join("") + `</svg>`;
+}
+
+/* ── the trail ─────────────────────────────────────────────────────────── */
+function renderTrail(){
+  const t = $("trail"), r = route();
+  if(!r){ t.innerHTML = ""; return; }
+  t.innerHTML = r.trail.map((n, i) => {
+    const name = shortLabel(n.label) || ("#" + n.sid);
+    const via = n.via == null ? "" : String(n.via).startsWith("d")
+      ? "\nvia a derived split" : `\nvia reaction #${n.via}`;
+    return (i ? `<span class="sep">←</span>` : "")
+         + `<span class="crumb${i === state.at ? " here" : ""}" data-i="${esc(i)}"`
+         + ` title="${esc(n.label || "")}${esc(via)}">${esc(name)}</span>`;
+  }).join("")
+  + (state.at < r.trail.length - 1
+     ? ` <span class="muted" style="font-size:11px">· choosing a different step here `
+       + `forks a new route</span>` : "");
+}
+
+/* ── loading ──────────────────────────────────────────────────────────── */
+function say(text){ $("msg").textContent = text || ""; }
+
+/* Deriving splits is a scan of the whole structures table, so it is asked for rather
+   than assumed — but a node whose only recorded edges cite nothing (a `place` edge,
+   C15) has no other answer to what it is made of, so at a dead end it is asked for
+   automatically.  That is option 2 on C15: leave `place` citing nothing, and derive. */
+function walkable(routes){
+  return routes.some(r => ((r.steps && r.steps[0] || {}).terms || [])
+    .some(t => t.side === "reagent" && (t.role || "reagent") === "reagent"));
+}
+
+async function fetchHop(sid, inferred){
+  const key = `${sid}:${inferred ? 1 : 0}`;
+  if(state.cache.has(key)) return state.cache.get(key);
+  const r = await fetch(`/api/structures/${sid}/routes${inferred ? "?inferred=1" : ""}`);
+  if(!r.ok) throw new Error(`no structure ${sid} in this registry`);
+  const d = await r.json();
+  state.cache.set(key, d);
+  return d;
+}
+
+async function showHere(){
+  const n = here();
+  if(!n){
+    state.data = null;
+    renderFocus(null); renderTrail(); drawDiagram(); renderLegend();
+    return;
+  }
+  let d;
+  try {
+    d = await fetchHop(n.sid, state.prefs.derived);
+    if(!state.prefs.derived && !walkable(d.routes)) d = await fetchHop(n.sid, true);
+  } catch(e){ say(e.message); return; }
+  state.data = d;
+  n.label = d.structure.display_label || d.structure.formula || ("structure " + n.sid);
+  renderTrail();
+  renderFocus(d.structure);
+  $("steps").innerHTML = renderSteps(d.routes, d.derived || [], d.species);
+  await priceAll();
+}
+
+/* Composing the steps is the backend's job — it is arithmetic over stored energies and
+   it is the part that has tests.  The page asks for the answer and draws it. */
+async function priceOne(r){
+  if(r.trail.length < 2){ r.path = null; return; }
+  const nodes = r.trail.map(n => n.sid).join(",");
+  const via = r.trail.slice(1).map(n => n.via).join(",");
+  try {
+    const res = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}`);
+    if(!res.ok){
+      const body = await res.json().catch(() => ({}));
+      r.path = null;
+      r.why_not = body.detail || "this route could not be priced";
+      say(r.why_not);
+    } else {
+      r.path = await res.json();
+      r.why_not = null;
+    }
+  } catch(e){
+    r.path = null;
+    r.why_not = `could not price this route — ${e.message}`;
+    say(r.why_not);
+  }
+}
+
+async function priceAll(){
+  await Promise.all(state.routes.map(priceOne));
+  drawDiagram();
+  renderLegend();
+}
+
+/* ── the legend ───────────────────────────────────────────────────────────
+   One line per route: its colour, where it bottoms out, what it came to, and — the
+   part that is not decoration — whether its numbers are measured against the same
+   thing as the others'.  Two totals set side by side are an invitation to subtract
+   them, and across different bases that subtraction is not a number about chemistry. */
+function renderLegend(){
+  const host = $("routes"), note = $("path-note");
+  if(!state.routes.length){
+    note.innerHTML = "";
+    host.innerHTML = `<div class="empty">each route you build appears here — step back `
+      + `into the middle of one and choose differently to add a second</div>`;
+    return;
+  }
+  const hues = routeColours();
+  const bases = new Set(state.routes.filter(r => r.path).map(r => r.path.basis));
+  const common = bases.size ? [...bases].sort((a, b) =>
+    (a === "—" ? -1 : b === "—" ? 1 : 0))[0] : null;
+
+  note.innerHTML = bases.size > 1
+    ? `<div class="diag-note"><span class="caveat">these routes do not shed the same `
+      + `things, so the vertical gap between them is not a comparison</span> — `
+      + `hover a badge for what differs</div>`
+    : `<div class="diag-note muted">${esc(state.routes.length)} route`
+      + `${state.routes.length === 1 ? "" : "s"}, all on one basis — vertical gaps `
+      + `between them are comparable</div>`;
+
+  host.innerHTML = state.routes.map((r, i) => {
+    const p = r.path, active = i === state.active;
+    const end = r.trail[r.trail.length - 1];
+    const bits = [];
+    if(!p){
+      bits.push(`<span class="muted">${esc(r.why_not || "one node — no steps yet")}</span>`);
+    } else if(p.can_price){
+      bits.push(`<b>${esc(p.total_dE.toFixed(3))} eV</b>`);
+      bits.push(`${esc(p.steps.length)} step${p.steps.length === 1 ? "" : "s"}`);
+      bits.push(`rung ${esc(p.fidelity_name || "—")}`);
+      if(p.worst_step)
+        bits.push(`worst ${p.worst_step.dE > 0 ? "+" : ""}`
+                + `${esc(p.worst_step.dE.toFixed(3))}`);
+    } else {
+      bits.push(`<span class="caveat">no total — ${esc(p.n_unpriced)} of `
+              + `${esc(p.steps.length)} steps have no number</span>`);
+    }
+    const badge = !p ? ""
+      : p.basis === common
+        ? `<span class="basis-ok" title="same accounting as the other routes: nothing `
+          + `else has left along the way">✓ basis</span>`
+        : `<span class="basis-off" title="this route sheds ${esc(p.basis)} and the `
+          + `others do not, so its y values are energies of a different system — the `
+          + `gap between the curves is not a comparison">⚠ basis ${esc(p.basis)}</span>`;
+    return `<div class="rt${active ? " active" : ""}" data-route="${esc(i)}">`
+         + `<span class="swatch" style="background:${hueCss(hues[i])}"></span>`
+         + `<span class="rt-name" title="${esc(end.label || "")}">`
+         + `${esc(shortLabel(end.label) || "#" + end.sid)}</span>`
+         + `<span class="rt-bits">${bits.join(" · ")} ${badge}`
+         + `${p && p.steps.some(s => s.origin === "inferred")
+             ? ` <span class="badge-inferred">derived</span>` : ""}</span>`
+         + `<button class="rt-x" data-drop="${esc(i)}" title="take this route off the `
+         + `chart"${state.routes.length < 2 ? " disabled" : ""}>×</button></div>`;
+  }).join("");
+}
+
+/* The structure the walk is standing on, turnable.  One viewer for the life of the
+   page; it is handed a new structure rather than being rebuilt. */
+let focusViewer = null;
+
+function renderFocus(s){
+  const box = $("focus"), why = $("focus-why");
+  if(focusViewer) focusViewer.show(s ? s.id : null);
+  // Dropping the target is loading a different one, which has its own control.
+  $("drop-node").disabled = !s || s.id === state.target;
+  if(!s){
+    box.classList.add("none");
+    $("focus-label").textContent = "no target";
+    $("focus-sub").textContent =
+      "give a structure id, or press “graph this” on the registry page";
+    why.hidden = true;
+    return;
+  }
+  box.classList.remove("none");
+  $("focus-label").textContent = shortLabel(s.display_label) || s.formula
+                               || `structure ${s.id}`;
+  $("focus-label").title = s.display_label || "";
+  $("focus-sub").textContent =
+    [`#${s.id}`, s.formula, `q ${s.net_charge >= 0 ? "+" : ""}${s.net_charge}`,
+     s.multiplicity ? `2S+1 ${s.multiplicity}` : null,
+     `${s.n_incoming_routes} incoming`].filter(Boolean).join("  ·  ");
+  why.hidden = Number(s.n_incoming_routes) > 0;
+  why.textContent = "nothing recorded reaches this structure — the walk stops here";
+}
+
+/* ── the walk, and the fork ───────────────────────────────────────────────
+   Standing at the end of a route, a step extends it.  Standing in the MIDDLE of
+   one — having clicked back to a crumb or a level — a step that differs from the
+   one already there starts a new route sharing everything to its right, which is
+   how two routes end up comparable: they agree from the divergence to the target.
+   Choosing the step that is already there just moves along it. */
+async function stepTo(sid, via){
+  const r = route();
+  if(!r) return;
+  const leg = {sid: Number(sid), via: via ?? null, label: ""};
+  const next = r.trail[state.at + 1];
+  if(next && String(next.via) === String(leg.via) && next.sid === leg.sid){
+    state.at += 1;                                     // already on this route
+  } else if(state.at === r.trail.length - 1){
+    r.trail.push(leg);
+    state.at += 1;
+  } else {
+    const forked = {trail: r.trail.slice(0, state.at + 1).map(n => ({...n})).concat(leg),
+                    path: null, why_not: null};
+    state.routes.push(forked);
+    state.active = state.routes.length - 1;
+    state.at = forked.trail.length - 1;
+  }
+  writeHash();
+  await showHere();
+}
+
+/* Moving the picker without changing any route.  Truncating instead would throw away
+   the rest of a route to look at its middle, which is the opposite of comparing. */
+function focusAt(routeIx, at){
+  state.active = routeIx;
+  state.at = Math.max(0, Math.min(at, trailOf(routeIx).length - 1));
+  writeHash();
+  showHere();
+}
+
+/* Take a node off the chart, and with it every route that goes through it.  A route
+   is a claim about how this structure is reached; if the node is wrong, so is each of
+   them, and leaving the rest of a route behind would be a route nobody built.  The
+   target is excluded — it is where every route ends, so dropping it is loading a
+   different target, which is a different action with its own control. */
+function dropNode(sid){
+  sid = Number(sid);
+  if(!state.target) return;
+  if(sid === state.target){
+    say("the target is where every route ends — load a different one instead");
+    return;
+  }
+  const before = state.routes.length;
+  const keep = state.routes.filter(r => !r.trail.some(n => n.sid === sid));
+  if(keep.length === before){ say(`no route on the chart passes through #${sid}`); return; }
+  state.routes = keep.length ? keep
+    : [{trail: [{sid: state.target, via: null, label: ""}], path: null, why_not: null}];
+  state.active = 0;
+  state.at = trailOf(0).length - 1;
+  say(keep.length
+    ? `dropped #${sid} and ${before - keep.length} route`
+      + `${before - keep.length === 1 ? "" : "s"} through it`
+    : `every route went through #${sid} — back to the target alone`);
+  writeHash();
+  showHere();
+}
+
+function dropRoute(i){
+  if(state.routes.length < 2) return;
+  state.routes.splice(i, 1);
+  state.active = Math.min(state.active >= i ? state.active - 1 : state.active,
+                          state.routes.length - 1);
+  if(state.active < 0) state.active = 0;
+  state.at = Math.min(state.at, trailOf(state.active).length - 1);
+  writeHash();
+  showHere();
+}
+
+/* ── the URL ──────────────────────────────────────────────────────────────
+   `#target=41&p=12-80.44-75&p=51-90` — the target, then one `p` per route on the
+   chart, each a chain of legs.  A leg is the edge walked and the species it landed
+   on, and both halves are needed: the edge, because an id pair does not say WHICH
+   edge joins them; the species, because one edge names two reagents and stepping
+   into either is a different walk.  The whole chart is in the link, which is the
+   only place it could live — the viewer has no write path. */
+function legsOf(r){
+  return r.trail.slice(1).filter(n => n.via != null).map(n => `${n.via}-${n.sid}`);
+}
+
+function writeHash(){
+  if(!state.target){ history.replaceState(null, "", location.pathname); return; }
+  const parts = [`target=${state.target}`];
+  for(const r of state.routes){
+    const legs = legsOf(r);
+    if(legs.length) parts.push(`p=${legs.join(".")}`);
+  }
+  const h = "#" + parts.join("&");
+  if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
+}
+
+function readHash(){
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const t = Number(h.get("target"));
+  // `<reaction>-<node>` for a recorded edge, `d<other part>-<node>` for a derived one.
+  const routes = h.getAll("p").map(chain => chain.split(".").filter(Boolean).map(leg => {
+    const m = /^(d?\d+)-(\d+)$/.exec(leg.trim());
+    return m ? {via: m[1], sid: Number(m[2])} : null;
+  }).filter(Boolean)).filter(c => c.length);
+  return {target: Number.isInteger(t) && t > 0 ? t : null, routes};
+}
+
+/* Replaying a link: take each recorded leg from the target outwards, checking that
+   the edge still reaches where we stand and still names where the leg went.  A leg
+   that no longer holds stops the replay and says so, rather than quietly producing a
+   shorter walk that would look deliberate. */
+async function replay({target, routes}){
+  state.routes = [];
+  state.active = state.at = 0;
+  state.target = target || null;
+  if(!target){ await showHere(); return; }
+  // Rebuilt rather than trusted: a link is only as good as the registry it is opened
+  // against, and a leg that no longer holds must stop the replay and say which one,
+  // not quietly produce a shorter walk that would look deliberate.
+  for(const chain of (routes.length ? routes : [[]])){
+    state.routes.push({trail: [{sid: target, via: null, label: ""}],
+                       path: null, why_not: null});
+    state.active = state.routes.length - 1;
+    state.at = 0;
+    for(const {via, sid} of chain){
+      let d;
+      try { d = await fetchHop(here().sid, true); } catch(e){ say(e.message); break; }
+      if(!via.startsWith("d")){
+        const edge = (d.routes || []).find(r => String(r.id) === via);
+        if(!edge){
+          say(`reaction #${via} does not reach structure ${here().sid}`
+            + ` — that route stopped there`); break;
+        }
+        if(!((edge.steps && edge.steps[0] || {}).terms || [])
+             .some(t => t.side === "reagent" && Number(t.structure_id) === sid)){
+          say(`reaction #${via} does not name structure ${sid}`
+            + ` — that route stopped there`); break;
+        }
+      }
+      route().trail.push({sid, via, label: ""});
+      state.at = route().trail.length - 1;
+    }
+  }
+  state.active = 0;
+  state.at = trailOf(0).length - 1;
+  writeHash();
+  await showHere();
+}
+
+async function loadTarget(id){
+  say("");
+  state.cache.clear();
+  if(!id){
+    state.routes = []; state.target = null;
+    writeHash(); await showHere(); return;
+  }
+  $("target-id").value = id;
+  await replay({target: id, routes: []});
+}
+
+/* ── what the chart draws ─────────────────────────────────────────────────
+   Per-viewer preferences, so they live beside the pane sizes in localStorage and
+   never in the link: a shared link should show the other reader THEIR chart of
+   the same routes, not a copy of how this one likes it. */
+const PREFS_KEY = "mofsbu.graph.prefs";
+
+function loadPrefs(){
+  try { Object.assign(state.prefs, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); }
+  catch(e){ /* private mode, or nothing saved */ }
+}
+function savePrefs(){
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); } catch(e){}
+}
+
+const FONT_SCALES = [[0.85, "S"], [1, "M"], [1.2, "L"], [1.45, "XL"], [1.8, "XXL"]];
+
+const TOGGLES = [
+  {key: "labels", label: "dE", title: "the step's energy change, on every connector"},
+  {key: "levelValues", label: "level value",
+   title: "each level's own coordinate on the bar — reading a height off the axis by"
+        + " eye is an estimate, and this is the number"},
+  {key: "species", label: "added / shed",
+   title: "what each step builds in and what it loses, beside the connector"},
+  {key: "colour", label: "colour",
+   title: "off puts the routes in grey and tells them apart by dash pattern instead"},
+];
+
+function mountToggles(){
+  $("toggles").innerHTML = TOGGLES.map(t =>
+    `<label class="tg" title="${esc(t.title)}"><input type="checkbox" data-pref="${esc(t.key)}"`
+    + `${state.prefs[t.key] ? " checked" : ""}> ${esc(t.label)}</label>`).join("")
+    // Root-anchored is offered and badged: routes bottom out at different species, so
+    // their zeros are different systems and only the target end is truly shared.
+    + `<label class="tg" title="each route re-zeroed on its own left end. Routes bottom`
+    + ` out at different species, so those zeros are different systems — the target is`
+    + ` the only node they all share">`
+    + `<input type="checkbox" data-pref="anchorRoot"`
+    + `${state.prefs.anchor === "root" ? " checked" : ""}> zero at root</label>`
+    // One number drives every label on the chart, and the margins with them.
+    + `<label class="tg" title="size of every label on the chart">text `
+    + `<select id="font-scale">`
+    + FONT_SCALES.map(([v, name]) =>
+        `<option value="${v}"${Math.abs(state.prefs.fontScale - v) < 1e-6
+          ? " selected" : ""}>${esc(name)}</option>`).join("")
+    + `</select></label>`;
+  $("toggles").onchange = (e) => {
+    if(e.target.id === "font-scale"){
+      state.prefs.fontScale = Number(e.target.value) || 1;
+      savePrefs(); drawDiagram(); return;
+    }
+    const k = e.target.dataset.pref;
+    if(!k) return;
+    if(k === "anchorRoot") state.prefs.anchor = e.target.checked ? "root" : "target";
+    else state.prefs[k] = e.target.checked;
+    savePrefs();
+    drawDiagram();
+    renderLegend();
+  };
+}
+
+/* ── resizable panes ──────────────────────────────────────────────────────
+   Each splitter writes one CSS custom property and the grid does the rest.  The
+   sizes are a per-viewer convenience, so they go to localStorage the way the
+   registry page keeps its open filter sections — wrapped, because a private
+   window throws on the read rather than returning nothing. */
+const PANES_KEY = "mofsbu.graph.panes";
+const panes = (() => {
+  try { return JSON.parse(localStorage.getItem(PANES_KEY) || "{}") || {}; }
+  catch(e){ return {}; }
+})();
+const PANE_VAR = {pick: "--w-pick", chart: "--h-chart"};
+
+function savePanes(){
+  try { localStorage.setItem(PANES_KEY, JSON.stringify(panes)); } catch(e){ /* private mode */ }
+}
+function setPane(key, px){
+  panes[key] = Math.round(px);
+  document.documentElement.style.setProperty(PANE_VAR[key], panes[key] + "px");
+}
+function clearPane(key){
+  delete panes[key];
+  document.documentElement.style.removeProperty(PANE_VAR[key]);
+}
+
+/* `measure` turns a pointer coordinate into the size the pane should be, `bounds`
+   keeps both neighbours usable, and `natural` reads back what the default track
+   resolved to so the arrow keys have somewhere to start. */
+function mountSplitter(el, spec){
+  const put = (px) => {
+    const [lo, hi] = spec.bounds();
+    setPane(spec.key, Math.max(lo, Math.min(hi, px)));
+  };
+  const current = () => panes[spec.key] ?? spec.natural();
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+    el.onpointermove = (ev) =>
+      put(spec.measure(spec.axis === "x" ? ev.clientX : ev.clientY));
+    el.onpointerup = el.onpointercancel = () => {
+      el.onpointermove = el.onpointerup = el.onpointercancel = null;
+      document.body.classList.remove("dragging");
+      savePanes();
+    };
+  });
+  el.addEventListener("dblclick", () => { clearPane(spec.key); savePanes(); });
+  el.addEventListener("keydown", (e) => {
+    const keys = spec.axis === "x" ? {ArrowLeft:-16, ArrowRight:16}
+                                   : {ArrowUp:-16, ArrowDown:16};
+    if(!(e.key in keys)) return;
+    e.preventDefault();
+    put(current() + keys[e.key]);
+    savePanes();
+  });
+}
+
+function mountPanes(){
+  for(const k of Object.keys(panes))
+    if(PANE_VAR[k] && Number.isFinite(panes[k])) setPane(k, panes[k]);
+  const appBox = () => $("app").getBoundingClientRect();
+  const rightBox = () => $("right").getBoundingClientRect();
+  mountSplitter($("split-pick"), {
+    key: "pick", axis: "x",
+    measure: (x) => x - appBox().left,
+    bounds: () => [230, Math.max(240, appBox().width - 340)],
+    natural: () => $("picker").getBoundingClientRect().width,
+  });
+  mountSplitter($("split-chart"), {
+    key: "chart", axis: "y",
+    measure: (y) => y - rightBox().top,
+    bounds: () => [120, Math.max(130, rightBox().height - 110)],
+    natural: () => $("chart").getBoundingClientRect().height,
+  });
+}
+
+function boot(){
+  if(new URLSearchParams(location.search).get("stubs") === "off")
+    document.body.classList.add("stubs-off");
+  loadPrefs();
+  mountStubs();
+  mountPanes();
+  $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
+  $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
+  mountToggles();
+
+  // Geometry, in the two places it answers a different question: a popover while the
+  // pointer is passing over a name, and one viewer that stays on the focused node.
+  mofsbuPreview.mount();
+  focusViewer = mofsbuPreview.embed($("focus-3d"));
+  const caption = (sid) => {
+    const sp = (state.data && state.data.species[String(sid)]) || {};
+    return sp.display_label || `structure ${sid}`;
+  };
+  mofsbuPreview.bind($("steps"), {caption});
+  mofsbuPreview.bind($("diagram"), {caption: (sid) => {
+    for(const r of state.routes)
+      for(const n of (r.path ? r.path.nodes : []))
+        if(n.structure_id === sid) return n.display_label || `structure ${sid}`;
+    return caption(sid);
+  }});
+  // The picker pane is what scrolls, not the table inside it, so a pinned popover has
+  // to be dismissed from there or it hangs over a name that has moved.
+  $("picker").addEventListener("scroll", () => mofsbuPreview.hide(), {passive: true});
+  document.querySelector(".mv-bar").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if(!b) return;
+    if(b.id === "focus-recentre"){ focusViewer.recentre(); return; }
+    if(!b.dataset.style) return;
+    document.querySelectorAll(".mv-bar button[data-style]")
+      .forEach(x => x.classList.toggle("on", x === b));
+    focusViewer.style(b.dataset.style);
+  });
+
+  $("drop-node").onclick = () => {
+    const n = here();
+    if(n) dropNode(n.sid);
+  };
+  $("want-derived").checked = state.prefs.derived;
+  $("want-derived").onchange = (e) => {
+    state.prefs.derived = e.target.checked; savePrefs(); showHere();
+  };
+
+  // Delegated: the table is replaced wholesale on every hop, so the listener has to
+  // outlive it.  A species is a step INTO that species; the row is a step back along
+  // the edge, which is the scaffold.
+  $("steps").addEventListener("click", (e) => {
+    const term = e.target.closest("a.term");
+    const row = e.target.closest("tr.step");
+    if(term){
+      e.preventDefault();
+      const sid = Number(term.dataset.sid);
+      const s = (state.data && state.data.species[String(sid)]) || {};
+      if(!Number(s.n_incoming_routes)){
+        say(`nothing recorded reaches ${shortLabel(s.display_label) || "#" + sid}`);
+        return;
+      }
+      say("");
+      stepTo(sid, row ? (row.dataset.rid || null) : null);
+      return;
+    }
+    if(row) { say(""); stepTo(Number(row.dataset.source), row.dataset.rid); }
+  });
+
+  // A level on the chart is a node on a route; clicking it moves the picker there,
+  // which is also how you pick which route a fork comes off.
+  $("diagram").addEventListener("click", (e) => {
+    const hit = e.target.closest("[data-route]");
+    if(!hit) return;
+    say("");
+    focusAt(Number(hit.dataset.route), Number(hit.dataset.at));
+  });
+
+  $("routes").addEventListener("click", (e) => {
+    const drop = e.target.closest("[data-drop]");
+    if(drop){ say(""); dropRoute(Number(drop.dataset.drop)); return; }
+    const row = e.target.closest(".rt");
+    if(row){ say(""); focusAt(Number(row.dataset.route),
+                             trailOf(Number(row.dataset.route)).length - 1); }
+  });
+
+  // The splitters change the chart's size without the window changing, so the redraw
+  // watches the element rather than `resize`.
+  if(window.ResizeObserver){
+    new ResizeObserver(() => drawDiagram()).observe($("diagram"));
+    // WebGL has to be told its canvas changed; the splitters change it without a
+    // window resize, so the viewer watches its own box too.
+    new ResizeObserver(() => focusViewer && focusViewer.resize()).observe($("focus-3d"));
+  } else {
+    addEventListener("resize", () => {
+      drawDiagram();
+      if(focusViewer) focusViewer.resize();
+    });
+  }
+
+  $("trail").addEventListener("click", (e) => {
+    const c = e.target.closest(".crumb");
+    if(c){ say(""); focusAt(state.active, Number(c.dataset.i)); }
+  });
+
+  addEventListener("hashchange", () => {
+    const h = readHash();
+    if(h.target) $("target-id").value = h.target;
+    replay(h);
+  });
+
+  fetch("/api/meta").then(r => r.json())
+    .then(m => { $("meta").textContent = `${m.db_name} · read-only`; })
+    .catch(() => {});
+
+  const h = readHash();
+  if(h.target) $("target-id").value = h.target;
+  replay(h);
+}
+
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>

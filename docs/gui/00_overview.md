@@ -1,8 +1,8 @@
 # MolCluster's HTML GUI — overview
 
-Three pages served by one FastAPI app. Everything below is what the code actually exposes
-as of **M6/S4** (PR #42); anything not yet reachable is in `04_limits.md` rather than
-described as if it worked.
+Four pages served by one FastAPI app. Everything below is what the code actually exposes
+as of the formation-energy graph; anything not yet reachable is in `04_limits.md` rather
+than described as if it worked.
 
 ## Launching it
 
@@ -21,16 +21,20 @@ CUDA for this server's `ml_go`/`xtb_go` runs, and whether to allow more than one
 in-process worker. Neither is inferred from the hardware — the device is *declared*, and
 the page shows which declaration is in force.
 
-## The three pages
+## The four pages
 
 | Page | Path | What it is for |
 |---|---|---|
 | **Registry** | `/` | Browse, filter and inspect everything the pipeline has built |
 | **Builder** | `/builder` | Compose a spec and queue a run. Never edit JSON by hand |
 | **Run inspector** | `/runs` | Watch a run, and read why anything was refused |
+| **Energy graph** | `/graph` | Walk a structure's provenance backwards and compare the routes ([05](05_graph.md)) |
 
 They share one tab strip (`chrome.css` / `chrome.js`), and each page names the database it
-is pointed at, so two servers on two registries are not confusable.
+is pointed at, so two servers on two registries are not confusable. The registry page and the
+graph also share `routes.js` — how to read a provenance edge, what to call a species, when two
+edges are one chemistry — because two answers to any of those would be two accounts of one
+registry.
 
 ## The one boundary worth knowing
 

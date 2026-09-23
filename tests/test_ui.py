@@ -49,7 +49,103 @@ def test_index_serves_the_page(client):
     assert "3Dmol" in r.text and "mofsbu" in r.text
 
 
-@pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js"])
+def test_the_graph_page_is_served_and_is_in_the_tab_strip(client):
+    """A page nobody can navigate to is not a page.  The strip is built from one list
+    in chrome.js, so the route and the tab have to agree or the tab 404s."""
+    r = client.get("/graph")
+    assert r.status_code == 200
+    assert "formation-energy graph" in r.text
+    assert '"/graph"' in client.get("/static/chrome.js").text
+
+
+def test_the_walk_gets_the_same_edges_as_the_detail_endpoint(client):
+    """Two doors onto one set of edges must not disagree about what reaches a
+    structure.  The walk's door exists to skip the geometry list and the blob probe
+    per geometry, not to answer a different question."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    detail = client.get(f"/api/structures/{sid}").json()["routes"]
+    walk = client.get(f"/api/structures/{sid}/routes").json()
+    assert [r["id"] for r in walk["routes"]] == [r["id"] for r in detail]
+    assert [r["total_dE"] for r in walk["routes"]] == [r["total_dE"] for r in detail]
+    assert walk["structure"]["id"] == sid
+
+
+def test_the_walk_can_name_every_species_its_edges_mention(client):
+    """A candidate step is chosen on what it is made of, so the names have to arrive
+    with the edges.  A term whose species is missing would render as a bare id and
+    the walk would not know whether it could go on from there."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    walk = client.get(f"/api/structures/{sid}/routes").json()
+    mentioned = {str(t["structure_id"]) for r in walk["routes"]
+                 for s in r["steps"] for t in s["terms"]}
+    assert mentioned <= set(walk["species"])
+    for s in walk["species"].values():
+        assert "display_label" in s and "n_incoming_routes" in s
+
+
+def test_the_walk_refuses_a_structure_that_is_not_there(client):
+    assert client.get("/api/structures/999999/routes").status_code == 404
+
+
+def test_derived_splits_are_asked_for_and_arrive_in_a_key_of_their_own(client):
+    """Deriving scans every structure, so it is opt-in — and it lands beside the
+    recorded edges rather than among them, because conflating the two is the one thing
+    the reference scheme exists to stop."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    assert client.get(f"/api/structures/{sid}/routes").json()["derived"] == []
+    asked = client.get(f"/api/structures/{sid}/routes", params={"inferred": 1}).json()
+    assert "derived" in asked
+    for d in asked["derived"]:
+        assert d["origin"] == "inferred"
+
+
+def _a_recorded_step(client):
+    """The first (product, reagent, reaction) the demo registry actually records."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    for row in listed:
+        if not row["n_incoming_routes"]:
+            continue
+        for r in client.get(f"/api/structures/{row['id']}/routes").json()["routes"]:
+            for t in r["steps"][0]["terms"]:
+                if t["side"] == "reagent" and (t["role"] or "reagent") == "reagent":
+                    return row["id"], int(t["structure_id"]), r["id"]
+    return None
+
+
+def test_a_priced_path_puts_the_target_at_zero(client):
+    step = _a_recorded_step(client)
+    if step is None:
+        pytest.skip("the demo registry seeded no edge with a reagent")
+    product, source, rid = step
+    r = client.get("/api/paths/price",
+                   params={"nodes": f"{product},{source}", "via": str(rid)})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [n["structure_id"] for n in body["nodes"]] == [product, source]
+    assert body["nodes"][0]["y"] == 0.0
+    assert body["steps"][0]["origin"] == "recorded"
+
+
+def test_a_malformed_path_is_refused_with_a_reason_not_a_stack_trace(client):
+    for params, expect in (({"nodes": "1,2", "via": ""}, "edges"),
+                           ({"nodes": "1,2", "via": "not-a-number"}, "malformed"),
+                           ({"nodes": "999999", "via": ""}, "no structure")):
+        r = client.get("/api/paths/price", params=params)
+        assert r.status_code == 400, r.text
+        assert expect in r.json()["detail"]
+
+
+@pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js",
+                                   "/static/routes.js", "/static/preview.js"])
 def test_the_shared_chrome_is_served(client, asset):
     """The tab strip is built by a fetched file, not by markup in each page.  If the
     mount goes, all three pages lose their navigation and say nothing about it."""

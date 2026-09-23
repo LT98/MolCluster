@@ -63,6 +63,30 @@ imports here — `mode_status()` decides, and the page reports `available: false
 note rather than failing at submit time. The `ml_go` model picker lists only installed
 models.
 
+## The energy graph does not search, score or rank
+
+The graph page composes routes **you** walk. It will not find them for you, and it puts no
+route above another.
+
+- **No path search.** There is no "show me the cheapest route to this structure". Every step is
+  chosen, one hop at a time, from what the registry records (plus derived splits when asked).
+- **No scoring, no ranking, no barrier.** The legend reports each route's total, its worst
+  single step and its rung. It does not order routes, call one better, or estimate a barrier.
+
+That is a boundary rather than an omission. Ranking needs a barrier proxy and a decision about
+partner dependence — **C6** and **C7** in `DESIGN_registry_assembly.md` — and both are
+explicitly scheduled for M8, at the point where the code first forces the call. A drawing tool
+pre-empting them would be answering a question nobody has decided how to ask.
+
+What the page will say instead is when two routes *cannot* be compared: it tracks what each has
+shed and badges a route whose accounting differs from the others'. [B19](../BUGS.md#b19) records
+where that warning is still in the wrong place.
+
+**Derived splits are two-part only.** `decompositions` finds pairs of existing structures whose
+atoms and charge sum to the target; a three-way split is the ladder M8 builds. And they are a
+full scan of the structures table, so they are asked for rather than always on — except at a
+node whose recorded edges cite nothing, where derivation is the only answer available.
+
 ## Two things that are deliberate, not missing
 
 - **The viewer cannot write.** Not an oversight — `mode=ro` plus `PRAGMA query_only`, with
