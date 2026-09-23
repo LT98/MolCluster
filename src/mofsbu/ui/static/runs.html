@@ -463,6 +463,8 @@ function stopButton(run){
 // ── one task ────────────────────────────────────────────────────────────────
 function attempted(t){
   const p = t.payload || {};
+  if(t.kind === 'co_ligand')
+    return `free co-ligand ${esc(p.smiles || '')}`;
   if(t.kind === 'ligand')
     return `molecule ${p.molecule} <span class="muted">protomer ${esc(p.label || '·')} q=${p.charge}</span>`;
   const bits = [`molecule ${p.molecule}`, `metal ${p.metal}`,

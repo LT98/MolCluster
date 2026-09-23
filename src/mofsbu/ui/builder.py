@@ -24,7 +24,7 @@ from mofsbu import library
 from mofsbu.config import data_root
 from mofsbu.energy.relax import ml_model_status, mode_status
 from mofsbu.geometry.placer import GEOMETRIES
-from mofsbu.spec import MAX_RANGE_SPAN, RUN_MODES, BuildSpec
+from mofsbu.spec import CO_LIGAND_COUNTS, MAX_RANGE_SPAN, RUN_MODES, BuildSpec
 from mofsbu._types import MofsbuError
 
 STATIC = Path(__file__).parent / "static"
@@ -137,6 +137,23 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                               "the registry holds the route and not just the endpoints. "
                               "It adds the coordinatively unsaturated intermediates to "
                               "the run"),
+            # D26.  Offered with the default a NEW spec gets, read off the dataclass so
+            # the page and a hand-written spec cannot disagree about what "default" is.
+            "co_ligand_counts": list(CO_LIGAND_COUNTS),
+            "co_ligand_counts_default": BuildSpec.__dataclass_fields__[
+                "co_ligand_counts"].default,
+            "co_ligand_window_default": BuildSpec.__dataclass_fields__[
+                "co_ligand_window"].default,
+            "co_ligand_note": ("applies to whatever co-ligand or solvent is named "
+                               "(water is only the default). fill: one on every vertex "
+                               "the ligands leave. range: also each count down to "
+                               "`window` fewer, the uncovered vertices left empty in the "
+                               "same polyhedron; a higher count needs a higher CN in "
+                               "the list. With pathways on, gaining one co-ligand is a "
+                               "step, no rung leaves more than `window` vertices empty, "
+                               "and the lowest co-ligand state inside the window is the "
+                               "ladder's root — never the bare metal. Specs saved "
+                               "before v8 read as fill"),
             "metals_optional": True,
             "metals_note": ("metal centres are optional: a purely molecular construction "
                             "(COF, organic cage) is a first-class case. Joining molecule "

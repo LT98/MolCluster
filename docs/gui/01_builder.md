@@ -29,10 +29,23 @@ with the code.
 - **Binding modes**, and an optional **co-ligand** given as the species that actually binds
   (`O` for water, `[OH-]` for hydroxide, `[I-]` rather than `I2`). A co-ligand with no
   perceivable donor is refused by name with that hint, not silently dropped.
+- **Co-ligand count** (`co_ligand_counts`, D26) — applies to whatever co-ligand or solvent
+  is named (water is only the default). `fill` puts one on every vertex the ligands leave;
+  `range` (the default for a new spec) also builds the counts down to the **window** below
+  full (default 2), the uncovered vertices left **empty in the same polyhedron** — a CN-4 Ni
+  with one ligand and two waters is still a square plane with one open vertex, never a
+  3-coordinate complex. A count above full needs a higher CN, so it appears only when the CN
+  list has one; none is invented. With a co-ligand set, `allow_unsaturated` does not gate
+  these — choosing `range` is the request for them. A spec saved before v8 loads as `fill`,
+  which is what it planned.
 - **Pathways** toggle — record how the rungs of a ligand-count sweep reach each other. The
   intermediate below each product is built and the step between them performed with
   `assembly.join`, so the registry holds the *route* and not just the endpoints. It adds
-  the coordinatively unsaturated intermediates to the run.
+  the coordinatively unsaturated intermediates to the run. Under `range` a co-ligand is a
+  step too — `Ni(H2O)2 + H2O → Ni(H2O)3`, the free co-ligand built and relaxed as a
+  reagent — and no rung leaves more than the window's number of vertices empty, so the
+  seeds of one metal and CN are one ladder on the graph page, rooted at the lowest
+  co-ligand state inside the window. No bare-metal row is made. A window of 0 plans no step.
 
 ## 3 · Construction
 
@@ -43,7 +56,10 @@ with the code.
   present cannot be selected, and one that is gets named rather than called "MACE".
 - **Estimate before submitting**: `POST /api/estimate` runs the same enumeration
   submitting would, so the number on the page is the number you get. There is a test
-  pinning those two together, because otherwise the number is decoration.
+  pinning those two together, because otherwise the number is decoration. When the
+  pathway ladder hits its task cap (`MAX_PATHWAY_TASKS`, 2000) the estimate leads with a
+  red line giving the cap and the size the uncapped ladder would have been — the run is
+  then **incomplete**, not merely large (see [limits](04_limits.md)).
 
 ## Side panels
 

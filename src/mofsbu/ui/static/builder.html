@@ -127,6 +127,18 @@
       <div class="muted" id="rangeNote" style="margin-top:4px"></div>
       <label for="coligand">co-ligand filling remaining sites (blank = none)</label>
       <input id="coligand" value="O">
+      <label for="coCounts">co-ligand count</label>
+      <div class="row">
+        <select id="coCounts" style="flex:0 0 190px"
+                title="fill = one on every free vertex; range = also each lower count">
+          <option value="fill">fill every free vertex</option>
+          <option value="range">range — also fewer</option>
+        </select>
+        <input id="coWindow" type="number" min="0" value="2" style="flex:0 0 90px"
+               title="window: how many fewer than full, and how many vertices a ladder rung may leave empty (range only)">
+        <span class="muted" style="align-self:center">window (fewer at most)</span>
+      </div>
+      <div class="muted" id="coNote" style="margin-top:4px"></div>
       <label class="muted" style="margin-top:6px">
         <input type="checkbox" id="unsat"> build coordinatively unsaturated products
         when no co-ligand is set</label>
@@ -252,6 +264,11 @@ async function loadCaps() {
   $('#metalList').title = state.caps.metals_note;
   $('#rangeNote').textContent = state.caps.range_note || '';
   $('#pathwaysNote').textContent = state.caps.pathways_note || '';
+  $('#coNote').textContent = state.caps.co_ligand_note || '';
+  $('#coCounts').value = state.caps.co_ligand_counts_default || 'range';
+  $('#coWindow').value = state.caps.co_ligand_window_default ?? 2;
+  $('#coCounts').onchange = showCoWindow;
+  showCoWindow();
   renderCompute(state.caps.compute);
   // One listener for the whole construction card rather than one per control: every
   // input in it is part of the spec, and a control added later would otherwise be the
@@ -522,6 +539,11 @@ function applySpec(spec) {
   // Same migration showing through: a spec written before pathways existed asked for the
   // products only, and loading one must not silently turn the intermediates on.
   $('#pathways').checked = !!spec.pathways;
+  // A spec saved before v8 has neither field and planned `fill`; the server's migration
+  // says so, and the page must not present it as the newer default.
+  $('#coCounts').value = spec.co_ligand_counts || 'fill';
+  $('#coWindow').value = spec.co_ligand_window ?? 2;
+  showCoWindow();
   $('#bChel').checked = (spec.binding || []).includes('chelate');
   $('#bMono').checked = (spec.binding || []).includes('mono');
   $('#pRing').value = spec.pocket?.ring_size ?? '';
@@ -574,12 +596,18 @@ function renderEstimate(res) {
   const k = res.by_kind || {};
   const parts = [];
   if (k.ligand) parts.push(`${k.ligand} activation state${k.ligand > 1 ? 's' : ''}`);
+  if (k.co_ligand) parts.push('the free co-ligand');
   if (k.place) parts.push(`${k.place} coordination sphere${k.place > 1 ? 's' : ''}`);
   if (k.grow) parts.push(`${k.grow} pathway step${k.grow > 1 ? 's' : ''}`);
   const relax = res.relaxations
     ? ` <span class="muted">+ up to ${res.relaxations} relaxation(s) at ${res.run_mode}</span>`
     : '';
-  el.innerHTML =
+  // A cap that bit makes the run INCOMPLETE, not just big: said first, with the size the
+  // uncapped ladder would have been, rather than left as one chip among the diagnostics.
+  const capped = (res.capped || []).map(c =>
+    `<div class="err">capped at ${c.cap} tasks — the full ladder would be ${c.uncapped_tasks}; `
+    + `rungs below some products are NOT planned. ${c.hint}</div>`).join('');
+  el.innerHTML = capped +
     `<b>≈ ${res.total} task${res.total === 1 ? '' : 's'}</b> `
     + `<span class="muted">${parts.join(' · ') || 'nothing to build'}</span>${relax}`
     + (res.diagnostics && res.diagnostics.length
@@ -587,6 +615,10 @@ function renderEstimate(res) {
             `<span class="chip" title="${d.hint}">×${d.count} ${d.reason}</span>`).join('')
           + '</div>'
         : '');
+}
+
+function showCoWindow() {
+  $('#coWindow').disabled = $('#coCounts').value !== 'range';
 }
 
 function buildSpec() {
@@ -608,6 +640,11 @@ function buildSpec() {
     allow_unsaturated: $('#unsat').checked,
     max_distinct_ligands: +$('#mixed').value || 1,
     pathways: $('#pathways').checked,
+    // Sent explicitly: this page posts spec_version 1, so an omitted field would be
+    // filled by the migration (fill), not by the v8 default.
+    co_ligand_counts: $('#coCounts').value,
+    // A blank is sent as blank, so the spec refuses it by name rather than reading 0.
+    co_ligand_window: $('#coWindow').value === '' ? null : +$('#coWindow').value,
     run_mode: document.querySelector('input[name=mode]:checked').value,
     ml_model: $('#mlModel').value || null,
     note: $('#note').value,

@@ -155,7 +155,10 @@ def test_the_co_ligand_saturated_series_connects(reg):
     spec: two of the three grow steps refused before the placer was told which vertices
     to keep, none after.
     """
-    spec = ladder_spec(coordination="6", geometries=("octahedral",), co_ligand="O")
+    # `fill` is the series this measured.  `range` adds rungs with two chelates and two
+    # empty vertices, which the placer refuses (B21) — a different defect.
+    spec = ladder_spec(coordination="6", geometries=("octahedral",), co_ligand="O",
+                       co_ligand_counts="fill")
     summary = run(reg, spec)
     assert not summary["counts"].get("failed"), summary["counts"]
 

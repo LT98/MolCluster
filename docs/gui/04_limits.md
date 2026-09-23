@@ -34,6 +34,36 @@ builder page:
   open. That is the S4 capability reaching the GUI **as behaviour rather than as a
   control**, and it is why co-ligand ladder runs stopped producing `chelate_cannot_span`.
 
+## The pathway ladder stops at 2000 tasks
+
+`runner.MAX_PATHWAY_TASKS` caps the whole plan once the ladder walk starts. When it bites,
+the rungs below some products are **not planned** — their steps and intermediates are
+missing, so part of the graph is not one connected ladder. It is never silent:
+the diagnostic carries `cap` and `uncapped_tasks` (the ladder's full size, from the same
+walk run uncapped on a copy), `estimate` returns it under `capped`, and the builder page
+leads its estimate with it.
+
+The co-ligand range (D26) is the setting most likely to reach it. Measured on
+`data/reference/spec_ni_thq_cl_slice.json` re-read as a v8 spec:
+
+| `co_ligand_counts` / window | tasks | capped? |
+|---|---|---|
+| `fill` (what the v7 file plans) | 722 | no |
+| `range`, window 0 (no steps) | 243 | no |
+| `range`, window 1 | 1141 | no |
+| `range`, window 2 (**default**) | 2000 | **yes — uncapped 2041** |
+| `range`, window 3 | 2000 | yes — uncapped 2521 |
+
+So the default window **does** cut that spec's ladder, by 41 tasks. At CN `4,6` it is 3059
+uncapped (window 1: 1709). Narrow `max_distinct_ligands` or the CN list, lower the window, or
+use `fill`.
+
+## Placer refusals leave holes in a co-ligand ladder
+
+A rung the placer refuses is a rejected `place`, and every step onto it is rejected with
+`pathway_parent_missing`. [B21](../BUGS.md#b21): an octahedral centre with chelates and two or
+more empty vertices is refused, and `range` asks for exactly those rungs.
+
 ## Columns that exist but are empty
 
 `/api/filters` returns `reserved_inactive`, naming each column and the milestone that will

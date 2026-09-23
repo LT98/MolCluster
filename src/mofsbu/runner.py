@@ -24,6 +24,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from rdkit import Chem
+
 from mofsbu.config import (
     compute_device, device_note, max_workers, parallel_enabled, relax_workers,
 )
@@ -170,13 +172,18 @@ def _used_vertices(components: Sequence[dict[str, Any]]) -> int:
     return sum(int(c["denticity"]) * int(c["count"]) for c in components)
 
 
-def _parent_payloads(payload: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def _parent_payloads(payload: dict[str, Any], co_ligand: str | None = None,
+                     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """`(parent payload, the component one copy of which the join adds)`, one per kind.
 
     The parent is this product with one ligand copy removed and the vertices that copy
     occupied left EMPTY — not filled with a co-ligand.  That is what makes the step an
     addition rather than a substitution, and it is the only version of the parent a
     `join` can actually turn into this product.
+
+    `co_ligand` (set under `co_ligand_counts="range"`, D26) adds one more parent: this
+    product with one co-ligand fewer, its vertex left empty.  Listed last, so the ligand
+    parents keep the order a `fill` spec plans them in.
     """
     out = []
     for i, comp in enumerate(payload["components"]):
@@ -186,7 +193,29 @@ def _parent_payloads(payload: dict[str, Any]) -> list[tuple[dict[str, Any], dict
         parent = dict(payload, components=rest)
         parent["n_vacant"] = int(payload["cn"]) - int(payload["n_co"]) - _used_vertices(rest)
         out.append((parent, dict(comp, count=1)))
+    if co_ligand and int(payload["n_co"]) > 0:
+        parent = dict(payload, n_co=int(payload["n_co"]) - 1,
+                      n_vacant=int(payload.get("n_vacant", 0)) + 1)
+        out.append((parent, _co_component(co_ligand)))
     return out
+
+
+#: Why a charged co-ligand is not stepped (see `_charged`).
+CO_LIGAND_CHARGED = ("B20: `place` leaves a co-ligand's charge out of the complex's net "
+                     "charge, so a join-built co-ligand step would land on a different "
+                     "identity from the rung it should reach")
+
+
+def _charged(smiles: str) -> bool:
+    """A co-ligand carrying a formal charge — which `place` does not count (B20)."""
+    mol = Chem.MolFromSmiles(smiles)
+    return mol is not None and Chem.GetFormalCharge(mol) != 0
+
+
+def _co_component(smiles: str) -> dict[str, Any]:
+    """The co-ligand as the component a `grow` step adds: one monodentate copy."""
+    return {"co_ligand": smiles, "denticity": 1, "count": 1,
+            "mode": BindingMode.MONODENTATE.value}
 
 
 def enumerate_plan(spec: BuildSpec) -> PlannedRun:
@@ -198,8 +227,9 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
     tasks: list[PlannedTask] = []
     skipped: dict[str, dict[str, Any]] = {}
 
-    def skip(reason: str, hint: str) -> None:
-        entry = skipped.setdefault(reason, {"reason": reason, "hint": hint, "count": 0})
+    def skip(reason: str, hint: str, **extra: Any) -> None:
+        entry = skipped.setdefault(reason, {"reason": reason, "hint": hint, "count": 0,
+                                            **extra})
         entry["count"] += 1
 
     kinds: list[dict[str, Any]] = []
@@ -238,16 +268,15 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
                     "denticity": len(donors),
                 })
 
-    place_at: dict[str, int] = {}
+    # Under `range` the co-ligand is a reagent a step consumes, so it is built and
+    # relaxed like a free ligand — without it a co-ligand step balances one water short.
+    vary_co = bool(spec.metals and spec.co_ligand and spec.co_ligand_counts == "range")
+    if vary_co:
+        ligand_task[("co_ligand", spec.co_ligand)] = len(tasks)
+        tasks.append(PlannedTask("co_ligand", {"smiles": spec.co_ligand}, priority=10))
 
-    def place(payload: dict[str, Any]) -> int:
-        """Queue a coordination sphere once, however many ladders reach it."""
-        key = _payload_key(payload)
-        index = place_at.get(key)
-        if index is None:
-            index = place_at[key] = len(tasks)
-            tasks.append(PlannedTask("place", payload))
-        return index
+    place_at: dict[str, int] = {}
+    place = _placer(tasks, place_at)
 
     requested: list[int] = []
     for metal_ix in range(len(spec.metals)):
@@ -292,15 +321,46 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
                          + (f"; requested geometries {list(spec.geometries)} do not "
                             f"apply to CN {cn}" if spec.geometries else ""))
                     continue
+                # `fill` builds the one count that covers every free vertex; `range`
+                # (D26) builds each count down to `co_ligand_window` fewer, the vertices
+                # left uncovered empty in the same polyhedron — CN is never collapsed.
+                lowest = max(0, n_co - spec.co_ligand_window)
+                co_counts = range(n_co, lowest - 1, -1) if vary_co else (n_co,)
                 for geometry in candidates:
-                    requested.append(place({
-                        "metal": metal_ix, "components": combo,
-                        "n_co": n_co, "cn": cn, "geometry": geometry,
-                        "n_vacant": n_vacant,
-                    }))
+                    for k in co_counts:
+                        requested.append(place({
+                            "metal": metal_ix, "components": combo,
+                            "n_co": k, "cn": cn, "geometry": geometry,
+                            "n_vacant": n_vacant + n_co - k,
+                        }))
 
     if spec.pathways and spec.metals:
-        _plan_pathways(tasks, place, requested, ligand_task, skip)
+        step_co = spec.co_ligand if vary_co else None
+        if step_co and _charged(step_co):
+            skip(f"co-ligand steps not planned: {step_co!r} is charged",
+                 CO_LIGAND_CHARGED + ". The lower counts are still built; they are not "
+                 "linked to each other by co-ligand steps")
+            step_co = None
+        if vary_co and spec.co_ligand_window == 0:
+            skip("co_ligand_window 0 plans no pathway step",
+                 "every step adds onto an empty vertex, and a window of 0 allows no rung "
+                 "one; widen the window, or use co_ligand_counts fill for the ligand ladder")
+        walk = {"co_ligand": step_co,
+                "max_vacant": spec.co_ligand_window if vary_co else None}
+        shadow, shadow_at = list(tasks), dict(place_at)
+        if _plan_pathways(tasks, place, requested, ligand_task, cap=MAX_PATHWAY_TASKS,
+                          **walk):
+            # The cap bit.  The same walk run uncapped on a copy says how much was cut, so
+            # the refusal carries a size and not only the fact of one; nothing is queued
+            # from the copy.
+            _plan_pathways(shadow, _placer(shadow, shadow_at), requested, ligand_task,
+                           cap=None, **walk)
+            skip(f"pathway intermediates stopped at {MAX_PATHWAY_TASKS} tasks",
+                 "the ladder below this product is not planned; narrow the "
+                 "composition (max_distinct_ligands) or the ligand-count range"
+                 + ("; lower co_ligand_window, or set co_ligand_counts to fill"
+                    if vary_co else ""),
+                 cap=MAX_PATHWAY_TASKS, uncapped_tasks=len(shadow))
     if not spec.metals:
         skip("no metal centres in the spec",
              "molecular-only construction: activation states and sites are produced; "
@@ -308,8 +368,22 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
     return PlannedRun(tuple(tasks), tuple(skipped.values()), len(kinds))
 
 
+def _placer(tasks: list[PlannedTask], place_at: dict[str, int]):
+    def place(payload: dict[str, Any]) -> int:
+        """Queue a coordination sphere once, however many ladders reach it."""
+        key = _payload_key(payload)
+        index = place_at.get(key)
+        if index is None:
+            index = place_at[key] = len(tasks)
+            tasks.append(PlannedTask("place", payload))
+        return index
+    return place
+
+
 def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
-                   ligand_task: dict[tuple[int, tuple[int, ...]], int], skip) -> None:
+                   ligand_task: dict[tuple[Any, Any], int], *,
+                   co_ligand: str | None = None, max_vacant: int | None = None,
+                   cap: int | None) -> bool:
     """Add the intermediates each product is reached from, and the steps between them.
 
     Walked breadth first from the products the spec asked for, one ligand copy at a time,
@@ -320,6 +394,13 @@ def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
 
     The chain is walked even when the spec asked for only one count, because "what is this
     complex assembled from" is the same question at every rung.
+
+    Under `co_ligand_counts="range"` (D26) `max_vacant` is the window: no rung with more
+    empty vertices is planned, so the walk stops at the lowest co-ligand state inside it
+    rather than at the bare centre.  `co_ligand` set also steps the co-ligand, which is
+    what joins the ligand-free rungs of one metal and CN into one chain.
+
+    Returns True when `cap` stopped the walk before it reached the bottom.
     """
     seen: set[tuple[int, int]] = set()
     frontier = list(requested)
@@ -327,12 +408,11 @@ def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
         nxt: list[int] = []
         for child_ix in frontier:
             child = tasks[child_ix].payload
-            for parent_payload, component in _parent_payloads(child):
-                if len(tasks) >= MAX_PATHWAY_TASKS:
-                    skip(f"pathway intermediates stopped at {MAX_PATHWAY_TASKS} tasks",
-                         "the ladder below this product is not planned; narrow the "
-                         "composition (max_distinct_ligands) or the ligand-count range")
-                    return
+            for parent_payload, component in _parent_payloads(child, co_ligand):
+                if max_vacant is not None and parent_payload["n_vacant"] > max_vacant:
+                    continue
+                if cap is not None and len(tasks) >= cap:
+                    return True
                 parent_ix = place(parent_payload)
                 if (parent_ix, child_ix) in seen:
                     continue
@@ -341,12 +421,15 @@ def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
                 tasks.append(PlannedTask("grow", {
                     "parent_task": parent_ix, "child_task": child_ix,
                     "ligand_task": ligand_task.get(
-                        (component["molecule"], tuple(component["selection"]))),
+                        ("co_ligand", component["co_ligand"]) if "co_ligand" in component
+                        else (component["molecule"], tuple(component["selection"]))),
                     "component": component, "metal": child["metal"],
                     "cn": child["cn"], "geometry": child["geometry"],
                 }, priority=PATHWAY_PRIORITY,
                     task_refs=("parent_task", "child_task", "ligand_task")))
-        frontier = [ix for ix in nxt if tasks[ix].payload["components"]]
+        frontier = [ix for ix in nxt if tasks[ix].payload["components"]
+                    or (co_ligand and tasks[ix].payload["n_co"])]
+    return False
 
 
 def estimate(spec: BuildSpec) -> dict[str, Any]:
@@ -366,7 +449,7 @@ def estimate(spec: BuildSpec) -> dict[str, Any]:
         return {"ok": False, "reason": str(exc), "refusal": type(exc).__name__}
     planned = enumerate_plan(spec)
     by_kind = planned.by_kind()
-    builds = sum(by_kind.get(k, 0) for k in ("ligand", "place", "grow"))
+    builds = sum(by_kind.get(k, 0) for k in BUILD_KINDS)
     # One relaxation per thing built, at most: `queue_relax` skips a structure this
     # registry has already relaxed at this level of theory, and this function has no
     # registry to ask.  Stated as a ceiling rather than quietly counted as certain.
@@ -377,6 +460,11 @@ def estimate(spec: BuildSpec) -> dict[str, Any]:
         "ligand_kinds": planned.n_kinds,
         "diagnostics": [dict(d) for d in planned.diagnostics],
         "run_mode": spec.run_mode, "pathways": spec.pathways,
+        "co_ligand_counts": spec.co_ligand_counts,
+        "co_ligand_window": spec.co_ligand_window,
+        # A cap that bit, stated on its own rather than left as one diagnostic among
+        # several: the run it describes is incomplete, not merely smaller.
+        "capped": [dict(d) for d in planned.diagnostics if "cap" in d],
     }
 
 
@@ -786,24 +874,8 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
     name = "+".join(parts)
     molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
     if payload["n_co"]:
-        co, co_embed = embed_with_report(mol_from_smiles(spec.co_ligand), seed=3)
+        co, co_embed, co_site = _co_ligand_mol(spec.co_ligand)
         detail["co_ligand_embed"] = co_embed
-        co_sites = perceive(co)
-        if not co_sites:
-            # This used to be `perceive(co)[0]` and an IndexError, reported as a
-            # crash with a traceback — for what is a plain statement about the
-            # co-ligand: nothing in it can bind.  `[SiH4]` and `CC` reach here, and
-            # so does any donor type perception does not yet cover.
-            raise _Rejected(
-                f"co-ligand {spec.co_ligand!r} has no perceivable donor atom, so it "
-                f"cannot occupy a coordination site",
-                code="co_ligand_no_donor",
-                detail={"co_ligand": spec.co_ligand,
-                        "hint": "give the co-ligand as the species that actually "
-                                "binds — '[I-]' rather than 'I2', 'O' for water, "
-                                "'[OH-]' for hydroxide — or add its donor type to "
-                                "sites.perception"})
-        co_site = co_sites[0]
         detail["co_ligand"] = {"smiles": spec.co_ligand,
                                "donor_type": co_site.donor_type,
                                "donor_element":
@@ -902,6 +974,30 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
                   multiplicity=multiplicity, detail=detail)
 
 
+def _co_ligand_mol(smiles: str):
+    """The co-ligand embedded once, and the donor site every copy of it binds through.
+
+    `place`, a co-ligand `grow` step and the free co-ligand all read this, so the vertex
+    filler, the reagent a step consumes and the species priced against it are one
+    molecule bound through one atom.
+    """
+    co, co_embed = embed_with_report(mol_from_smiles(smiles), seed=3)
+    co_sites = perceive(co)
+    if not co_sites:
+        # A plain statement about the co-ligand rather than an IndexError: nothing in it
+        # can bind.  `[SiH4]` and `CC` reach here, as does an uncovered donor type.
+        raise _Rejected(
+            f"co-ligand {smiles!r} has no perceivable donor atom, so it "
+            f"cannot occupy a coordination site",
+            code="co_ligand_no_donor",
+            detail={"co_ligand": smiles,
+                    "hint": "give the co-ligand as the species that actually "
+                            "binds — '[I-]' rather than 'I2', 'O' for water, "
+                            "'[OH-]' for hydroxide — or add its donor type to "
+                            "sites.perception"})
+    return co, co_embed, co_sites[0]
+
+
 def _sphere_block(built: _Built, structure_id: int | None = None):
     """A placed sphere AS a building block: donors, empty vertices, and their state.
 
@@ -954,6 +1050,23 @@ def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None 
             code="donor_index_stale",
             detail={"component": comp, "perceived": sorted(by_idx)})
     return block, [by_idx[i] for i in comp["donors"]], name
+
+
+def _co_ligand_for(smiles: str, structure_id: int | None = None):
+    """The co-ligand as a joinable block, bound through the site `place` binds it by."""
+    from mofsbu.assembly.construct import ligand_block
+
+    co, _, co_site = _co_ligand_mol(smiles)
+    block = replace(ligand_block(co, charge=Chem.GetFormalCharge(co), name=smiles),
+                    structure_id=structure_id)
+    by_idx = {s.atom_idx: s for s in block.sites}
+    if co_site.atom_idx not in by_idx:
+        raise _Rejected(
+            f"co-ligand {smiles!r}: the donor `place` binds (atom {co_site.atom_idx}) is "
+            f"not a site of the joinable block, so the step would bind a different atom",
+            code="donor_index_stale",
+            detail={"co_ligand": smiles, "perceived": sorted(by_idx)})
+    return block, [by_idx[co_site.atom_idx]], smiles
 
 
 def _rung(reg: Registry, task_id: Any, which: str) -> tuple[int, dict[str, Any]]:
@@ -1039,7 +1152,14 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     parent = _build_sphere(spec, parent_payload)
     block = _sphere_block(parent, structure_id=parent_sid)
     comp = payload["component"]
-    ligand, donors, name = _ligand_for(spec, comp, structure_id=ligand_sid)
+    if "co_ligand" in comp:
+        if _charged(comp["co_ligand"]):
+            # The planner does not queue this; a hand-built or older queued task is refused.
+            raise _Rejected(f"co-ligand {comp['co_ligand']!r} is charged: {CO_LIGAND_CHARGED}",
+                            code="co_ligand_charged", detail={"co_ligand": comp["co_ligand"]})
+        ligand, donors, name = _co_ligand_for(comp["co_ligand"], structure_id=ligand_sid)
+    else:
+        ligand, donors, name = _ligand_for(spec, comp, structure_id=ligand_sid)
     metal = parent.metal
     elements = [ligand.graph.label(s.atom_idx).element for s in donors]
     detail: dict[str, Any] = {"step": {
@@ -1083,14 +1203,16 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
         raise _Rejected(str(report), code=report.code,
                         detail={**detail, "qc": report.to_dict()})
 
+    added = [] if "co_ligand" in comp else [spec.molecules[comp["molecule"]].name]
+    # Pieces on the product; co-ligands count only where they are stepped (D26).
+    stepped_co = int(parent_payload.get("n_co", 0)) if spec.co_ligand_counts == "range" else 0
     stored = store_block(
         reg, result.block, choice_vector=result.choice_vector,
         # The reagents ARE the pathway: the rung below and the free ligand that was added.
         reagent_ids=[i for i in (parent_sid, ligand_sid) if i is not None],
-        depth=sum(int(c["count"]) for c in parent.components) + 1,
+        depth=sum(int(c["count"]) for c in parent.components) + stepped_co + 1,
         note=f"+{name} onto structure {parent_sid}",
-        tags=[*sorted({*parent.molecule_names, spec.molecules[comp["molecule"]].name}),
-              "complex", metal.symbol],
+        tags=[*sorted({*parent.molecule_names, *added}), "complex", metal.symbol],
         seed=spec.seed, qc=report.to_dict(),
         # The L2 tag is left where the `place` path leaves it — unset.  Computing one here
         # would put this product in a DIFFERENT structures row from the rung the run's own
@@ -1130,6 +1252,18 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         detail["sites"] = _record_sites(reg, put.id, geom.id, mol, g, Fidelity.FF)
         for frag in decompose(g):
             alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
+        return Outcome(put.id, geom.id, put.created, geom.created, detail)
+
+    if task.kind == "co_ligand":
+        # The free co-ligand, stored and relaxed like a ligand: it is the reagent a
+        # co-ligand step consumes, and an edge citing it prices only if it has an energy.
+        mol, co_embed, _ = _co_ligand_mol(payload["smiles"])
+        detail = {"embed": co_embed}
+        g = from_rdkit(mol, multiplicity=1, name=payload["smiles"])
+        put = put_structure(reg, g, tags=[payload["smiles"], "ligand", "co-ligand"])
+        geom = put_geometry(reg, put.id, to_xyz(mol, payload["smiles"]),
+                            fidelity=Fidelity.FF, method=FF)
+        detail["sites"] = _record_sites(reg, put.id, geom.id, mol, g, Fidelity.FF)
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":
@@ -1214,7 +1348,7 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
 #: in `BUILD_KINDS` is CPU work — embed, perceive, place, hash — and scales with cores.
 #: `relax` is the optimiser, which on a declared accelerator is one device's worth of work
 #: however many processes ask for it.
-BUILD_KINDS = ("ligand", "place", "grow")
+BUILD_KINDS = ("ligand", "co_ligand", "place", "grow")
 RELAX_KINDS = ("relax",)
 
 

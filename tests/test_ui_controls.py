@@ -496,3 +496,25 @@ def test_the_page_says_what_the_notation_and_the_ladder_mean(client):
     caps = client.get("/api/capabilities").json()
     assert "1~3" in caps["range_note"]
     assert "join" in caps["pathways_note"]
+
+
+def test_the_co_ligand_count_is_offered_and_an_old_spec_reads_as_fill(client):
+    """D26: the page renders the choice and its default from capabilities; a spec posted
+    without the field (the page labels its specs v1, fixtures here v7) plans `fill`."""
+    caps = client.get("/api/capabilities").json()
+    assert caps["co_ligand_counts"] == ["fill", "range"]
+    assert caps["co_ligand_counts_default"] == "range"
+    assert caps["co_ligand_window_default"] == 2
+    assert "never the bare metal" in caps["co_ligand_note"]
+
+    def estimate(**over):
+        return client.post("/api/estimate", json={"spec": spec_payload(**over)}).json()
+
+    old = estimate()
+    assert old["co_ligand_counts"] == "fill" and "co_ligand" not in old["by_kind"]
+    new = estimate(co_ligand_counts="range", co_ligand_window=2)
+    assert new["by_kind"]["co_ligand"] == 1 and new["tasks"] > old["tasks"]
+    assert new["capped"] == []
+    # The page labels its specs v1 (B5): the field it sends must survive the migration.
+    page = estimate(spec_version=1, co_ligand_counts="range", co_ligand_window=2)
+    assert page["co_ligand_counts"] == "range" and page["tasks"] == new["tasks"]
