@@ -428,3 +428,52 @@ def test_the_proton_couple_is_not_a_hub(reg):
     assert [t["structure_id"] for t in step["shed"]] == [wat]
     assert p["nodes"][1]["basis"] == f"{wat}x1"
     assert step["dE"] == pytest.approx(-step["reaction_dE"])
+
+
+# ── where a released proton goes ─────────────────────────────────────────────
+
+def _deprotonation_with_acetate(reg):
+    from mofsbu.energy.protons import link_protomers
+
+    from test_reference import _from_smiles
+
+    s = {"acid": _store(reg, aqua_ion(2), energy=-100.0),
+         "base": _store(reg, hydroxo_complex(), energy=-95.0),
+         "wat": _store(reg, water(), energy=-15.0),
+         "h3o": _store(reg, hydronium(), energy=-14.0),
+         "hoac": _store(reg, _from_smiles("CC(=O)O", "acetic acid"), energy=-50.0),
+         "oac": _store(reg, _from_smiles("CC(=O)[O-]", "acetate"), energy=-49.0)}
+    link_protomers(reg, water_id=s["wat"], hydronium_id=s["h3o"])
+    s["rid"] = reg.conn.execute(
+        "SELECT r.id FROM reactions r JOIN reaction_reagents rr ON rr.reaction_id = r.id "
+        "WHERE r.product_structure_id = ? AND rr.structure_id = ?",
+        (s["base"], s["acid"])).fetchone()[0]
+    return s
+
+
+def test_a_proton_handed_to_acetate_instead_of_water_is_exact(reg):
+    """With acetate as the sink, a deprotonation step becomes AH + OAc- -> A- + HOAc:
+    the step's dE is the direct equation's, the basis names HOAc, and water is gone."""
+    from mofsbu.pathways.route import proton_sinks
+
+    s = _deprotonation_with_acetate(reg)
+    assert [(k["base"], k["acid"]) for k in proton_sinks(reg)] == [(s["oac"], s["hoac"])]
+    walk = ([s["base"], s["acid"]], [s["rid"]])
+    to_water = price_path(reg, *walk, min_fidelity=Fidelity.XTB)
+    to_acetate = price_path(reg, *walk, min_fidelity=Fidelity.XTB, proton_sink=s["oac"])
+    assert to_water["total_dE"] == pytest.approx(6.0)
+    assert to_acetate["total_dE"] == pytest.approx((-95.0 + -50.0) - (-100.0 + -49.0))
+    assert to_acetate["proton_sink"]["dE_per_proton"] == pytest.approx(-2.0)
+    assert to_acetate["nodes"][1]["basis"] == f"{s['hoac']}x1"
+    net = {t["structure_id"]: (t["side"], t["stoich"])
+           for t in to_acetate["net_equation"]["terms"]}
+    assert net == {s["base"]: ("product", 1), s["hoac"]: ("product", 1),
+                   s["acid"]: ("reagent", 1), s["oac"]: ("reagent", 1)}
+    assert to_acetate["net_equation"]["agrees_with_steps"] is True
+
+
+def test_a_sink_the_registry_does_not_hold_is_refused_by_name(reg):
+    s = _deprotonation_with_acetate(reg)
+    with pytest.raises(ReferenceSchemeError, match="not a proton sink"):
+        price_path(reg, [s["base"], s["acid"]], [s["rid"]], min_fidelity=Fidelity.XTB,
+                   proton_sink=s["wat"])

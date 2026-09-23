@@ -146,6 +146,24 @@ A node whose recorded edges all cite nothing asks for them automatically, becaus
 then the only answer to what it is made of. A derived row that happens to match a recorded edge
 says so.
 
+## Medium, and where a released proton goes
+
+Two selects in the toolbar are inputs to **every** route on the chart at once, because routes
+priced under different ones compare nothing:
+
+- **medium** — `gas`, or a continuum the registry holds corrections in (`alpb:water` once
+  `runner.finalise_run` or `scripts/solvate.py` has run). A medium is always `model:solvent`;
+  each energy is `E + dG_solv` on its own geometry, and a route with any term lacking a
+  correction is refused rather than half-solvated. The legend says `in <medium>`.
+- **H⁺ to** — `water (H3O+)`, or a free base whose conjugate acid is also in the registry
+  (acetate → acetic acid in the Ni(OAc)₂ run; the chloride run offers none, since HCl is not a
+  species). Each step that releases n H₃O⁺ also runs n × (H₃O⁺ + A⁻ → H₂O + HA), priced in the
+  same medium — exact by Hess's law, and visible: the step's terms, the basis (`HOAc` instead
+  of `H3O+`) and the net equation all carry it, and the legend badges the route `H⁺ → <base>`.
+
+The route's caveats — `charge_separation` among them — are listed on its legend line whenever
+there are any, isodesmic or not.
+
 ## Controls
 
 | | |

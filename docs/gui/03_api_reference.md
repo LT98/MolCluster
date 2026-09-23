@@ -36,7 +36,8 @@ Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only wr
 | GET | `/api/structures/{id}/origin` | Registry | provenance |
 | GET | `/api/structures/{id}/xyz` | Registry | best geometry's coordinates, for the hover preview |
 | GET | `/api/structures/{id}/routes` | Graph | incoming edges priced (`routes`), outgoing ones (`consumed_by`), `species`, and `derived` with `inferred=1` |
-| GET | `/api/paths/price` | Graph | a whole walk costed; `nodes=` target first, `via=` one edge per gap (`<id>`, `c<id>`, `d<part>`) |
+| GET | `/api/paths/price` | Graph | a whole walk costed; `nodes=` target first, `via=` one edge per gap (`<id>`, `c<id>`, `d<part>`); optional `medium=` (`alpb:water`) and `proton_sink=` (a base's structure id) |
+| GET | `/api/pricing_options` | Graph | `media` with stored corrections, and `proton_sinks` (`base`, `acid`, labels) |
 | POST | `/api/structures/{id}/rerun` | Registry | re-run it (**builder router**) |
 | POST | `/api/structures/{id}/hide` | Registry | soft-delete (**builder router**) |
 | GET | `/api/geometries/{id}/xyz` | Registry | plain-text coordinates, for 3Dmol |

@@ -472,6 +472,11 @@ def create_app(db_path: Path, store_root: Path,
             nodes: str = Query(..., description="the walk: target first, comma separated"),
             via: str = Query("", description="one edge per gap — a reaction id (made "
                                              "from), c<id> (consumed by), or d<part>"),
+            medium: str | None = Query(None, description="'model:solvent' (e.g. "
+                                                         "alpb:water); omitted = gas"),
+            proton_sink: int | None = Query(None, description="a free base that takes each "
+                                                              "released proton instead of "
+                                                              "water"),
             con: sqlite3.Connection = Con) -> dict[str, Any]:
         """What a whole route costs, node by node, with the target at zero.
 
@@ -490,9 +495,24 @@ def create_app(db_path: Path, store_root: Path,
         except ValueError as exc:
             raise HTTPException(400, f"malformed path: {exc}") from exc
         try:
-            return price_path(ReadOnlyRegistry(conn=con, store=store), walk, edges)
+            return price_path(ReadOnlyRegistry(conn=con, store=store), walk, edges,
+                              solvent=medium or None, proton_sink=proton_sink)
         except MofsbuError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/pricing_options")
+    def pricing_options(con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """What a route can be priced under here: the media some energy carries a
+        correction in, and the free bases a released proton can go to instead of water."""
+        from mofsbu.pathways.route import proton_sinks
+        from mofsbu.registry import ReadOnlyRegistry
+
+        media = [r[0] for r in con.execute(
+            "SELECT DISTINCT m.solvent FROM solvation_corrections sc "
+            "JOIN methods m ON m.id = sc.method_id WHERE m.solvent IS NOT NULL "
+            "ORDER BY m.solvent")]
+        return {"media": media,
+                "proton_sinks": proton_sinks(ReadOnlyRegistry(conn=con, store=store))}
 
     def _species(con: sqlite3.Connection,
                  routes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
