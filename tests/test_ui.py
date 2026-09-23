@@ -145,7 +145,7 @@ def test_a_malformed_path_is_refused_with_a_reason_not_a_stack_trace(client):
 
 
 @pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js",
-                                   "/static/routes.js"])
+                                   "/static/routes.js", "/static/preview.js"])
 def test_the_shared_chrome_is_served(client, asset):
     """The tab strip is built by a fetched file, not by markup in each page.  If the
     mount goes, all three pages lose their navigation and say nothing about it."""

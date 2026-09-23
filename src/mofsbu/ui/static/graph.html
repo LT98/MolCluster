@@ -4,9 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mofsbu formation-energy graph</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
 <link rel="stylesheet" href="/static/chrome.css">
 <script src="/static/chrome.js"></script>
 <script src="/static/routes.js"></script>
+<script src="/static/preview.js"></script>
 <style>
 :root{
   --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
@@ -86,6 +88,27 @@ button.primary{background:var(--accent-soft);border-color:var(--accent);color:va
 #focus.none{border-style:dashed;color:var(--muted)}
 #focus-sub{font-size:11.5px;color:var(--muted);margin-top:3px;font-family:var(--mono)}
 #focus-why{font-size:11.5px;color:var(--warn);margin-top:4px}
+/* The structure the walk is standing on, turnable.  Sized rather than grown: the
+   picker below it is the working surface and must not be pushed off. */
+#focus-3d{position:relative;height:170px;margin-top:8px;border:1px solid var(--line);
+  border-radius:5px;overflow:hidden;background:var(--bg)}
+.mv-stage{position:absolute;inset:0}
+.mv-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:0 10px;font-size:11.5px;color:var(--muted);z-index:1}
+.mv-bar{display:flex;gap:4px;margin-top:5px}
+.mv-bar button{font-size:11px;padding:2px 7px}
+.mv-bar button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+
+/* The hover popover.  Fixed, above everything, and never a pointer target itself —
+   catching the pointer would make it flicker as the cursor crossed onto it. */
+#mofsbu-preview{position:fixed;z-index:50;width:250px;background:var(--panel);
+  border:1px solid var(--line);border-radius:7px;box-shadow:0 8px 26px rgba(0,0,0,.22);
+  padding:6px;pointer-events:none}
+#mofsbu-preview .mp-3d{position:relative;height:190px;border-radius:4px;overflow:hidden;
+  background:var(--bg);display:flex;align-items:center;justify-content:center;
+  text-align:center;font-size:11.5px;color:var(--muted);padding:0 8px}
+#mofsbu-preview .mp-note{margin-top:5px;font-size:11px;color:var(--muted);
+  font-family:var(--mono);overflow-wrap:anywhere;max-height:2.6em;overflow:hidden}
 
 /* ── the precursor table ──────────────────────────────────────────────── */
 table{border-collapse:collapse;width:100%;font-size:12px}
@@ -117,9 +140,11 @@ tbody tr.derived td{border-bottom-style:dashed}
 .level-hit{stroke:transparent;stroke-width:16;cursor:pointer}
 .link{stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
 .link.inferred{stroke:var(--warn);stroke-dasharray:2 3}
-.node-label{fill:var(--ink);font-size:10.5px}
+.node-label{fill:var(--ink);font-size:10.5px;cursor:default}
 .node-label.here{font-weight:700;fill:var(--accent)}
 .step-dE{fill:var(--ink);font-size:10.5px;font-family:var(--mono)}
+.step-species{font-size:10px}
+.level-y{font-size:9.5px;font-family:var(--mono);opacity:.85}
 .gap{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
 .gap-text{fill:var(--muted);font-size:10px}
 .diag-note{font-size:11.5px;color:var(--muted);padding:2px 0}
@@ -198,6 +223,14 @@ body.stubs-off .stub{display:none}
       <h1 id="focus-label">no target</h1>
       <div id="focus-sub">give a structure id, or press “graph this” on the registry page</div>
       <div id="focus-why" hidden></div>
+      <div id="focus-3d"></div>
+      <div class="mv-bar">
+        <button data-style="stick" class="on">stick</button
+        ><button data-style="ball">ball</button
+        ><button data-style="space">spacefill</button>
+        <span style="flex:1"></span>
+        <button id="focus-recentre" title="fit the model to the box">recentre</button>
+      </div>
     </div>
 
     <h2>precursor steps
@@ -286,7 +319,8 @@ function mountStubs(){
    step back into the middle of a route and choose differently. */
 const state = {target: null, routes: [], active: 0, at: 0,
                data: null, cache: new Map(),
-               prefs: {labels: true, colour: true, anchor: "target", derived: false}};
+               prefs: {labels: true, levelValues: false, species: false,
+                       colour: true, anchor: "target", derived: false}};
 
 const route = () => state.routes[state.active] || null;
 const here = () => { const r = route(); return r ? r.trail[state.at] : null; };
@@ -429,7 +463,9 @@ function renderSteps(routes, derived, species){
    with the target at zero on the right — every route ends there, which is what
    pins them to a common point.  The walk is collected target-first, so the array
    is reversed to draw it. */
-const PAD = {top: 16, right: 18, bottom: 34, left: 56};
+//: `bottom` carries two rows of names, because sub-columns are narrower than the
+//: names that go under them and one row would have them running into each other.
+const PAD = {top: 18, right: 18, bottom: 46, left: 56};
 
 function niceTicks(lo, hi, want){
   const span = (hi - lo) || 1;
@@ -516,11 +552,38 @@ function drawDiagram(){
   const yLo = lo - span * 0.12, yHi = hi + span * 0.12;
   const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
   const slot = plotW / depth;
-  const barW = Math.min(slot * 0.6, 140);
   // Index 0 is the target and it is drawn on the RIGHT; a longer route simply reaches
   // further left, so routes of different lengths still share every node they share.
-  const cx = (i) => PAD.left + plotW - slot * (i + 0.5);
+  const mid = (i) => PAD.left + plotW - slot * (i + 0.5);
   const cy = (v) => PAD.top + plotH * (1 - (v - yLo) / (yHi - yLo));
+
+  /* Two routes at the same distance from the target are usually at DIFFERENT species,
+     and drawing both in the middle of that column stacks one bar on the other and
+     overprints their names.  So a column is divided among the distinct nodes in it:
+     they keep their own bar and their own label, and a node two routes share is still
+     one bar because the key is the species and its height, not the route. */
+  const nodeKey = (n, dy) =>
+    `${n.structure_id}:${n.y === null ? "-" : (n.y + dy).toFixed(6)}`;
+  const columns = [];
+  state.routes.forEach((r) => {
+    if(!r.path) return;
+    const dy = shift(r);
+    r.path.nodes.forEach((n, i) => {
+      const col = columns[i] || (columns[i] = new Map());
+      const k = nodeKey(n, dy);
+      if(!col.has(k)) col.set(k, {node: n, dy, order: col.size});
+    });
+  });
+  // Widest column decides the bar width, so every level on the chart is the same size.
+  const most = Math.max(1, ...columns.map(c => c.size));
+  const barW = Math.max(14, Math.min(slot * 0.62, 150) / most * 0.88);
+  const spread = Math.min(slot * 0.66, barW * most * 1.18);
+  const cx = (i, n, dy) => {
+    const col = columns[i];
+    const e = col && col.get(nodeKey(n, dy));
+    const k = e ? e.order : 0, count = col ? col.size : 1;
+    return mid(i) + (count === 1 ? 0 : (k - (count - 1) / 2) * (spread / count));
+  };
 
   const bits = [];
   for(const t of niceTicks(yLo, yHi, Math.max(2, Math.round(plotH / 46)))){
@@ -532,36 +595,57 @@ function drawDiagram(){
   }
   bits.push(`<text class="ax-text" x="6" y="${PAD.top - 5}">eV</text>`);
 
+  /* What a step did to the molecule, for the connector: what was built in, and what
+     left.  Water is the proton's carrier and not a piece being added, so a
+     deprotonation reads as what it loses. */
+  const movement = (s) => {
+    const bits = [];
+    for(const t of s.added)
+      bits.push(`+${t.stoich > 1 ? t.stoich + " " : ""}`
+              + (shortLabel(t.display_label) || "#" + t.structure_id));
+    for(const t of s.shed)
+      bits.push(`−${t.stoich > 1 ? t.stoich + " " : ""}H⁺`);
+    return bits.join("  ");
+  };
+
   const seen = new Set();               // a node two routes share is drawn once
   state.routes.forEach((r, ri) => {
     if(!r.path) return;
     const dy = shift(r), col = hueCss(hues[ri]), dash = dashFor(ri);
     const active = ri === state.active;
-    const at = (i) => { const n = r.path.nodes[i];
-                        return n.y === null ? null : cy(n.y + dy); };
+    const nodes = r.path.nodes;
+    const px = (i) => cx(i, nodes[i], dy);
+    const py = (i) => nodes[i].y === null ? null : cy(nodes[i].y + dy);
 
     r.path.steps.forEach((s, i) => {
-      const y1 = at(i), y2 = at(i + 1);
+      const y1 = py(i), y2 = py(i + 1);
       if(y1 === null || y2 === null) return;
-      const x1 = cx(i) - barW / 2, x2 = cx(i + 1) + barW / 2;
+      const x1 = px(i) - barW / 2, x2 = px(i + 1) + barW / 2;
       bits.push(`<line class="link${s.origin === "inferred" ? " inferred" : ""}"`
               + ` stroke="${col}" stroke-width="${active ? 1.8 : 1.1}"`
               + `${s.origin === "inferred" ? "" : ` stroke-dasharray="${dash || "4 3"}"`}`
               + ` x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"`
               + ` x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`);
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      let line = 0;
       if(state.prefs.labels){
-        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
         bits.push(`<text class="step-dE" fill="${col}" x="${mx.toFixed(1)}"`
                 + ` y="${(my - 5).toFixed(1)}" text-anchor="middle">`
                 + `${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
+        line += 1;
       }
+      const moved = state.prefs.species ? movement(s) : "";
+      if(moved)
+        bits.push(`<text class="step-species" fill="${col}" x="${mx.toFixed(1)}"`
+                + ` y="${(my - 5 - line * 11).toFixed(1)}" text-anchor="middle">`
+                + `${esc(moved)}</text>`);
     });
 
-    r.path.nodes.forEach((n, i) => {
-      const key = `${i}:${n.structure_id}:${n.y === null ? "-" : (n.y + dy).toFixed(6)}`;
+    nodes.forEach((n, i) => {
+      const key = `${i}:${nodeKey(n, dy)}`;
       if(seen.has(key)) return;
       seen.add(key);
-      const x = cx(i);
+      const x = px(i);
       const isHere = active && i === state.at;
       const name = shortLabel(n.display_label) || ("#" + n.structure_id);
       if(n.y === null){
@@ -586,14 +670,21 @@ function drawDiagram(){
                 + `y = ${(n.y + dy).toFixed(4)} eV\n`
                 + `shed so far: ${esc(n.basis === "—" ? "nothing" : n.basis)}`
                 + `</title></line>`);
+        // The level's own coordinate, on the bar: the chart's whole point is the height
+        // of these, and reading one off the axis by eye is an estimate.
+        if(state.prefs.levelValues)
+          bits.push(`<text class="level-y" fill="${col}" x="${x.toFixed(1)}"`
+                  + ` y="${(Number(y) - 6).toFixed(1)}" text-anchor="middle">`
+                  + `${(n.y + dy) > 0 ? "+" : ""}${(n.y + dy).toFixed(2)}</text>`);
       }
-      if(i === 0 || i === r.path.nodes.length - 1 || isHere || depth <= 6){
-        const label = name.length > 20 ? name.slice(0, 19) + "…" : name;
-        bits.push(`<text class="node-label${isHere ? " here" : ""}"`
-                + ` x="${x.toFixed(1)}" y="${(PAD.top + plotH + 14).toFixed(1)}"`
-                + ` text-anchor="middle"><title>${esc(n.display_label || "")}</title>`
-                + `${esc(label)}</text>`);
-      }
+      // Names stagger over two rows: sub-columns are narrower than the names in them.
+      const row = (columns[i] && columns[i].get(nodeKey(n, dy)) || {}).order || 0;
+      const label = name.length > 20 ? name.slice(0, 19) + "…" : name;
+      bits.push(`<text class="node-label${isHere ? " here" : ""}"`
+              + ` data-sid="${esc(n.structure_id)}" x="${x.toFixed(1)}"`
+              + ` y="${(PAD.top + plotH + 13 + (row % 2) * 12).toFixed(1)}"`
+              + ` text-anchor="middle"><title>${esc(n.display_label || "")}</title>`
+              + `${esc(label)}</text>`);
     });
   });
 
@@ -753,8 +844,13 @@ function renderLegend(){
   }).join("");
 }
 
+/* The structure the walk is standing on, turnable.  One viewer for the life of the
+   page; it is handed a new structure rather than being rebuilt. */
+let focusViewer = null;
+
 function renderFocus(s){
   const box = $("focus"), why = $("focus-why");
+  if(focusViewer) focusViewer.show(s ? s.id : null);
   if(!s){
     box.classList.add("none");
     $("focus-label").textContent = "no target";
@@ -923,7 +1019,12 @@ function savePrefs(){
 }
 
 const TOGGLES = [
-  {key: "labels", label: "dE labels", title: "the number on every connector"},
+  {key: "labels", label: "dE", title: "the step's energy change, on every connector"},
+  {key: "levelValues", label: "level value",
+   title: "each level's own coordinate on the bar — reading a height off the axis by"
+        + " eye is an estimate, and this is the number"},
+  {key: "species", label: "added / shed",
+   title: "what each step builds in and what it loses, beside the connector"},
   {key: "colour", label: "colour",
    title: "off puts the routes in grey and tells them apart by dash pattern instead"},
 ];
@@ -1034,6 +1135,35 @@ function boot(){
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
   mountToggles();
+
+  // Geometry, in the two places it answers a different question: a popover while the
+  // pointer is passing over a name, and one viewer that stays on the focused node.
+  mofsbuPreview.mount();
+  focusViewer = mofsbuPreview.embed($("focus-3d"));
+  const caption = (sid) => {
+    const sp = (state.data && state.data.species[String(sid)]) || {};
+    return sp.display_label || `structure ${sid}`;
+  };
+  mofsbuPreview.bind($("steps"), {caption});
+  mofsbuPreview.bind($("diagram"), {caption: (sid) => {
+    for(const r of state.routes)
+      for(const n of (r.path ? r.path.nodes : []))
+        if(n.structure_id === sid) return n.display_label || `structure ${sid}`;
+    return caption(sid);
+  }});
+  // The picker pane is what scrolls, not the table inside it, so a pinned popover has
+  // to be dismissed from there or it hangs over a name that has moved.
+  $("picker").addEventListener("scroll", () => mofsbuPreview.hide(), {passive: true});
+  document.querySelector(".mv-bar").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if(!b) return;
+    if(b.id === "focus-recentre"){ focusViewer.recentre(); return; }
+    if(!b.dataset.style) return;
+    document.querySelectorAll(".mv-bar button[data-style]")
+      .forEach(x => x.classList.toggle("on", x === b));
+    focusViewer.style(b.dataset.style);
+  });
+
   $("want-derived").checked = state.prefs.derived;
   $("want-derived").onchange = (e) => {
     state.prefs.derived = e.target.checked; savePrefs(); showHere();
@@ -1079,10 +1209,17 @@ function boot(){
 
   // The splitters change the chart's size without the window changing, so the redraw
   // watches the element rather than `resize`.
-  if(window.ResizeObserver)
+  if(window.ResizeObserver){
     new ResizeObserver(() => drawDiagram()).observe($("diagram"));
-  else
-    addEventListener("resize", drawDiagram);
+    // WebGL has to be told its canvas changed; the splitters change it without a
+    // window resize, so the viewer watches its own box too.
+    new ResizeObserver(() => focusViewer && focusViewer.resize()).observe($("focus-3d"));
+  } else {
+    addEventListener("resize", () => {
+      drawDiagram();
+      if(focusViewer) focusViewer.resize();
+    });
+  }
 
   $("trail").addEventListener("click", (e) => {
     const c = e.target.closest(".crumb");
