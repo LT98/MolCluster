@@ -93,6 +93,57 @@ def test_the_walk_refuses_a_structure_that_is_not_there(client):
     assert client.get("/api/structures/999999/routes").status_code == 404
 
 
+def test_derived_splits_are_asked_for_and_arrive_in_a_key_of_their_own(client):
+    """Deriving scans every structure, so it is opt-in — and it lands beside the
+    recorded edges rather than among them, because conflating the two is the one thing
+    the reference scheme exists to stop."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    sid = next((r["id"] for r in listed if r["n_incoming_routes"]), None)
+    if sid is None:
+        pytest.skip("the demo registry seeded no provenance edges")
+    assert client.get(f"/api/structures/{sid}/routes").json()["derived"] == []
+    asked = client.get(f"/api/structures/{sid}/routes", params={"inferred": 1}).json()
+    assert "derived" in asked
+    for d in asked["derived"]:
+        assert d["origin"] == "inferred"
+
+
+def _a_recorded_step(client):
+    """The first (product, reagent, reaction) the demo registry actually records."""
+    listed = client.get("/api/structures", params={"limit": 50}).json()["rows"]
+    for row in listed:
+        if not row["n_incoming_routes"]:
+            continue
+        for r in client.get(f"/api/structures/{row['id']}/routes").json()["routes"]:
+            for t in r["steps"][0]["terms"]:
+                if t["side"] == "reagent" and (t["role"] or "reagent") == "reagent":
+                    return row["id"], int(t["structure_id"]), r["id"]
+    return None
+
+
+def test_a_priced_path_puts_the_target_at_zero(client):
+    step = _a_recorded_step(client)
+    if step is None:
+        pytest.skip("the demo registry seeded no edge with a reagent")
+    product, source, rid = step
+    r = client.get("/api/paths/price",
+                   params={"nodes": f"{product},{source}", "via": str(rid)})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [n["structure_id"] for n in body["nodes"]] == [product, source]
+    assert body["nodes"][0]["y"] == 0.0
+    assert body["steps"][0]["origin"] == "recorded"
+
+
+def test_a_malformed_path_is_refused_with_a_reason_not_a_stack_trace(client):
+    for params, expect in (({"nodes": "1,2", "via": ""}, "edges"),
+                           ({"nodes": "1,2", "via": "not-a-number"}, "malformed"),
+                           ({"nodes": "999999", "via": ""}, "no structure")):
+        r = client.get("/api/paths/price", params=params)
+        assert r.status_code == 400, r.text
+        assert expect in r.json()["detail"]
+
+
 @pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js",
                                    "/static/routes.js"])
 def test_the_shared_chrome_is_served(client, asset):

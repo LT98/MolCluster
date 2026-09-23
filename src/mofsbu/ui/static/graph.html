@@ -51,6 +51,10 @@ h1{font-size:14px;margin:0;letter-spacing:.02em;overflow-wrap:anywhere}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
    margin:6px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
 h2:first-child{margin-top:0}
+/* A control that belongs to a section rather than to the page, sat on its rule. */
+.h2-opt{float:right;text-transform:none;letter-spacing:0;font-size:10.5px;
+        cursor:pointer;display:inline-flex;align-items:center;gap:3px}
+.h2-opt input{margin:0;vertical-align:middle}
 .chart-head{display:flex;align-items:flex-end;gap:12px}
 .chart-head h2{flex:1;margin:0}
 .mono{font-family:var(--mono)}
@@ -97,6 +101,30 @@ a.term{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--a
 a.term:hover{background:var(--accent-soft)}
 .onward{color:var(--muted);font-size:10.5px;white-space:nowrap}
 .rnote{font-size:11px;color:var(--muted);margin-top:6px}
+/* A derived row is offered, never recorded — so it is dashed everywhere it appears and
+   says which it is.  That line is what the whole reference scheme rests on. */
+tbody tr.derived td{border-bottom-style:dashed}
+.badge-inferred{font-size:10px;letter-spacing:.04em;border:1px dashed var(--warn);
+  color:var(--warn);border-radius:8px;padding:0 5px;margin-left:4px;white-space:nowrap}
+
+/* ── the diagram ───────────────────────────────────────────────────────── */
+#diagram{flex:1;min-height:0;position:relative}
+#diagram svg{display:block;width:100%;height:100%}
+.ax{stroke:var(--line);stroke-width:1}
+.ax-zero{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+.ax-text{fill:var(--muted);font-size:10px;font-family:var(--mono)}
+.level{stroke:var(--accent);stroke-width:2.5;stroke-linecap:round}
+.level-hit{stroke:transparent;stroke-width:16;cursor:pointer}
+.link{stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3;opacity:.7}
+.link.inferred{stroke:var(--warn);stroke-dasharray:2 3}
+.node-label{fill:var(--ink);font-size:10.5px}
+.node-label.here{font-weight:700;fill:var(--accent)}
+.step-dE{fill:var(--ink);font-size:10.5px;font-family:var(--mono)}
+.gap{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
+.gap-text{fill:var(--muted);font-size:10px}
+.diag-note{font-size:11.5px;color:var(--muted);padding:2px 0}
+.diag-note .caveat{color:var(--warn)}
+
 /* The number, then what qualifies it, on two lines — see `stepEnergy`. */
 .dE{display:block}
 .dE-note{display:block;font-size:10.5px;line-height:1.25;white-space:normal;
@@ -151,7 +179,11 @@ body.stubs-off .stub{display:none}
       <div id="focus-why" hidden></div>
     </div>
 
-    <h2>precursor steps</h2>
+    <h2>precursor steps
+      <label class="h2-opt" title="also offer splits derived from composition that no
+ edge records — asked for on demand because it scans every structure, and asked for
+ automatically where nothing recorded reaches this node">
+        <input type="checkbox" id="want-derived"> derived too</label></h2>
     <div id="steps"></div>
   </section>
 
@@ -173,6 +205,7 @@ body.stubs-off .stub{display:none}
          title="drag to resize · double-click to reset"></div>
     <section id="routes-pane" class="pane">
       <h2>routes</h2>
+      <div id="path-note"></div>
       <div id="routes"></div>
     </section>
   </div>
@@ -205,10 +238,6 @@ function stepEnergy(r){
    stub is deleting a row here and rendering into the same host.  The order is the
    order they are built in, so this table doubles as the remaining work. */
 const STUBS = [
-  {host: "diagram", inc: "U2", grow: true, what: "the energy diagram",
-   why: "one level per node and a connector per step, read left to right from the "
-      + "precursors to the target. The target sits at zero, so every route is pinned "
-      + "at the one node they all share."},
   {host: "toggles", inc: "U3", inline: true, what: "what the chart draws",
    why: "energy labels, colour, the y-anchor, and — at U5 — derived routes."},
   {host: "routes", inc: "U3", what: "one line per route on the chart",
@@ -234,7 +263,8 @@ function mountStubs(){
    that was walked to reach it.  It lives in the URL, so a reload keeps it and a
    link carries it — the viewer has no write path, so there is nowhere else it
    could live.  `data` is the last fetched hop, `cache` the ones before it. */
-const state = {trail: [], data: null, cache: new Map()};
+const state = {trail: [], data: null, path: null, cache: new Map(),
+               showLabels: true, showDerived: false};
 const here = () => state.trail.length ? state.trail[state.trail.length - 1] : null;
 
 /* ── composition, for deciding which reagent is the scaffold ───────────────
@@ -280,7 +310,11 @@ function onward(term, species){
 }
 
 /* ── the precursor table ───────────────────────────────────────────────── */
-function renderSteps(routes, species){
+function renderSteps(routes, derived, species){
+  // A derived split is offered beside the recorded edges and never merged into them:
+  // the list is one list because it is one question — what could this have come from —
+  // and every derived row says so, on the row.
+  routes = routes.concat(derived.map(d => Object.assign({}, d, {id: null})));
   if(!routes.length)
     return `<div class="empty">no recorded route reaches this structure — `
          + `it is where a walk stops</div>`;
@@ -330,7 +364,13 @@ function renderSteps(routes, species){
     const shed = protonsShed(step);
     const placements = g.placements > 1
       ? ` <span class="muted">(${esc(g.placements)} pl.)</span>` : "";
-    return `<tr class="${built ? "dead" : "step"}" data-rid="${esc(r.id)}"`
+    // A derived leg names BOTH its parts: the complement is fixed by composition only
+    // up to its formula and charge, and the registry holds protomers that share those,
+    // so "the other part" is not recoverable from where the step went.
+    const inferred = r.origin === "inferred";
+    const via = inferred ? (added ? "d" + added.structure_id : "") : String(r.id);
+    return `<tr class="${built || !via ? "dead" : "step"}${inferred ? " derived" : ""}"`
+         + ` data-rid="${esc(via)}"`
          + `${built ? "" : ` data-source="${esc(source.structure_id)}"`}`
          + `${r.why_not ? ` title="${esc(r.why_not)}"` : ""}>`
          + `<td class="num">${stepEnergy(r)}</td>`
@@ -340,7 +380,10 @@ function renderSteps(routes, species){
                + ` was constructed whole rather than reacted together (C15)">`
                + `— (built whole)</span>`
              : cell(source) + onward(source, species) + placements}</td>`
-         + `<td>${routeRung(r)}</td>`
+         + `<td>${routeRung(r)}${inferred
+             ? `<span class="badge-inferred" title="derived from composition — no`
+               + ` edge records this${r.recorded_as ? `; the same split IS recorded as`
+               + ` reaction #${r.recorded_as}` : ""}">inferred</span>` : ""}</td>`
          + `<td class="caveat-cell">${routeCaveats(r)}</td>`
          + `<td class="num">${g.count > 1 ? "×" + esc(g.count)
              : `<span class="muted">×1</span>`}</td></tr>`;
@@ -352,6 +395,106 @@ function renderSteps(routes, species){
   return `<table><thead><tr><th class="num">dE</th><th>added</th><th>source</th>`
        + `<th>rung</th><th>caveat</th><th class="num">count</th></tr></thead>`
        + `<tbody>${rows}</tbody></table>${note}`;
+}
+
+/* ── the diagram ──────────────────────────────────────────────────────────
+   Hand-drawn SVG, because an energy-level diagram is not a chart type any library
+   ships: it is a level per node and a connector per step, and the page already
+   draws its donor sketches this way.  Read left to right, precursors to product,
+   with the target at zero on the right — every route ends there, which is what
+   pins them to a common point.  The walk is collected target-first, so the array
+   is reversed to draw it. */
+const PAD = {top: 16, right: 18, bottom: 34, left: 56};
+
+function niceTicks(lo, hi, want){
+  const span = (hi - lo) || 1;
+  const raw = span / Math.max(1, want);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || mag * 10;
+  const out = [];
+  for(let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return out;
+}
+
+function drawDiagram(){
+  const host = $("diagram");
+  const p = state.path;
+  if(!p){
+    host.innerHTML = state.trail.length
+      ? `<div class="empty">pick a precursor step on the left — the route is drawn `
+        + `here as it grows, with this structure at zero</div>`
+      : `<div class="empty">load a target to begin</div>`;
+    return;
+  }
+  const w = host.clientWidth, h = host.clientHeight;
+  if(w < 60 || h < 60){ host.innerHTML = ""; return; }
+
+  // Target-first becomes left-to-right: precursors first, product last.
+  const nodes = [...p.nodes].reverse();
+  const steps = [...p.steps].reverse();
+  const known = nodes.filter(n => n.y !== null).map(n => n.y);
+  const lo = Math.min(0, ...known), hi = Math.max(0, ...known);
+  const span = (hi - lo) || 1;
+  const yLo = lo - span * 0.12, yHi = hi + span * 0.12;
+  const plotW = w - PAD.left - PAD.right, plotH = h - PAD.top - PAD.bottom;
+  const slot = plotW / nodes.length;
+  const barW = Math.min(slot * 0.62, 150);
+  const cx = (i) => PAD.left + slot * (i + 0.5);
+  const cy = (v) => PAD.top + plotH * (1 - (v - yLo) / (yHi - yLo));
+
+  const bits = [];
+  for(const t of niceTicks(yLo, yHi, Math.max(2, Math.round(plotH / 46)))){
+    const y = cy(t).toFixed(1);
+    bits.push(`<line class="${Math.abs(t) < 1e-9 ? "ax-zero" : "ax"}" x1="${PAD.left - 6}"`
+            + ` y1="${y}" x2="${w - PAD.right}" y2="${y}"/>`
+            + `<text class="ax-text" x="${PAD.left - 9}" y="${y}" text-anchor="end"`
+            + ` dominant-baseline="middle">${t > 0 ? "+" : ""}${t.toFixed(2)}</text>`);
+  }
+  bits.push(`<text class="ax-text" x="6" y="${PAD.top - 5}">eV</text>`);
+
+  // Connectors first, so a level is never drawn under one.
+  steps.forEach((s, i) => {
+    const a = nodes[i], b = nodes[i + 1];
+    if(a.y === null || b.y === null) return;
+    const x1 = cx(i) + barW / 2, x2 = cx(i + 1) - barW / 2;
+    bits.push(`<line class="link${s.origin === "inferred" ? " inferred" : ""}"`
+            + ` x1="${x1.toFixed(1)}" y1="${cy(a.y).toFixed(1)}"`
+            + ` x2="${x2.toFixed(1)}" y2="${cy(b.y).toFixed(1)}"/>`);
+    if(state.showLabels){
+      const mx = (x1 + x2) / 2, my = (cy(a.y) + cy(b.y)) / 2;
+      bits.push(`<text class="step-dE" x="${mx.toFixed(1)}" y="${(my - 5).toFixed(1)}"`
+              + ` text-anchor="middle">${s.dE > 0 ? "+" : ""}${s.dE.toFixed(2)}</text>`);
+    }
+  });
+
+  nodes.forEach((n, i) => {
+    const x = cx(i), isHere = n.structure_id === (here() || {}).sid;
+    const name = shortLabel(n.display_label) || ("#" + n.structure_id);
+    if(n.y === null){
+      // No number, so no position.  A dashed column says the node is on the route and
+      // says nothing about where it sits — inventing a height would be the lie.
+      bits.push(`<line class="gap" x1="${x.toFixed(1)}" y1="${PAD.top}"`
+              + ` x2="${x.toFixed(1)}" y2="${PAD.top + plotH}"/>`
+              + `<text class="gap-text" x="${x.toFixed(1)}" y="${PAD.top + plotH / 2}"`
+              + ` text-anchor="middle">no number</text>`);
+    } else {
+      const y = cy(n.y).toFixed(1);
+      bits.push(`<line class="level" x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+              + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}"/>`
+              + `<line class="level-hit" data-sid="${esc(n.structure_id)}"`
+              + ` x1="${(x - barW / 2).toFixed(1)}" y1="${y}"`
+              + ` x2="${(x + barW / 2).toFixed(1)}" y2="${y}">`
+              + `<title>${esc(n.display_label || "")}\n`
+              + `y = ${n.y.toFixed(4)} eV relative to the target</title></line>`);
+    }
+    const label = name.length > 22 ? name.slice(0, 21) + "…" : name;
+    bits.push(`<text class="node-label${isHere ? " here" : ""}" x="${x.toFixed(1)}"`
+            + ` y="${(PAD.top + plotH + 14).toFixed(1)}" text-anchor="middle">`
+            + `<title>${esc(n.display_label || "")}</title>${esc(label)}</text>`);
+  });
+
+  host.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"`
+    + ` role="img" aria-label="formation energy along the route">${bits.join("")}</svg>`;
 }
 
 /* ── the trail ─────────────────────────────────────────────────────────── */
@@ -371,26 +514,96 @@ function renderTrail(){
 /* ── loading ──────────────────────────────────────────────────────────── */
 function say(text){ $("msg").textContent = text || ""; }
 
-async function fetchHop(sid){
-  if(state.cache.has(sid)) return state.cache.get(sid);
-  const r = await fetch(`/api/structures/${sid}/routes`);
+/* Deriving splits is a scan of the whole structures table, so it is asked for rather
+   than assumed — but a node whose only recorded edges cite nothing (a `place` edge,
+   C15) has no other answer to what it is made of, so at a dead end it is asked for
+   automatically.  That is option 2 on C15: leave `place` citing nothing, and derive. */
+function walkable(routes){
+  return routes.some(r => ((r.steps && r.steps[0] || {}).terms || [])
+    .some(t => t.side === "reagent" && (t.role || "reagent") === "reagent"));
+}
+
+async function fetchHop(sid, inferred){
+  const key = `${sid}:${inferred ? 1 : 0}`;
+  if(state.cache.has(key)) return state.cache.get(key);
+  const r = await fetch(`/api/structures/${sid}/routes${inferred ? "?inferred=1" : ""}`);
   if(!r.ok) throw new Error(`no structure ${sid} in this registry`);
   const d = await r.json();
-  state.cache.set(sid, d);
+  state.cache.set(key, d);
   return d;
 }
 
 async function showHere(){
   const n = here();
-  if(!n){ state.data = null; renderFocus(null); renderTrail(); return; }
+  if(!n){
+    state.data = state.path = null;
+    renderFocus(null); renderTrail(); drawDiagram();
+    return;
+  }
   let d;
-  try { d = await fetchHop(n.sid); }
-  catch(e){ say(e.message); return; }
+  try {
+    d = await fetchHop(n.sid, state.showDerived);
+    if(!state.showDerived && !walkable(d.routes)) d = await fetchHop(n.sid, true);
+  } catch(e){ say(e.message); return; }
   state.data = d;
   n.label = d.structure.display_label || d.structure.formula || ("structure " + n.sid);
   renderTrail();
   renderFocus(d.structure);
-  $("steps").innerHTML = renderSteps(d.routes, d.species);
+  $("steps").innerHTML = renderSteps(d.routes, d.derived || [], d.species);
+  await pricePath();
+}
+
+/* Composing the steps is the backend's job — it is arithmetic over stored energies and
+   it is the part that has tests.  The page asks for the answer and draws it. */
+async function pricePath(){
+  if(state.trail.length < 2){
+    state.path = null; drawDiagram(); renderPathNote(); return;
+  }
+  const nodes = state.trail.map(n => n.sid).join(",");
+  const via = state.trail.slice(1).map(n => n.via).join(",");
+  try {
+    const r = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}`);
+    if(!r.ok){
+      const body = await r.json().catch(() => ({}));
+      say(body.detail || "this route could not be priced");
+      state.path = null;
+    } else {
+      state.path = await r.json();
+    }
+  } catch(e){
+    say(`could not price this route — ${e.message}`);
+    state.path = null;
+  }
+  drawDiagram();
+  renderPathNote();
+}
+
+/* What the whole route came to, beside the chart rather than on it.  A dE here is never
+   isodesmic, so the total carries the same caveat every single step does. */
+function renderPathNote(){
+  const p = state.path, host = $("path-note");
+  if(!p){ host.innerHTML = ""; return; }
+  const bits = [];
+  if(p.can_price){
+    bits.push(`<b>${esc(p.total_dE.toFixed(4))} eV</b> over ${esc(p.steps.length)} `
+            + `step${p.steps.length === 1 ? "" : "s"}`);
+    bits.push(`rung ${esc(p.fidelity_name || "—")}`);
+    if(p.worst_step)
+      bits.push(`worst step ${p.worst_step.dE > 0 ? "+" : ""}`
+              + `${esc(p.worst_step.dE.toFixed(4))}`);
+  } else {
+    bits.push(`<span class="caveat">no total — ${esc(p.n_unpriced)} of `
+            + `${esc(p.steps.length)} steps have no number</span>`);
+  }
+  if(p.isodesmic !== true) bits.push(`<span class="caveat">not isodesmic</span>`);
+  if(p.caveats.length)
+    bits.push(`<span class="caveat">`
+            + `${esc(p.caveats.map(c => String(c).replace(/_/g, " ")).join(", "))}</span>`);
+  if(p.steps.some(s => s.origin === "inferred"))
+    bits.push(`<span class="badge-inferred">contains a derived step</span>`);
+  host.innerHTML = `<div class="diag-note">${bits.join(" · ")}</div>`
+    + `<div class="diag-note">shed so far: ${esc(p.basis === "—" ? "nothing" : p.basis)}`
+    + `</div>`;
 }
 
 function renderFocus(s){
@@ -446,9 +659,10 @@ function writeHash(){
 function readHash(){
   const h = new URLSearchParams(location.hash.replace(/^#/, ""));
   const t = Number(h.get("target"));
+  // `<reaction>-<node>` for a recorded edge, `d<other part>-<node>` for a derived one.
   const p = (h.get("p") || "").split(".").filter(Boolean).map(leg => {
-    const [rid, sid] = leg.split("-").map(Number);
-    return Number.isInteger(rid) && Number.isInteger(sid) ? {rid, sid} : null;
+    const m = /^(d?\d+)-(\d+)$/.exec(leg.trim());
+    return m ? {via: m[1], sid: Number(m[2])} : null;
   }).filter(Boolean);
   return {target: Number.isInteger(t) && t > 0 ? t : null, p};
 }
@@ -461,19 +675,23 @@ async function replay({target, p}){
   state.trail = [];
   if(!target){ await showHere(); return; }
   await stepTo(target, null);
-  for(const {rid, sid} of p){
+  for(const {via, sid} of p){
     const d = state.data;
     if(!d) break;
-    const route = d.routes.find(r => r.id === rid);
-    if(!route){
-      say(`reaction #${rid} does not reach this structure — walk stopped here`); break;
+    // A derived leg is not in any table to check against, so it is taken as given and
+    // the pricing endpoint is what refuses it — with the reason, which lands in `msg`.
+    if(!via.startsWith("d")){
+      const route = (d.routes || []).find(r => String(r.id) === via);
+      if(!route){
+        say(`reaction #${via} does not reach this structure — walk stopped here`); break;
+      }
+      const names = ((route.steps && route.steps[0] || {}).terms || [])
+        .some(t => t.side === "reagent" && Number(t.structure_id) === sid);
+      if(!names){
+        say(`reaction #${via} does not name structure ${sid} — walk stopped here`); break;
+      }
     }
-    const names = ((route.steps && route.steps[0] || {}).terms || [])
-      .some(t => t.side === "reagent" && Number(t.structure_id) === sid);
-    if(!names){
-      say(`reaction #${rid} does not name structure ${sid} — walk stopped here`); break;
-    }
-    await stepTo(sid, rid);
+    await stepTo(sid, via);
   }
 }
 
@@ -567,6 +785,7 @@ function boot(){
   mountPanes();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
+  $("want-derived").onchange = (e) => { state.showDerived = e.target.checked; showHere(); };
 
   // Delegated: the table is replaced wholesale on every hop, so the listener has to
   // outlive it.  A species is a step INTO that species; the row is a step back along
@@ -583,11 +802,26 @@ function boot(){
         return;
       }
       say("");
-      stepTo(sid, row ? Number(row.dataset.rid) : null);
+      stepTo(sid, row ? (row.dataset.rid || null) : null);
       return;
     }
-    if(row) { say(""); stepTo(Number(row.dataset.source), Number(row.dataset.rid)); }
+    if(row) { say(""); stepTo(Number(row.dataset.source), row.dataset.rid); }
   });
+
+  // A level on the chart is the same node as a crumb on the trail.
+  $("diagram").addEventListener("click", (e) => {
+    const hit = e.target.closest("[data-sid]");
+    if(!hit) return;
+    const i = state.trail.findIndex(n => n.sid === Number(hit.dataset.sid));
+    if(i >= 0){ say(""); truncateTo(i); }
+  });
+
+  // The splitters change the chart's size without the window changing, so the redraw
+  // watches the element rather than `resize`.
+  if(window.ResizeObserver)
+    new ResizeObserver(() => drawDiagram()).observe($("diagram"));
+  else
+    addEventListener("resize", drawDiagram);
 
   $("trail").addEventListener("click", (e) => {
     const c = e.target.closest(".crumb");

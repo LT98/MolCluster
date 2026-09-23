@@ -406,6 +406,8 @@ def create_app(db_path: Path, store_root: Path,
 
     @app.get("/api/structures/{structure_id}/routes")
     def structure_routes(structure_id: int,
+                         inferred: int = Query(
+                             0, description="also derive splits nobody recorded"),
                          con: sqlite3.Connection = Con) -> dict[str, Any]:
         """The incoming edges, priced, and enough about every species they name.
 
@@ -414,6 +416,12 @@ def create_app(db_path: Path, store_root: Path,
         neither, so it gets its own door.  `species` carries one row per structure the
         terms mention, so a candidate can be named and its own reachability shown
         without a request per candidate.
+
+        `inferred=1` adds what `decompositions` derives from composition, in a list of
+        its own.  A `place` edge cites nothing (C15), so a structure the runner built
+        whole has no recorded precursor at all — derivation is the only answer to what
+        it is made of, and keeping it in a separate key is what stops it being read as
+        a record.
         """
         row = con.execute("SELECT * FROM v_structures WHERE id = ?",
                           (structure_id,)).fetchone()
@@ -425,8 +433,45 @@ def create_app(db_path: Path, store_root: Path,
                FROM reactions WHERE product_structure_id = ? ORDER BY id""",
             (structure_id,)))
         _price_routes(con, routes)
+        derived = _derived_routes(con, structure_id) if inferred else []
         return {"structure": {k: row[k] for k in SPECIES_COLS},
-                "routes": routes, "species": _species(con, routes)}
+                "routes": routes, "derived": derived,
+                "species": _species(con, routes + derived)}
+
+    def _derived_routes(con: sqlite3.Connection,
+                        structure_id: int) -> list[dict[str, Any]]:
+        from mofsbu.energy.routes import decompositions
+        from mofsbu.registry import ReadOnlyRegistry
+        try:
+            return decompositions(ReadOnlyRegistry(conn=con, store=store), structure_id)
+        except Exception:                 # noqa: BLE001 - a panel must still render
+            return []
+
+    @app.get("/api/paths/price")
+    def price_path_route(
+            nodes: str = Query(..., description="the walk: target first, comma separated"),
+            via: str = Query("", description="one edge per gap — a reaction id, or 'd'"),
+            con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """What a whole route costs, node by node, with the target at zero.
+
+        A GET, and the query string is the shareable link: the viewer has no write path
+        and a stored path would need one.  Composing the steps is `pathways.route` and
+        not this module — it is arithmetic over stored energies, and it is tested.
+        """
+        from mofsbu._types import MofsbuError
+        from mofsbu.pathways.route import price_path
+        from mofsbu.registry import ReadOnlyRegistry
+
+        try:
+            walk = [int(n) for n in nodes.split(",") if n.strip()]
+            edges: list[int | str] = [e.strip() if e.strip().startswith("d") else int(e)
+                                      for e in via.split(",") if e.strip()]
+        except ValueError as exc:
+            raise HTTPException(400, f"malformed path: {exc}") from exc
+        try:
+            return price_path(ReadOnlyRegistry(conn=con, store=store), walk, edges)
+        except MofsbuError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     def _species(con: sqlite3.Connection,
                  routes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
