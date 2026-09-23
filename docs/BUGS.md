@@ -29,6 +29,8 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B16](#b16) | correctness | `scripts/run_spec.py` | `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store |
 | [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
+| [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
+| [B21](#b21) | correctness | `geometry/placer.py` | CN 6 with a chelate and ≥2 reserved-empty vertices is refused (`best bite angle 180`), though cis-M(L–L)2(□)2 exists |
 
 ---
 
@@ -119,6 +121,12 @@ as an error.
 Either add the test that a v1 spec from the builder migrates to the current version with the
 fields the page intended, or make the page post the current version. The first is better;
 either is better than the present state.
+
+**v8 made the hazard concrete.** The v7→v8 migration sets `co_ligand_counts: fill` on any
+spec that omits it, so a page that forgot to send the field would silently plan `fill` while
+showing `range`. The page sends it explicitly, and
+`test_the_co_ligand_count_is_offered_and_an_old_spec_reads_as_fill` covers that one field
+through a v1-labelled post; the other fields are still uncovered.
 
 ---
 
@@ -378,6 +386,50 @@ geometry-scoped row would.
 
 **Fix direction:** have `onchange` re-render the panel rather than only the viewer, or move the
 geometry-scoped rows into `showGeometry` so there is one writer for them.
+
+---
+
+## B21
+
+**An octahedral centre carrying chelates and two or more empty vertices is refused.**
+`correctness` · `geometry/placer.py` (`place_mononuclear` with `reserve=`)
+
+Zn(II) + catechol (5-ring, dianionic chelate), CN 6 octahedral, construct: `place` refuses
+Zn(cat)2 with two empty vertices and Zn(cat) with four, both `placer_refused` — *"no vertex
+set on this geometry can host a 2-dentate ligand: best bite angle 180 deg, need 55-115"*.
+Reproduced on main with `co_ligand: null, allow_unsaturated: true`, so it predates D26. The
+geometry exists: reserve one cis pair and the four vertices left still hold two cis pairs.
+The suspicion is the order — `cis_vertices` reserves the lowest-index cis pair and
+`_assign_targets` then fills greedily — but that is unconfirmed.
+
+Why it matters now: under `co_ligand_counts: range` (D26) these rungs are asked for by
+default, so the refusal shows up as rejected `place` tasks and, above them, `grow` steps
+rejected with `pathway_parent_missing`. The ladder is incomplete there, loudly.
+`test_the_co_ligand_saturated_series_connects` pins `fill` for that reason.
+
+---
+
+## B20
+
+**A charged co-ligand's charge is not counted in the complex's net charge.** `correctness` ·
+`runner._build_sphere`
+
+`charge = metal.oxidation_state + ligand_charge`, where `ligand_charge` sums the spec's
+molecule components only; the `n_co` co-ligand copies contribute nothing. For water that is
+invisible. For `[Cl-]` it is wrong: measured on a construct run (Ni(II) hs, catechol, CN 4,
+`co_ligand: "[Cl-]"`), `place` stored Ni[Cl]3 and Ni[Cl]3[catechol] as **q+2**; the true net
+charges are −1 and −1. The co-ligand's own graph (`[Cl] q-1`) is right.
+
+It surfaced through D26: a co-ligand `grow` joins the free `[Cl-]` block onto the rung below,
+and `join` sums block charges, so the step's product came out q+1 — a different identity from
+the q+2 node `place` built — and the ladder forked (12 structures where 8 were expected). The
+planner now **does not queue co-ligand steps for a charged co-ligand** and records a diagnostic
+naming this entry; `_execute_grow` refuses a hand-built one with `co_ligand_charged`.
+
+**Fix direction** — add `formal_charge(co_ligand) × n_co` to the charge in `_build_sphere`.
+That changes the L0 identity of every stored complex built with a charged co-ligand, so it is a
+registry decision (a versioned re-derivation, D19) and not a one-line patch; once it lands, the
+planner guard and the executor refusal come out together.
 
 ---
 

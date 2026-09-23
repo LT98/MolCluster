@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 7
+SPEC_VERSION = 8
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -31,6 +31,12 @@ RUN_MODES = ("construct", "ml_go", "xtb_go", "dft_go")
 # resolved model is written into the `methods` row of every number, so a stored energy
 # never loses the name of the model that produced it.
 ML_MODELS = ("mace-mp-0", "mace-omol-0")
+
+# How many co-ligands (water or any named solvent/co-ligand) a product carries (D26).
+# `fill` puts one on every vertex the ligands leave free; `range` also builds the counts up
+# to `co_ligand_window` below that, the rest of the polyhedron left empty, and with
+# `pathways` makes gaining one co-ligand a ladder step.
+CO_LIGAND_COUNTS = ("fill", "range")
 
 
 #: Separators a range may be written with.  `~` is the one the builder page offers;
@@ -207,6 +213,17 @@ class BuildSpec:
     # Off by default: it adds the coordinatively unsaturated intermediates to the run, and
     # a spec written before this field existed did not ask for them.
     pathways: bool = False
+    # `fill` or `range` (CO_LIGAND_COUNTS, D26).  `range` is the default for a new spec;
+    # every spec older than v8 migrates to `fill`, which is what it planned.  Under
+    # `range` the lower-hydration products keep the requested CN and geometry with the
+    # uncovered vertices empty — they are asked for by this field, so `allow_unsaturated`
+    # (which governs the case with NO co-ligand) does not gate them.
+    co_ligand_counts: str = "range"
+    # Under `range`, how many vertices a rung may leave empty: a product carries between
+    # `full - window` and `full` co-ligands, and a pathway rung outside that is not
+    # planned, so a ladder's root is the lowest co-ligand state inside it (D26).  Inert
+    # under `fill`.
+    co_ligand_window: int = 2
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     # Which ML potential `ml_go` means.  None = the machine's declared default.
     ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | None
@@ -217,6 +234,16 @@ class BuildSpec:
             raise ValueError(f"run_mode must be one of {RUN_MODES}, got {self.run_mode!r}")
         if not self.molecules:
             raise ValueError("a spec needs at least one molecule")
+        if self.co_ligand_counts not in CO_LIGAND_COUNTS:
+            raise ValueError(
+                f"co_ligand_counts must be one of {CO_LIGAND_COUNTS}, got "
+                f"{self.co_ligand_counts!r}: 'fill' puts a co-ligand on every free vertex, "
+                f"'range' also builds each lower count")
+        if (isinstance(self.co_ligand_window, bool)
+                or not isinstance(self.co_ligand_window, int) or self.co_ligand_window < 0):
+            raise ValueError(
+                f"co_ligand_window must be a whole number >= 0 (how many vertices a rung "
+                f"may leave empty), got {self.co_ligand_window!r}")
         if self.max_distinct_ligands < 1:
             raise ValueError(
                 f"max_distinct_ligands must be at least 1, got {self.max_distinct_ligands}; "
@@ -282,6 +309,12 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 7:
+            # v7 -> v8 adds `co_ligand_counts` (D26).  `fill` is what every earlier spec
+            # planned, so an old spec re-run queues the same tasks; the new default,
+            # `range`, applies only to a spec that is written at v8.
+            d.setdefault("co_ligand_counts", "fill")
+            d.setdefault("co_ligand_window", 2)             # inert under fill
         if version <= 6:
             # v6 -> v7 adds `pathways`.  False is what every earlier spec did — the rungs
             # of a ligand-count sweep were built independently and nothing recorded that

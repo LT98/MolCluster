@@ -32,11 +32,11 @@ charge, spin — travels with it in a `methods` row.
 | Path | Purpose | State |
 |---|---|---|
 | `_types.py` | `Fidelity` ladder, `MethodSpec`, exception hierarchy | ✅ |
-| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v7). Counts accept ranges (`"1~3"`), expanded at construction | ✅ |
+| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v8). Counts accept ranges (`"1~3"`), expanded at construction | ✅ |
 | `runner.py` | `enumerate_plan` enumerates, `plan` writes tasks, `work` executes them. The two never assume one process | ✅ |
 | ↳ `execute_run` | the only place the worker pool is built — CLI and page share it. `plan_workers` divides the declared workers between the build queue and the relax queue (spawn, never fork: CUDA) | ✅ |
 | ↳ `estimate` | the same enumeration with no registry — what the builder page shows before you submit | ✅ |
-| ↳ `grow` tasks | `spec.pathways`: the rung below each product, and the `join` between them | ✅ |
+| ↳ `grow` tasks | `spec.pathways`: the rung below each product, and the `join` between them. Under `co_ligand_counts: range` (D26) a co-ligand is a step too (reagent = the `co_ligand` task's free species) and no rung leaves more than `co_ligand_window` vertices empty, so a metal/CN's seeds form one ladder rooted at the lowest in-window co-ligand state — never the bare metal. `MAX_PATHWAY_TASKS` cuts the walk and reports the uncapped size | ✅ |
 | `config.py` | Data root, machine profile, device, ML model — all **declared, never detected** | ✅ |
 | `versions.py` | `ALGO_VERSIONS` — pinned recipe versions (ground rule 6) | ✅ |
 | **graph/** | | |
@@ -141,6 +141,11 @@ one row with two incoming `reactions` edges — 441 such products exist today.
    `refresh_state` never perceives (there is a test counting calls).
 9. **Absent ≠ zero.** An uncomputed ease component is omitted, `n_open_sites` is NULL not 0,
    and a missing number never renders as a low one.
+10. **An old spec plans the run it planned.** A `BuildSpec` field that changes enumeration
+   gets a migration setting every older `spec_version` to the old behaviour, and a test pins
+   the old plan by digest against the planner as it stood — not against the migration
+   (`test_co_ligand_counts.py`, D26). A new default applies only to a spec written at the
+   new version.
 
 ---
 
@@ -168,6 +173,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D17** | An energy difference needs an **isodesmic** equation, not merely a balanced one |
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
 | **D19** | Re-derive what is only an **annotation** (`site_catalog`); **version** what is an address (identity). A stored identity keeps the answer its own recipe version gave |
+| **D26** | New specs build co-ligand counts `[full − 2, full]` (`co_ligand_counts: range`, `co_ligand_window` 2) in the requested polyhedron and step the co-ligand inside that window, root = lowest in-window state, no bare metal; specs ≤ v7 read as `fill` and replay byte-identically |
 
 **Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
 geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),

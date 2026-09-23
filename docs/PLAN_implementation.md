@@ -568,6 +568,13 @@ token that decides when two routes may be compared at all. It is driven by the `
 (`docs/gui/05_graph.md`) against the preserved Ni/tHQ/Cl/water dataset. It **does not** search,
 score or rank, and nothing below is pre-empted: C6 and C7 are still the first calls M8 forces.
 
+**Co-ligand rungs (D26).** A v8 spec builds co-ligand counts within a window of 2 below
+saturation and, with `pathways`, steps the co-ligand inside it, so a solvated centre's seeds are
+one ladder and solvent loss is an edge. The preserved Ni/tHQ/Cl/water dataset was built from a
+v7 spec and does **not** have them. Called: the slice is re-built as v8 at CN `4,6`, window 2
+(`data/reference/spec_ni_thq_cl_slice_v8.json`, 3059 tasks), and `MAX_PATHWAY_TASKS` is 4000
+so that fits uncut.
+
 **Work** — `pathways/reaction.py`, `proxy.py`, `score.py` (max barrier, cumulative ΔG,
 rate-limiting step, **sink detection**), `search.py`, and the A-vs-B driver script.
 

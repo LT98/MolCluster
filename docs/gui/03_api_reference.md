@@ -23,7 +23,7 @@ Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only wr
 | GET | `/api/specs` | Builder | list named specs |
 | GET | `/api/specs/{source}/{name}` | Builder | load one |
 | POST | `/api/spec` | Builder | write one |
-| POST | `/api/estimate` | Builder | **the same enumeration submitting performs** |
+| POST | `/api/estimate` | Builder | **the same enumeration submitting performs**; `capped` lists a cap that cut the ladder, with its uncapped size |
 | POST | `/api/runs` | Runs | queue a run |
 | GET | `/api/runs` | Runs | list runs, with computed liveness |
 | GET | `/api/runs/{run_id}` | Runs | one run |

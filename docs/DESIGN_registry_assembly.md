@@ -336,8 +336,10 @@ was asked for, the rung one ligand below it — the coordinatively unsaturated i
 the co-ligand-filled complex, because only the former is reachable *by addition* — and performs
 the step with `assembly.join`. So a ligand-count sweep (`ligands_per_metal: "1~3"`) comes back
 as a chain of stored intermediates with real edges between them, which is Path B's shape for a
-mononuclear centre. Under D2 the step usually lands on the identity the direct construction
-already built: one node, two routes, and the second route is the one that says where it came
+mononuclear centre. Under `co_ligand_counts: range` (D26) the co-ligand is stepped the same way
+— `M(H2O)2 + H2O → M(H2O)3`, the free co-ligand a reagent — inside a window of empty vertices,
+so the seeds of one metal/CN form one ladder rooted at the lowest co-ligand state in the window.
+Under D2 the step usually lands on the identity the direct construction already built: one node, two routes, and the second route is the one that says where it came
 from. Nothing here scores anything — the scoring below is still M8.
 
 **Pathway viability** = a function over the edge set:
@@ -653,6 +655,43 @@ coordinates.
   precisely that, and `node_cases.tsv` carries `mm_bond` as its own column saying it is a
   chemical decision not derivable from `d_mm`. So: branch on it or declare it; never default.
   `InterCentreConstraint.metal_metal_bond` is the input side of the same rule.
+
+- **D26** **A new spec builds co-ligand counts in a window below saturation and steps between
+  them; an old spec replays the run it planned.** `BuildSpec.co_ligand_counts` is `fill` (a
+  co-ligand on every vertex the ligands leave — the only behaviour before v8) or `range`, the
+  v8 default: `n_co ∈ [max(0, full − w), full]` with `w = co_ligand_window`, default **2**,
+  the uncovered vertices left **empty in the requested polyhedron**. It applies to whatever
+  co-ligand or solvent the spec names; water is only the default `co_ligand`. CN is never
+  collapsed and never invented: a count *above* a CN's full needs a higher CN, and exists only
+  where the spec's coordination list has one (CN 4 and 6 give a one-ligand Ni 1–3 and 3–5
+  waters). `allow_unsaturated` does not gate these products — it answers "what if nothing can
+  fill the vertices", and `range` with a co-ligand is itself the request for them.
+
+  Why the default moved: with `fill`, the MVP registry (`data/mvp_ni_thq_cl.db`, built from
+  `spec_ni_thq_cl_slice.json`) bottoms out at two unrelated seeds, Ni(H2O)2 and Ni(H2O)3, with
+  no incoming edge and no common ancestor, and "the same complex with one water fewer" is
+  neither a node nor an edge. Solvent gain and loss is what a solvated centre actually does, so
+  it belongs in what a run produces unasked.
+
+  With `pathways`, the window also bounds the ladder: **no rung may leave more than `w`
+  vertices empty**, for ligand steps and co-ligand steps alike, and a co-ligand step joins every
+  pair of in-window rungs one co-ligand apart. The seeds of one metal/CN/polyhedron are then one
+  connected ladder whose root is the lowest co-ligand state inside the window — Ni(H2O)3 ←
+  Ni(H2O)2 + H2O at CN 4 — and **no bare-metal row is created**. A composition's lowest
+  in-window state is a root of its own (nothing below it is in the window) and is reached from
+  the ligand-free chain through the rungs above it. `w = 0` allows no empty vertex, so it plans
+  no step and says so. The free co-ligand is its own task (`co_ligand`), stored and relaxed at
+  the run's fidelity like a ligand, so a co-ligand edge cites `[rung below, free co-ligand]` —
+  the ligand step's shape — and prices. `place` edges still cite nothing (C15 unchanged).
+
+  Size, measured on the reference slice re-read at v8: `fill` 722 tasks; `range` with `w` = 1
+  1141; **`w` = 2 (the default) 2041**; `w` = 3 2521; CN `4,6` at `w` = 2, 3059. `MAX_PATHWAY_TASKS`
+  was raised from 2000 to 4000 so the default window fits CN `4,6` uncut.
+  The cap is reported with the uncapped size rather than truncating silently. Migration: every
+  `spec_version ≤ 7` reads `co_ligand_counts: fill` (window 2, inert under `fill`) and plans
+  byte-identical tasks — pinned against the pre-v8 planner by digest
+  (`tests/test_co_ligand_counts.py`), not by comparing the migration with itself. A charged
+  co-ligand is not stepped until B20 is fixed; the planner says so.
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in
