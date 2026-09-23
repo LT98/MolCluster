@@ -200,6 +200,13 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
         if exclude_kinds:
             where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
             args += list(exclude_kinds)
+        # A step that joins onto another task's product waits for it: claimed while its
+        # parent was still being built, it was rejected as `pathway_parent_missing`.
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM tasks dep WHERE dep.id IN ("
+            "json_extract(tasks.payload_json, '$.parent_task'), "
+            "json_extract(tasks.payload_json, '$.ligand_task')) AND dep.status IN (?, ?))")
+        args += [PENDING, CLAIMED]
         sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks WHERE "
                + " AND ".join(where) + " ORDER BY priority DESC, id ASC LIMIT 1")
         row = conn.execute(sql, tuple(args)).fetchone()
@@ -222,6 +229,32 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
         conn.isolation_level = previous
     return Task(int(row["id"]), int(row["run_id"]), row["kind"],
                 json.loads(row["payload_json"]), int(row["attempts"]) + 1)
+
+
+def waiting_on_live_work(reg: Registry, run_id: int, *,
+                         kinds: Sequence[str] | None = None,
+                         exclude_kinds: Sequence[str] | None = None) -> bool:
+    """True when this worker's share of the queue is not empty, only blocked, and the
+    work it waits for is held by a worker that is still alive.
+
+    `claim_task` holds back a step until the task it joins onto has finished, so an empty
+    claim no longer means "nothing left".  Waiting is right while someone is building the
+    parent; if every claim in the run belongs to a dead worker, waiting would never end, so
+    this says no and the worker exits as it did before.
+    """
+    where, args = ["run_id = ?", "status = ?"], [run_id, PENDING]
+    if kinds is not None:
+        where.append(f"kind IN ({','.join('?' * len(kinds))})")
+        args += list(kinds)
+    if exclude_kinds:
+        where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
+        args += list(exclude_kinds)
+    if reg.conn.execute("SELECT 1 FROM tasks WHERE " + " AND ".join(where) + " LIMIT 1",
+                        tuple(args)).fetchone() is None:
+        return False
+    return any(worker_alive(r["claimed_by"]) is not False for r in reg.conn.execute(
+        "SELECT DISTINCT claimed_by FROM tasks WHERE run_id=? AND status=?",
+        (run_id, CLAIMED)))
 
 
 def complete_task(reg: Registry, task_id: int, *, structure_id: int | None = None,

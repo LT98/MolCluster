@@ -642,7 +642,7 @@ def _merged_graph(a: TypedGraph, b: TypedGraph, name: str,
 
 def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
          mode: str = "mono", torsion_well: int = 0, lone_pair: int = 0, seed: int = 0,
-         with_geometry: bool = True) -> JoinResult:
+         roll_deg: float = 0.0, with_geometry: bool = True) -> JoinResult:
     """Join two blocks at a pair of sites and return the product.
 
     Aligns by frame, adds the typed bond, carries both atom maps, inherits the parents'
@@ -735,12 +735,17 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
         "order": "donor-block-first" if donor_block is a else "metal-block-first",
         "seed": int(seed),
     }
+    # An offset from the well, for a ligand the well itself drives into its neighbours.
+    # Recorded only when used, so a choice vector that never needed one is unchanged.
+    roll = float(roll_deg) % 360.0
+    if roll:
+        choice_vector["roll_deg"] = round(roll, 6)
 
     donor_sites = donor_block.sites
     coords = None
     if with_geometry:
         coords, donor_sites = _place_donor_block(
-            donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg,
+            donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg + roll,
             lone_pair=lobe)
 
     sites = merge_inherited(

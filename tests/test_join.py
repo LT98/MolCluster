@@ -80,6 +80,19 @@ def test_the_metal_stays_put_and_the_ligand_moves(aqua):
     assert not np.allclose(ligand_rows, aqua.geometry)
 
 
+def test_a_roll_offset_moves_the_ligand_and_is_recorded_only_when_used(acetate):
+    """A grow may roll a ligand off its torsion well to clear its neighbours; the offset
+    travels in the choice vector so a replay lands it the same way, and a join that never
+    needed one keeps the choice vector it always had."""
+    metal = metal_block()
+    plain = first_join(acetate, metal)
+    rolled = first_join(acetate, metal, roll_deg=60.0)
+    assert "roll_deg" not in plain.choice_vector
+    assert rolled.choice_vector["roll_deg"] == pytest.approx(60.0)
+    assert first_join(acetate, metal, roll_deg=0.0).choice_vector == plain.choice_vector
+    assert not np.allclose(plain.block.geometry, rolled.block.geometry)
+
+
 def test_charge_adds_and_multiplicity_is_derived(acetate):
     product = first_join(acetate, metal_block()).block.graph
     assert product.charge == acetate.graph.net_charge() + 2

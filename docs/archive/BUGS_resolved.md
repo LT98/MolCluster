@@ -12,6 +12,44 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B25 — a step was claimed while the rung it joins onto was still being built ✅
+
+**`correctness` · `registry/jobs.claim_task` · found in the salt-study smoke run.**
+
+The queue orders by priority and nothing else. With eight workers, a `grow` step could be
+claimed while another worker still held its `parent_task`, and `_rung` then rejected it as
+`pathway_parent_missing` with the parent "(claimed)" — a hole in the ladder that the chemistry
+did not cause (13 steps in the NiCl₂ smoke run).
+
+**Fix:** `claim_task` skips a task whose `parent_task` or `ligand_task` is pending or
+claimed. An empty claim then no longer means an empty queue, so `work()` waits while
+`waiting_on_live_work` says the blocking work belongs to a live worker, and exits as before
+once every claim is held by a dead one. Re-measured: every remaining `pathway_parent_missing`
+has a parent that was genuinely rejected. Test: `tests/test_jobs.py`.
+
+---
+
+## B24 — a grow tried one orientation and rejected what `place` built easily ✅
+
+**`correctness` · `runner._execute_grow` · found in the salt-study smoke run.**
+
+`grow` called `join` once — first open vertex, lone pair 0, torsion well 0 — and rejected the
+step on any clash. `place` builds the same compositions from a whole-sphere layout and passed
+them, so the ladder's recorded edges went missing exactly where a crowded sphere needed a
+different pose. Measured on the NiCl₂/tHQ fallback spec (construct): **336 of 336** tHQ steps
+onto an octahedral rung and 178 of 333 onto a tetrahedral one rejected, O···O down to 0.73 Å —
+an sp² O has few wells, and each swung the ring's other oxygens into a cis water.
+
+**Fix:** `_first_clear_join` tries every open vertex, lobe and well, first at the well's own
+angle and then at roll offsets of ±30° steps (`ROLL_OFFSETS_DEG`), and takes the first product
+that passes clash QC, else the least bad. `join(roll_deg=)` records the offset in the choice
+vector only when non-zero, so no existing choice vector changes. Same spec: tetrahedral 336/336
+built, octahedral 168 clean + 63 marginal (built in `ml_go`) of 336; the 105 left are the most
+crowded rungs. Overall rejections 688 → 322 of 1778. Tests: `tests/test_join.py` (roll recorded
+only when used), the pathway suites unchanged.
+
+---
+
 ## B23 — a "deprotonation" edge could also change which atom binds the metal ✅
 
 **`correctness` · `energy/protons.py` · found reviewing the MVP energies for the interim

@@ -45,6 +45,7 @@ from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
     outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
+    waiting_on_live_work,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -1111,6 +1112,55 @@ def _vertex_pair(block, donors: Sequence[Any], vacancies: Sequence[Any], metal: 
     return best, (best_verdict or worst)
 
 
+#: Roll offsets from a torsion well that a grow tries, in order, when the well alone
+#: clashes.  Zero first, so a join that needed no offset is unchanged.
+ROLL_OFFSETS_DEG = (0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0,
+                    -150.0, 180.0)
+
+
+def _first_clear_join(block, ligand, vacancies, donor, *, mode: str, metal: str,
+                      element: str, seed: int):
+    """The first monodentate join whose product passes clash QC, or the least bad one.
+
+    `join` takes the vertex, the donor's lone pair, the torsion well and a roll offset from
+    that well as choices, and each lands the ligand somewhere different; `place` searches
+    the sphere as a whole.  A grow that tried only the first choice rejected most products
+    `place` builds without difficulty (measured: every tHQ onto an octahedral rung, where
+    the few wells of an sp2 O swing the ring's other oxygens into the cis waters).  Every
+    vertex, lobe and well is tried at its own angle before any roll offset, so a pick that
+    needed no offset is the one it always was; the order is fixed, so a replay picks the
+    same one, and the pick travels in the choice vector.  Returns `(result, report, n_tried)`.
+    """
+    import numpy as np
+
+    from mofsbu.assembly.join import IncompatibleJoin, compatible, join
+
+    verdicts = [(v, compatible(donor, v, partner=metal, mode=mode, donor_element=element))
+                for v in vacancies]
+    open_ = [(v, verdict) for v, verdict in verdicts if verdict.feasible]
+    if not open_:
+        raise IncompatibleJoin(verdicts[-1][1])
+    best = None
+    tried = 0
+    for roll in ROLL_OFFSETS_DEG:
+        for vacancy, verdict in open_:
+            for lobe, well in itertools.product(range(max(verdict.lone_pairs, 1)),
+                                                range(max(len(verdict.wells or ()), 1))):
+                result = join(block, ligand, vacancy, donor, mode=mode, torsion_well=well,
+                              lone_pair=lobe, seed=seed, roll_deg=roll)
+                tried += 1
+                graph = result.block.graph
+                report = _clash_qc(graph, [graph.label(i).element for i in graph.nodes()],
+                                   np.asarray(result.block.geometry))
+                if report.ok:
+                    return result, report, tried
+                rank = (not report.marginal,
+                        max((c.overlap for c in report.clashes), default=0.0))
+                if best is None or rank < best[0]:
+                    best = (rank, result, report)
+    return best[1], best[2], tried
+
+
 def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Add one ligand to the rung below and record the step as a route to the product.
 
@@ -1127,7 +1177,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """
     import numpy as np
 
-    from mofsbu.assembly.join import IncompatibleJoin, join, join_chelate
+    from mofsbu.assembly.join import IncompatibleJoin, join_chelate
     from mofsbu.assembly.persist import store_block
 
     payload = task.payload
@@ -1181,9 +1231,12 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                 raise _Rejected(verdict.reason, code="chelate_cannot_span",
                                 detail={**detail, "strain": round(verdict.strain, 4)})
             result = join_chelate(block, ligand, list(pair), donors, seed=spec.seed)
+            report = None
         elif len(donors) == 1:
-            result = join(block, ligand, vacancies[0], donors[0], mode=comp["mode"],
-                          seed=spec.seed)
+            result, report, tried = _first_clear_join(
+                block, ligand, vacancies, donors[0], mode=comp["mode"],
+                metal=metal.symbol, element=elements[0], seed=spec.seed)
+            detail["join_choices_tried"] = tried
         else:
             raise _Rejected(
                 f"{len(donors)} donors at once: one donor is `join`, two are "
@@ -1195,10 +1248,10 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
         raise _Rejected(exc.verdict.reason, code="join_refused",
                         detail={**detail, "strain": round(exc.verdict.strain, 4)}) from exc
 
-    graph = result.block.graph
-    coords = np.asarray(result.block.geometry)
-    symbols = [graph.label(i).element for i in graph.nodes()]
-    report = _clash_qc(graph, symbols, coords)
+    if report is None:
+        graph = result.block.graph
+        report = _clash_qc(graph, [graph.label(i).element for i in graph.nodes()],
+                           np.asarray(result.block.geometry))
     if not report.ok and not (report.marginal and spec.run_mode != "construct"):
         raise _Rejected(str(report), code=report.code,
                         detail={**detail, "qc": report.to_dict()})
@@ -1377,6 +1430,10 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
         task = claim_task(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds)
         if task is None:
             if wait_while is not None and wait_while():
+                time.sleep(poll)
+                continue
+            if waiting_on_live_work(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds):
+                # Pending steps are held back until the task they join onto finishes.
                 time.sleep(poll)
                 continue
             break
