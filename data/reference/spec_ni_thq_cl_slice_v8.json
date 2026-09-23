@@ -1,0 +1,53 @@
+{
+  "allow_unsaturated": true,
+  "binding": [
+    "mono"
+  ],
+  "co_ligand": "O",
+  "co_ligand_counts": "range",
+  "co_ligand_window": 2,
+  "coordination": [
+    4,
+    6
+  ],
+  "degree": 1,
+  "geometries": null,
+  "ligands_per_metal": [
+    1,
+    2
+  ],
+  "max_distinct_ligands": 2,
+  "metals": [
+    {
+      "oxidation_state": 2,
+      "spin_class": "hs",
+      "symbol": "Ni"
+    }
+  ],
+  "ml_model": "mace_omol",
+  "molecules": [
+    {
+      "max_deprotonations": 1,
+      "multiplicity": 1,
+      "name": "tHQ",
+      "smiles": "O=C(C(O)=C1O)C(O)=C(O)C1=O"
+    },
+    {
+      "max_deprotonations": 1,
+      "multiplicity": 1,
+      "name": "HCl",
+      "smiles": "Cl"
+    }
+  ],
+  "note": "Ni(II)/tHQ/Cl/water slice at v8: CN 4 and 6, co-ligand window 2 (D26), so water loss/gain is a step. 3059 tasks, under MAX_PATHWAY_TASKS=4000.",
+  "pathways": true,
+  "pocket": {
+    "min_anionic": null,
+    "n_anionic": null,
+    "rigid": null,
+    "ring_size": null
+  },
+  "run_mode": "ml_go",
+  "seed": 0,
+  "spec_version": 8
+}

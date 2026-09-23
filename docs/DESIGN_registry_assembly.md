@@ -685,7 +685,8 @@ coordinates.
   the ligand step's shape — and prices. `place` edges still cite nothing (C15 unchanged).
 
   Size, measured on the reference slice re-read at v8: `fill` 722 tasks; `range` with `w` = 1
-  1141; **`w` = 2 (the default) 2041, which `MAX_PATHWAY_TASKS` (2000) cuts**; `w` = 3 2521.
+  1141; **`w` = 2 (the default) 2041**; `w` = 3 2521; CN `4,6` at `w` = 2, 3059. `MAX_PATHWAY_TASKS`
+  was raised from 2000 to 4000 so the default window fits CN `4,6` uncut.
   The cap is reported with the uncapped size rather than truncating silently. Migration: every
   `spec_version ≤ 7` reads `co_ligand_counts: fill` (window 2, inert under `fill`) and plans
   byte-identical tasks — pinned against the pre-v8 planner by digest

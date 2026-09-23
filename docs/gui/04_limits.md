@@ -34,7 +34,7 @@ builder page:
   open. That is the S4 capability reaching the GUI **as behaviour rather than as a
   control**, and it is why co-ligand ladder runs stopped producing `chelate_cannot_span`.
 
-## The pathway ladder stops at 2000 tasks
+## The pathway ladder stops at 4000 tasks
 
 `runner.MAX_PATHWAY_TASKS` caps the whole plan once the ladder walk starts. When it bites,
 the rungs below some products are **not planned** — their steps and intermediates are
@@ -51,12 +51,13 @@ The co-ligand range (D26) is the setting most likely to reach it. Measured on
 | `fill` (what the v7 file plans) | 722 | no |
 | `range`, window 0 (no steps) | 243 | no |
 | `range`, window 1 | 1141 | no |
-| `range`, window 2 (**default**) | 2000 | **yes — uncapped 2041** |
-| `range`, window 3 | 2000 | yes — uncapped 2521 |
+| `range`, window 2 (**default**) | 2041 | no |
+| `range`, window 3 | 2521 | no |
+| `range`, window 2, CN `4,6` | 3059 | no |
 
-So the default window **does** cut that spec's ladder, by 41 tasks. At CN `4,6` it is 3059
-uncapped (window 1: 1709). Narrow `max_distinct_ligands` or the CN list, lower the window, or
-use `fill`.
+The cap is 4000 so the default window fits that spec at CN `4,6`
+(`spec_ni_thq_cl_slice_v8.json`). Past it: narrow `max_distinct_ligands` or the CN list,
+lower the window, or use `fill`.
 
 ## Placer refusals leave holes in a co-ligand ladder
 
