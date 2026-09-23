@@ -49,6 +49,15 @@ def test_index_serves_the_page(client):
     assert "3Dmol" in r.text and "mofsbu" in r.text
 
 
+def test_the_graph_page_is_served_and_is_in_the_tab_strip(client):
+    """A page nobody can navigate to is not a page.  The strip is built from one list
+    in chrome.js, so the route and the tab have to agree or the tab 404s."""
+    r = client.get("/graph")
+    assert r.status_code == 200
+    assert "formation-energy graph" in r.text
+    assert '"/graph"' in client.get("/static/chrome.js").text
+
+
 @pytest.mark.parametrize("asset", ["/static/chrome.css", "/static/chrome.js"])
 def test_the_shared_chrome_is_served(client, asset):
     """The tab strip is built by a fetched file, not by markup in each page.  If the

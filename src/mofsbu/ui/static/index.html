@@ -342,6 +342,9 @@ dd{margin:0;overflow-wrap:anywhere}
       <div id="entry-msg" class="muted" style="font-size:11.5px"></div>
 
       <h2>provenance <span class="muted" style="font-weight:400;font-size:11px">· dE in eV</span></h2>
+      <div class="toolbar" style="margin-bottom:8px">
+        <button id="graph-this" title="walk this structure's provenance back, and compare the routes that reach it">graph this →</button>
+      </div>
       <div id="d-routes"></div>
     </div>
   </aside>
@@ -1396,6 +1399,10 @@ async function boot(){
                    "f-conv","f-route","f-depth","f-tag"])
     $(id).onchange = rerun;
   $("f-limit").onchange = () => { state.limit = Number($("f-limit").value); rerun(); };
+  // The graph page reads its target from the hash, so handing it one is a link.
+  $("graph-this").onclick = () => {
+    if(state.selected) location.href = "/graph#target=" + state.selected;
+  };
   $("prev").onclick = () => flipPage(-1);
   $("next").onclick = () => flipPage(1);
   $("prev").title = "previous page (PgUp)";

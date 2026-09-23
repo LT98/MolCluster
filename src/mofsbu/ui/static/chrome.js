@@ -15,6 +15,7 @@ const MOFSBU_PAGES = [
   {href: "/",        label: "registry",       title: "browse stored structures"},
   {href: "/builder", label: "builder",        title: "write a spec and queue a run"},
   {href: "/runs",    label: "run inspector",  title: "what each run planned, built and refused"},
+  {href: "/graph",   label: "energy graph",   title: "walk a structure's provenance back and compare the routes"},
 ];
 
 const mofsbuChrome = {

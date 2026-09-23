@@ -542,7 +542,7 @@ def create_app(db_path: Path, store_root: Path,
                               con.execute("SELECT name, version FROM algo_versions")},
         }
 
-    # ── the page ─────────────────────────────────────────────────────────────
+    # ── the pages ────────────────────────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         page = STATIC / "index.html"
@@ -550,7 +550,15 @@ def create_app(db_path: Path, store_root: Path,
             raise HTTPException(500, "index.html missing from mofsbu/ui/static")
         return HTMLResponse(page.read_text(encoding="utf-8"))
 
-    # The tab strip and the database picker are the same on all three pages, so they
+    @app.get("/graph", response_class=HTMLResponse)
+    def graph() -> HTMLResponse:
+        """Walk provenance backwards and draw what each route cost."""
+        page = STATIC / "graph.html"
+        if not page.exists():                       # pragma: no cover - packaging error
+            raise HTTPException(500, "graph.html missing from mofsbu/ui/static")
+        return HTMLResponse(page.read_text(encoding="utf-8"))
+
+    # The tab strip and the database picker are the same on all four pages, so they
     # are fetched as files rather than pasted into each one.  Mounted last: a prefix
     # mount would otherwise shadow any later route beginning with /static.
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

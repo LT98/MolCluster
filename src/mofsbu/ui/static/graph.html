@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mofsbu formation-energy graph</title>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
+<style>
+:root{
+  --bg:#f7f7f8; --panel:#fff; --ink:#1b1d21; --muted:#6b7078; --line:#dfe1e5;
+  --accent:#2f6f9f; --accent-soft:#e6f0f8; --warn:#9a6b00; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#16181c; --panel:#1e2126; --ink:#e6e8ea; --muted:#9aa1aa; --line:#31353c;
+         --accent:#79b8e8; --accent-soft:#243444; --warn:#d9ad57; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
+     display:flex;flex-direction:column}
+/* Three panes under the tab strip, in the registry page's proportions but shifted:
+   the picker carries a six-column table and the legend carries one line per route. */
+#app{display:grid;grid-template-columns:330px minmax(420px,1fr) 300px;flex:1;min-height:0}
+.pane{overflow:auto;padding:12px 14px}
+#picker{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
+#chart{display:flex;flex-direction:column;gap:10px;min-width:0}
+#legend{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:10px}
+h1{font-size:14px;margin:0;letter-spacing:.02em;overflow-wrap:anywhere}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+   margin:6px 0 6px;border-bottom:1px solid var(--line);padding-bottom:3px}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.toolbar{display:flex;gap:6px;align-items:center}
+input,button{font:inherit;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+#target-id{width:5.5em;text-align:right;font-family:var(--mono)}
+
+/* ── the focused node ──────────────────────────────────────────────────────
+   The one thing that is real at U0: what the walk is standing on.  It is a
+   header rather than a row because every list below it is relative to it. */
+#focus{border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:var(--bg)}
+#focus.none{border-style:dashed;color:var(--muted)}
+#focus-sub{font-size:11.5px;color:var(--muted);margin-top:3px;font-family:var(--mono)}
+#focus-why{font-size:11.5px;color:var(--warn);margin-top:4px}
+
+/* ── stubs ─────────────────────────────────────────────────────────────────
+   A region that is planned but not written says so, in place, with the
+   increment that brings it.  Same contract as a disabled filter on the
+   registry page (`reserved_inactive`) and a `soon:true` tab in chrome.js:
+   what it will be, and why it is not here yet.  Empty space is then always a
+   defect and never an unwritten feature.  `?stubs=off` hides the lot. */
+.stub{position:relative;border:1px dashed var(--line);border-radius:6px;
+      padding:14px 12px 12px;color:var(--muted);background:
+      repeating-linear-gradient(135deg,transparent,transparent 9px,var(--accent-soft) 9px,var(--accent-soft) 10px)}
+.stub-inc{position:absolute;top:-8px;right:8px;background:var(--panel);
+  border:1px solid var(--line);border-radius:9px;padding:0 7px;font-size:10px;
+  font-weight:600;letter-spacing:.04em;color:var(--muted)}
+.stub-what{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:3px}
+.stub-why{font-size:11.5px;line-height:1.5}
+.stub-grow{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:180px}
+body.stubs-off .stub{display:none}
+
+#msg{font-size:11.5px;color:var(--warn);min-height:1.2em}
+.empty{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right"><span id="meta">read-only</span></div>
+</header>
+
+<div id="app">
+  <!-- ── the walk: where we are, and what reaches it ──────────────────── -->
+  <section id="picker" class="pane">
+    <div class="toolbar">
+      <label for="target-id" class="muted" style="font-size:11px">target</label>
+      <input id="target-id" type="number" min="1" step="1" placeholder="id">
+      <button id="target-go" class="primary">load</button>
+    </div>
+    <div id="msg"></div>
+
+    <h2>standing on</h2>
+    <div id="focus" class="none">
+      <h1 id="focus-label">no target</h1>
+      <div id="focus-sub">give a structure id, or press “graph this” on the registry page</div>
+      <div id="focus-why" hidden></div>
+    </div>
+
+    <h2>precursor steps</h2>
+    <div id="steps"></div>
+  </section>
+
+  <!-- ── the diagram ──────────────────────────────────────────────────── -->
+  <section id="chart" class="pane">
+    <h2>formation energy · dE in eV, target at zero</h2>
+    <div id="diagram" class="stub-grow"></div>
+  </section>
+
+  <!-- ── the routes on the chart, and how they are drawn ──────────────── -->
+  <aside id="legend" class="pane">
+    <h2>routes</h2>
+    <div id="routes"></div>
+    <h2>show</h2>
+    <div id="toggles"></div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = mofsbuChrome.esc;
+
+/* Every region of the finished page, and the increment that fills it.  Retiring a
+   stub is deleting a row here and rendering into the same host.  The order is the
+   order they are built in, so this table doubles as the remaining work. */
+const STUBS = [
+  {host: "steps", inc: "U1", what: "the grouped precursor list",
+   why: "every recorded edge that reaches this node, collapsed so that one chemistry "
+      + "is one row: dE, what was added, what it was added to, the rung it was priced "
+      + "at, its caveat, and how many edges are behind the row. Clicking one walks back "
+      + "a step."},
+  {host: "diagram", inc: "U2", grow: true, what: "the energy diagram",
+   why: "one level per node and a connector per step, read left to right from the "
+      + "precursors to the target. The target sits at zero, so every route is pinned "
+      + "at the one node they all share."},
+  {host: "routes", inc: "U3", what: "one line per route on the chart",
+   why: "its colour, where it bottoms out, its total dE and its worst single step. "
+      + "Routes that branch off each other get neighbouring hues. U4 adds the badge "
+      + "for a route whose accounting does not match the others'."},
+  {host: "toggles", inc: "U3", what: "what the chart draws",
+   why: "energy labels, colour on or off, the y-anchor, and — at U5 — whether derived "
+      + "decompositions are offered alongside recorded edges."},
+];
+
+function mountStubs(){
+  for(const s of STUBS){
+    const host = $(s.host);
+    if(!host) continue;
+    host.innerHTML =
+      `<div class="stub${s.grow ? " stub-grow" : ""}">`
+      + `<span class="stub-inc">not built yet · ${esc(s.inc)}</span>`
+      + `<div class="stub-what">${esc(s.what)}</div>`
+      + `<div class="stub-why">${esc(s.why)}</div></div>`;
+  }
+}
+
+/* ── state ────────────────────────────────────────────────────────────────
+   The walk lives in the URL hash, so a reload keeps it and a link carries it.
+   The viewer has no write path, so there is nowhere else it could live. */
+const state = {target: null, focus: null};
+
+function readHash(){
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const t = Number(h.get("target"));
+  return Number.isInteger(t) && t > 0 ? t : null;
+}
+
+function writeHash(id){
+  const h = id ? `#target=${id}` : "";
+  if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
+}
+
+function say(text){ $("msg").textContent = text || ""; }
+
+/* U0 reads the full detail endpoint for one field, which is more than it needs —
+   that endpoint prices every incoming route.  U1 brings /api/structures/{id}/routes,
+   which carries the product's own label beside the routes, and this goes away. */
+async function loadTarget(id){
+  say("");
+  if(!id){ renderFocus(null); return; }
+  let d;
+  try {
+    const r = await fetch("/api/structures/" + id);
+    if(!r.ok){ say(`no structure ${id} in this registry`); renderFocus(null); return; }
+    d = await r.json();
+  } catch(e){ say(`could not reach the server — ${e.message}`); return; }
+  state.target = state.focus = d.structure;
+  $("target-id").value = id;
+  writeHash(id);
+  renderFocus(d.structure);
+}
+
+function renderFocus(s){
+  const box = $("focus"), why = $("focus-why");
+  if(!s){
+    box.classList.add("none");
+    $("focus-label").textContent = "no target";
+    $("focus-sub").textContent =
+      "give a structure id, or press “graph this” on the registry page";
+    why.hidden = true;
+    return;
+  }
+  box.classList.remove("none");
+  $("focus-label").textContent = s.display_label || s.formula || `structure ${s.id}`;
+  $("focus-sub").textContent =
+    [`#${s.id}`, s.formula, `q ${s.net_charge >= 0 ? "+" : ""}${s.net_charge}`,
+     s.multiplicity ? `2S+1 ${s.multiplicity}` : null,
+     `${s.n_incoming_routes} incoming`].filter(Boolean).join("  ·  ");
+  // The one thing worth saying at U0 that is not decoration: a node nothing reaches
+  // is where a walk would stop, and that is a property of the data, not of the page.
+  why.hidden = Number(s.n_incoming_routes) > 0;
+  why.textContent = "nothing recorded reaches this structure — a walk would stop here";
+}
+
+function boot(){
+  if(new URLSearchParams(location.search).get("stubs") === "off")
+    document.body.classList.add("stubs-off");
+  mountStubs();
+  $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
+  $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
+  addEventListener("hashchange", () => loadTarget(readHash()));
+  fetch("/api/meta").then(r => r.json())
+    .then(m => { $("meta").textContent = `${m.db_name} · read-only`; })
+    .catch(() => {});
+  loadTarget(readHash());
+}
+
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>
