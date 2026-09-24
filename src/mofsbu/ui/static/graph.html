@@ -350,7 +350,7 @@ function mountStubs(){
    route being extended and how far along it, because a fork is what happens when you
    step back into the middle of a route and choose differently. */
 const state = {target: null, routes: [], active: 0, at: 0,
-               data: null, cache: new Map(), medium: "", sink: "",
+               data: null, cache: new Map(), medium: "", sink: "", db: "",
                prefs: {labels: true, levelValues: false, species: false,
                        colour: true, anchor: "target", derived: false,
                        fontScale: 1}};
@@ -929,8 +929,19 @@ async function loadPricingOptions(){
         + `${esc(shortLabel(s.base_label) || "#" + s.base)} (→ ${esc(shortLabel(s.acid_label)
           || "#" + s.acid)})</option>`).join("");
   } catch(e){ /* the selects keep gas and water, which is what an older server priced */ }
-  $("medium").onchange = () => { state.medium = $("medium").value; priceAll(); };
-  $("proton-sink").onchange = () => { state.sink = $("proton-sink").value; priceAll(); };
+  // Put back what this database was last priced under, if it is still offered here.
+  const saved = savedWalks()[state.db] || {};
+  let restored = false;
+  for(const [id, key] of [["medium", "medium"], ["proton-sink", "sink"]]){
+    const v = saved[key];
+    if(v && [...$(id).options].some(o => o.value === String(v))){
+      $(id).value = String(v); state[key] = String(v); restored = true;
+    }
+  }
+  $("medium").onchange = () => { state.medium = $("medium").value; saveWalk(); priceAll(); };
+  $("proton-sink").onchange = () => { state.sink = $("proton-sink").value; saveWalk();
+                                      priceAll(); };
+  if(restored) priceAll();
 }
 
 async function priceAll(){
@@ -1177,7 +1188,7 @@ function legsOf(r){
 }
 
 function writeHash(){
-  if(!state.target){ history.replaceState(null, "", location.pathname); return; }
+  if(!state.target){ history.replaceState(null, "", location.pathname); saveWalk(); return; }
   const parts = [`target=${state.target}`];
   for(const r of state.routes){
     const legs = legsOf(r);
@@ -1185,6 +1196,25 @@ function writeHash(){
   }
   const h = "#" + parts.join("&");
   if(location.hash !== h) history.replaceState(null, "", location.pathname + h);
+  saveWalk();
+}
+
+/* The walk outlives the page.  The hash above already says everything a route is, and
+   the tabs link to a bare /graph, so it is kept per DATABASE in this browser — a
+   structure id means a different species in another registry — and put back when the
+   page opens with no hash of its own.  A shared link (with a hash) always wins. */
+const WALK_KEY = "mofsbu.graph.walks";
+
+function savedWalks(){
+  try { return JSON.parse(localStorage.getItem(WALK_KEY) || "{}") || {}; }
+  catch(e){ return {}; }
+}
+
+function saveWalk(){
+  if(!state.db) return;
+  const all = savedWalks();
+  all[state.db] = {hash: location.hash, medium: state.medium, sink: state.sink};
+  try { localStorage.setItem(WALK_KEY, JSON.stringify(all)); } catch(e){ /* private mode */ }
 }
 
 function readHash(){
@@ -1397,7 +1427,7 @@ function mountPanes(){
   });
 }
 
-function boot(){
+async function boot(){
   if(new URLSearchParams(location.search).get("stubs") === "off")
     document.body.classList.add("stubs-off");
   loadPrefs();
@@ -1405,7 +1435,6 @@ function boot(){
   mountPanes();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
-  loadPricingOptions();
   mountToggles();
 
   // Geometry, in the two places it answers a different question: a popover while the
@@ -1520,9 +1549,17 @@ function boot(){
     replay(h);
   });
 
-  fetch("/api/meta").then(r => r.json())
-    .then(m => { $("meta").textContent = `${m.db_name} · read-only`; })
-    .catch(() => {});
+  // Which database this is decides which saved walk belongs here, so it is asked first.
+  try {
+    const m = await (await fetch("/api/meta")).json();
+    $("meta").textContent = `${m.db_name} · read-only`;
+    state.db = m.db || "";
+  } catch(e){ /* no key, no restore: the page still works from its own hash */ }
+  if(!location.hash && state.db){
+    const saved = savedWalks()[state.db];
+    if(saved && saved.hash) history.replaceState(null, "", location.pathname + saved.hash);
+  }
+  loadPricingOptions();
 
   const h = readHash();
   if(h.target) $("target-id").value = h.target;

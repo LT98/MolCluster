@@ -195,6 +195,13 @@ Replaying a link rebuilds each route against the registry in front of it rather 
 it. A leg that no longer holds stops that route and says which one, instead of quietly
 producing a shorter walk that would look deliberate.
 
+**The walk survives leaving the page.** The tabs link to a bare `/graph`, so the page also keeps
+the link (and the chosen medium and H⁺ destination) in this browser's `localStorage`, **per
+database**: a structure id means a different species in another registry. Opening `/graph` with no
+hash puts back the last walk for the active database; a link that carries its own hash always
+wins. It is per browser and per viewer address: a different machine, a private window or a
+different forwarded port (`localhost:8000` vs `localhost:8013`) starts clean.
+
 ## Where the numbers come from
 
 `energy/routes.py` prices one edge. `pathways/route.py` composes them — the running sum with

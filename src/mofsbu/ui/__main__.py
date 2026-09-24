@@ -202,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.open:
         _open_browser_when_up(a.host, a.port)
+    from mofsbu.config import name_process
+    name_process(f"mofsbu-ui:{a.port}")
     uvicorn.run(create_app(db, store, active), host=a.host, port=a.port,
                 reload=a.reload, log_level=a.log_level)
     return 0
