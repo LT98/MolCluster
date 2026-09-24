@@ -605,6 +605,14 @@ def resume_run(reg: Registry, run_id: int) -> int:
     An `interrupted` run is the third: its tasks were returned to `pending` by the sweep
     that noticed it, so resuming it is also just the flag — and it is the state where
     resuming matters most, because nobody chose it.
+
+    A task that FAILED only because the database was busy is revived too: that says
+    nothing about the task (B26), and a resume is exactly when it should be tried again.
+    Any other failure stays failed — it is a finding, or a bug, not a queue position.
+
+    A run left with nothing to do is closed out with the status its tasks earned rather
+    than marked `running`: a running run with no work and nobody executing it is the
+    state that left the page saying "stopping" for ever.
     """
     row = reg.conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
     if row is None or row["status"] not in RESUMABLE:
@@ -612,10 +620,16 @@ def resume_run(reg: Registry, run_id: int) -> int:
     cur = reg.conn.execute(
         "UPDATE tasks SET status=?, finished_at=NULL WHERE run_id=? AND status=?",
         (PENDING, run_id, CANCELLED))
+    busy = reg.conn.execute(
+        "UPDATE tasks SET status=?, finished_at=NULL, error=NULL, error_code=NULL "
+        "WHERE run_id=? AND status=? AND error LIKE '%database is locked%'",
+        (PENDING, run_id, FAILED))
     reg.conn.execute("UPDATE runs SET status=?, finished_at=NULL, heartbeat_at=? "
                      "WHERE id=?", ("running", utcnow(), run_id))
     reg.conn.commit()
-    return cur.rowcount
+    if not task_counts(reg, run_id).get(PENDING):
+        finish_run(reg, run_id)
+    return cur.rowcount + busy.rowcount
 
 
 def finish_run(reg: Registry, run_id: int) -> str:
