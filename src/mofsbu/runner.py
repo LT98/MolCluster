@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import sqlite3
 import time
 import traceback
 from dataclasses import dataclass, field, replace
@@ -45,7 +46,7 @@ from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
     outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
-    waiting_on_live_work,
+    release_task, waiting_on_live_work,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -82,10 +83,9 @@ GEOMETRY_BY_CN = {2: ["linear"], 3: ["trigonal"], 4: ["tetrahedral", "square_pla
 
 # ── planning ─────────────────────────────────────────────────────────────────
 
-#: Hard ceiling on compositions per (metal, n_ligands, CN).  A guard rail, not a policy:
-#: `max_distinct_ligands` is the knob a user turns, and this only stops a spec that turns
-#: it too far from filling a queue with tens of thousands of tasks before anyone notices.
-#: Hitting it is reported through the run diagnostics rather than silently truncating.
+#: Ceiling on compositions per (metal, n_ligands, CN) — for planning the BACKEND starts
+#: on its own (`enumerate_plan(guard=True)`).  A spec a person submits is planned in full:
+#: its size is theirs to decide, and the estimate warns above `MAX_PATHWAY_TASKS` instead.
 MAX_COMPOSITIONS = 4000
 
 
@@ -111,15 +111,13 @@ def _compositions(kinds: list[dict[str, Any]], total: int,
                 counts = [bounds[i + 1] - bounds[i] for i in range(d)]
                 out.append([{**kinds[k], "count": c}
                             for k, c in zip(chosen, counts) if c])
-                if len(out) > MAX_COMPOSITIONS:
-                    return out[:MAX_COMPOSITIONS]
     return out
 
 
-#: Ceiling on the intermediates `pathways` adds.  Same kind of guard rail as
-#: `MAX_COMPOSITIONS`: the ladder of a homoleptic sweep is short, the sub-multiset lattice
-#: of a mixed one is not, and hitting the ceiling is reported through the diagnostics
-#: rather than silently truncating the chain.
+#: Size of a planned run above which it is called large.  For a spec a person submits this
+#: is ADVISORY — `estimate` says so and the builder page warns, and the run is planned in
+#: full.  Only planning the backend starts on its own (`guard=True`) is cut here, and a cut
+#: is reported with the size it would have been, never silent.
 MAX_PATHWAY_TASKS = 12000
 
 #: A step runs after every rung is built (`place` is 0) and before the relaxations: it
@@ -219,11 +217,15 @@ def _co_component(smiles: str) -> dict[str, Any]:
             "mode": BindingMode.MONODENTATE.value}
 
 
-def enumerate_plan(spec: BuildSpec) -> PlannedRun:
+def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
     """Every task this spec implies, with no registry in sight.
 
     Pure enumeration: the same function answers "plan this run" and "how big would this
     run be", so the estimate on the page cannot drift from what submitting actually does.
+
+    `guard` applies `MAX_COMPOSITIONS` and `MAX_PATHWAY_TASKS` as hard cuts, reported with
+    the size each would have been.  It is for planning the backend starts on its own; a
+    spec a person submits is planned in full (the default), and `estimate` warns instead.
     """
     tasks: list[PlannedTask] = []
     skipped: dict[str, dict[str, Any]] = {}
@@ -283,6 +285,12 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
     for metal_ix in range(len(spec.metals)):
         for total_n, cn in itertools.product(spec.ligands_per_metal, spec.coordination):
             compositions = _compositions(kinds, total_n, spec.max_distinct_ligands)
+            if guard and len(compositions) > MAX_COMPOSITIONS:
+                skip(f"compositions stopped at {MAX_COMPOSITIONS}",
+                     "the compositions past it are not planned; narrow max_distinct_ligands "
+                     "or the ligand-count range",
+                     cap=MAX_COMPOSITIONS, uncapped_tasks=len(compositions))
+                compositions = compositions[:MAX_COMPOSITIONS]
             if not compositions and kinds:
                 skip(f"no ligand composition of {total_n} piece(s) from "
                      f"{len(kinds)} kind(s)",
@@ -349,8 +357,8 @@ def enumerate_plan(spec: BuildSpec) -> PlannedRun:
         walk = {"co_ligand": step_co,
                 "max_vacant": spec.co_ligand_window if vary_co else None}
         shadow, shadow_at = list(tasks), dict(place_at)
-        if _plan_pathways(tasks, place, requested, ligand_task, cap=MAX_PATHWAY_TASKS,
-                          **walk):
+        if _plan_pathways(tasks, place, requested, ligand_task,
+                          cap=MAX_PATHWAY_TASKS if guard else None, **walk):
             # The cap bit.  The same walk run uncapped on a copy says how much was cut, so
             # the refusal carries a size and not only the fact of one; nothing is queued
             # from the copy.
@@ -464,8 +472,14 @@ def estimate(spec: BuildSpec) -> dict[str, Any]:
         "co_ligand_counts": spec.co_ligand_counts,
         "co_ligand_window": spec.co_ligand_window,
         # A cap that bit, stated on its own rather than left as one diagnostic among
-        # several: the run it describes is incomplete, not merely smaller.
+        # several: the run it describes is incomplete, not merely smaller.  Only planning
+        # with `guard` can be cut, so for a submitted spec this is always empty.
         "capped": [dict(d) for d in planned.diagnostics if "cap" in d],
+        # Advisory: the run is planned in full, and it is big.
+        "large": ([{"tasks": len(planned.tasks), "advisory_size": MAX_PATHWAY_TASKS,
+                    "reason": f"{len(planned.tasks)} tasks, above the {MAX_PATHWAY_TASKS} "
+                              f"we call large — planned in full, not cut"}]
+                  if len(planned.tasks) > MAX_PATHWAY_TASKS else []),
     }
 
 
@@ -569,6 +583,8 @@ def _components(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 RELAX_PRIORITY = -10        # constructs drain first; relaxes are the expensive tail
+#: Longest an idle worker sleeps between looks at the queue; it starts at `poll`.
+MAX_IDLE_POLL = 5.0
 
 
 def resolve_ml_model(spec: BuildSpec) -> str:
@@ -760,13 +776,17 @@ def _clash_qc(graph: TypedGraph, symbols, positions) -> qc_mod.QCReport:
     return report
 
 
-def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
-                  graph: TypedGraph, fidelity: Fidelity,
-                  vacancies: tuple = (), metal_idx: int = 0) -> dict[str, Any]:
-    """Perceive once, then derive state from that one perception.
+def _perceive_sites(mol, graph: TypedGraph, fidelity: Fidelity,
+                    vacancies: tuple = (), metal_idx: int = 0) -> tuple[list, list, list]:
+    """Perceive once, then derive state from that one perception — without the registry.
 
-    Both halves of D5 are written here, in this order, deliberately: `refresh_state` is
-    handed the very list that went into `site_catalog`, so the two tiers cannot disagree
+    Run BEFORE a task's first write: SQLite has one write lock, and a task that wrote its
+    structure and then perceived held it through the perception, which starved every
+    other worker once there were enough of them (32 build workers: `database is locked`).
+    Returns `(perceived, sites, states)` for `_record_sites` to store.
+
+    Both halves of D5 come from here, in this order, deliberately: `refresh_state` is
+    handed the very list that goes into `site_catalog`, so the two tiers cannot disagree
     about which atoms are donors.  Perception happening anywhere else in a build is the
     failure mode `tests/test_sites_state.py::test_perception_runs_once_per_structure`
     exists to catch.
@@ -777,18 +797,27 @@ def _record_sites(reg: Registry, structure_id: int, geometry_id: int, mol,
     the construction, which is the only thing that knows the polyhedron was bigger than
     the ligand set, and they join the same site list so `open_sites()` returns both kinds.
     """
-    sites = perceive(mol)
-    drift = catalog_drift(reg, structure_id, sites)
+    perceived = perceive(mol)
     conf = mol.GetConformer()
     coords = [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
                conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())]
+    sites = perceived
     if vacancies:
         sites = sites + vacancy_sites(metal_idx, coords[metal_idx], vacancies)
-    put_sites(reg, structure_id, sites)
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     pocket_donors = shifting_pocket_donors(mol, [s for s in sites if not s.is_vacancy])
     states = refresh_state(sites, coords, graph=graph, symbols=symbols,
                            pocket_donors=pocket_donors, fidelity=fidelity)
+    return perceived, sites, states
+
+
+def _record_sites(reg: Registry, structure_id: int, geometry_id: int,
+                  perceived_sites: tuple[list, list, list],
+                  fidelity: Fidelity) -> dict[str, Any]:
+    """Store what `_perceive_sites` computed: catalog, then state.  Writes only."""
+    perceived, sites, states = perceived_sites
+    drift = catalog_drift(reg, structure_id, perceived)
+    put_sites(reg, structure_id, sites)
     n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity)
     report: dict[str, Any] = {
         "n_sites": len(sites),
@@ -1302,9 +1331,10 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
         g = from_rdkit(mol, charge=payload["charge"], multiplicity=molecule.multiplicity,
                        name=name)
+        perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
         put = put_structure(reg, g, tags=[molecule.name, "ligand"])
         geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
-        detail["sites"] = _record_sites(reg, put.id, geom.id, mol, g, Fidelity.FF)
+        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
         for frag in decompose(g):
             alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
@@ -1315,15 +1345,21 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         mol, co_embed, _ = _co_ligand_mol(payload["smiles"])
         detail = {"embed": co_embed}
         g = from_rdkit(mol, multiplicity=1, name=payload["smiles"])
+        perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
         put = put_structure(reg, g, tags=[payload["smiles"], "ligand", "co-ligand"])
         geom = put_geometry(reg, put.id, to_xyz(mol, payload["smiles"]),
                             fidelity=Fidelity.FF, method=FF)
-        detail["sites"] = _record_sites(reg, put.id, geom.id, mol, g, Fidelity.FF)
+        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":
         built = _build_sphere(spec, payload)
         detail = built.detail
+        # The placer's empty vertices travel with the complex: metal at index 0, which is
+        # how `to_rdkit` lays the centre out.  Perceived before the first write.
+        perceived = _perceive_sites(built.mol, built.graph, Fidelity.RAW,
+                                    vacancies=built.result.vacancies,
+                                    metal_idx=built.result.metal_idx)
         put = put_structure(reg, built.graph,
                             tags=[*built.molecule_names, "complex", built.metal.symbol],
                             provenance=Provenance(kind="assembly", depth=1,
@@ -1332,11 +1368,7 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
                             fidelity=Fidelity.RAW, method=BUILD,
                             choice_vector=built.result.choice_vector,
                             seed=spec.seed, qc=built.result.report.to_dict())
-        # The placer's empty vertices travel with the complex: metal at index 0,
-        # which is how `to_rdkit` lays the centre out.
-        detail["sites"] = _record_sites(reg, put.id, geom.id, built.mol, built.graph,
-                                        Fidelity.RAW, vacancies=built.result.vacancies,
-                                        metal_idx=built.result.metal_idx)
+        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.RAW)
         detail["qc"] = built.result.report.to_dict()
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
@@ -1424,6 +1456,7 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
     a run means "not yet", while an empty build queue means "never again".
     """
     done = 0
+    idle = poll
     while limit is None or done < limit:
         if cancel_requested(reg, run_id):
             # Cooperative: the task in hand has already finished, and nothing new is
@@ -1431,14 +1464,17 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
             break
         task = claim_task(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds)
         if task is None:
-            if wait_while is not None and wait_while():
-                time.sleep(poll)
-                continue
-            if waiting_on_live_work(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds):
-                # Pending steps are held back until the task they join onto finishes.
-                time.sleep(poll)
+            # Waiting backs off: every idle poll is a read on the shared database, and
+            # thirty idle workers polling four times a second is load of its own.
+            if (wait_while is not None and wait_while()) or waiting_on_live_work(
+                    reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds):
+                # Relax work still coming, or steps held back until what they join onto
+                # finishes.
+                time.sleep(idle)
+                idle = min(idle * 2, MAX_IDLE_POLL)
                 continue
             break
+        idle = poll
         # Wall time of this task alone, in ms: `claimed_at`/`finished_at` are whole seconds.
         started = time.perf_counter()
         try:
@@ -1454,6 +1490,14 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
             fail_task(reg, task.id, str(exc), rejected=True, code=exc.code,
                       detail={**(exc.detail or {}), "duration_ms":
                               round((time.perf_counter() - started) * 1000)})
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            # The database was busy, which says nothing about the task: undo what it had
+            # written and put it back for the next claim, instead of recording a failure.
+            reg.conn.rollback()
+            release_task(reg, task.id)
+            continue
         except Exception as exc:                                   # noqa: BLE001
             # An unexpected exception is a bug, and the type is the most useful thing to
             # group by — twenty tasks dying of one IndexError is one problem, not twenty.
@@ -1462,6 +1506,9 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
                       detail={"traceback": traceback.format_exc()[-4000:],
                               "task_kind": task.kind, "payload": task.payload,
                               "duration_ms": round((time.perf_counter() - started) * 1000)})
+        # Committed now, not at the next claim: until then this worker holds the one write
+        # lock, and every other worker's next write waits behind it.
+        reg.conn.commit()
         # After the task, not only at the claim: a worker part-way through a long queue
         # is the case a heartbeat exists to distinguish from one that died at the first.
         touch_run(reg, run_id)

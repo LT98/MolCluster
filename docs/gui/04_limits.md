@@ -34,19 +34,22 @@ builder page:
   open. That is the S4 capability reaching the GUI **as behaviour rather than as a
   control**, and it is why co-ligand ladder runs stopped producing `chelate_cannot_span`.
 
-## The pathway ladder stops at 12000 tasks
+## A spec you submit is never cut; a large one is flagged
 
-`runner.MAX_PATHWAY_TASKS` caps the whole plan once the ladder walk starts. When it bites,
-the rungs below some products are **not planned** — their steps and intermediates are
-missing, so part of the graph is not one connected ladder. It is never silent:
-the diagnostic carries `cap` and `uncapped_tasks` (the ladder's full size, from the same
-walk run uncapped on a copy), `estimate` returns it under `capped`, and the builder page
-leads its estimate with it.
+A spec you submit — from the builder page or `scripts/run_spec.py` — is planned **in full**,
+whatever its size. Above `runner.MAX_PATHWAY_TASKS` (12000 tasks) the estimate adds a `large`
+entry and the builder page shows an amber *large run* line; that is a warning about compute
+time, not a limit. (Until 2026-09-24 the ladder was cut at the cap and `MAX_COMPOSITIONS` cut
+the composition list — the latter silently.)
 
-The co-ligand range (D26) is the setting most likely to reach it. Measured on
-`data/reference/spec_ni_thq_cl_slice.json` re-read as a v8 spec:
+The caps still exist for planning the **backend starts on its own**:
+`enumerate_plan(spec, guard=True)` cuts at `MAX_PATHWAY_TASKS` and `MAX_COMPOSITIONS` (4000 per
+metal/count/CN) and reports each cut with `cap` and the uncut size (`uncapped_tasks`), which
+`estimate` returns under `capped` and the builder page shows in red.
 
-| `co_ligand_counts` / window | tasks | capped? |
+Sizes, measured on `data/reference/spec_ni_thq_cl_slice.json` re-read as a v8 spec:
+
+| `co_ligand_counts` / window | tasks | large? |
 |---|---|---|
 | `fill` (what the v7 file plans) | 722 | no |
 | `range`, window 0 (no steps) | 243 | no |
@@ -55,9 +58,9 @@ The co-ligand range (D26) is the setting most likely to reach it. Measured on
 | `range`, window 3 | 2521 | no |
 | `range`, window 2, CN `4,6` | 3059 | no |
 
-The cap is 12000: the salt study's acetate spec (`spec_salt_nioac2_thq.json`, tHQ up to
-two protons, CN `4,6`, window 2) plans 11,064 tasks and fits uncut. Past it: narrow `max_distinct_ligands` or the CN list,
-lower the window, or use `fill`.
+The salt study's acetate spec (`spec_salt_nioac2_thq.json`, tHQ up to two protons, CN `4,6`,
+window 2) plans 11,064 tasks, just under the warning. To make a run smaller: narrow
+`max_distinct_ligands` or the CN list, lower the window, or use `fill`.
 
 ## Placer refusals leave holes in a co-ligand ladder
 

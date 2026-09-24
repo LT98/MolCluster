@@ -94,6 +94,41 @@ def test_a_step_waits_for_the_rung_it_joins_onto(reg):
     assert claim_task(reg, run_id).kind == "grow"
 
 
+def test_a_released_task_goes_back_to_the_queue_with_its_attempts_counted(reg):
+    from mofsbu.registry.jobs import release_task
+
+    run_id = create_run(reg, catechol_spec())
+    tid = add_task(reg, run_id, "place", {})
+    first = claim_task(reg, run_id)
+    release_task(reg, tid)
+    again = claim_task(reg, run_id)
+    assert again.id == first.id == tid
+    assert again.attempts == first.attempts + 1
+
+
+def test_a_busy_database_retries_the_task_instead_of_failing_it(reg, monkeypatch):
+    """`database is locked` says nothing about the task: it is put back and done next time,
+    not recorded as an OperationalError failure."""
+    import sqlite3
+
+    from mofsbu import runner
+
+    run_id = create_run(reg, catechol_spec())
+    tid = add_task(reg, run_id, "place", {})
+    calls = {"n": 0}
+
+    def flaky(reg_, task, spec):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return runner.Outcome(None, None)
+
+    monkeypatch.setattr(runner, "execute", flaky)
+    runner.work(reg, catechol_spec(), run_id)
+    row = reg.conn.execute("SELECT status, attempts FROM tasks WHERE id=?", (tid,)).fetchone()
+    assert (row["status"], row["attempts"]) == ("done", 2)
+
+
 def test_rejected_is_not_failed(reg):
     """A candidate that fails QC is an answer, not a crash.
 

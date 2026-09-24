@@ -12,6 +12,45 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B26 — `database is locked` with many build workers ✅
+
+**`correctness` · `runner.py`, `assembly/persist.py`, `registry/jobs.py` · reported from a
+32-worker builder-page run of the THQ ≤2 salt-study spec.**
+
+A `place` (and `ligand`, `co_ligand`, `grow` via `store_block`) task wrote its structure and
+geometry, **then** ran site perception and state (`perceive`, `shifting_pocket_donors`,
+`refresh_state`), then wrote again — and nothing committed until the worker's next claim. So
+each task held SQLite's single write lock through its own computation. Seven build workers
+fitted in the lock; thirty-two did not, and writes queued past `BUSY_TIMEOUT` (30 s). Measured
+on the THQ ≤2 NiCl₂ spec in construct mode with 32 workers: **34 tasks failed with
+`OperationalError: database is locked`, one worker died, 600 s**.
+
+The first suspect, B25's dependency check inside `claim_task`, was measured and cleared: a
+synthetic 32-worker claim/complete load had no lock errors with or without it.
+
+**Fix:** perception and state are computed before a task's first write
+(`runner._perceive_sites`, and `store_block` computes state before `put_structure`); every
+task commits as soon as its outcome is recorded; the claim searches with a plain read and takes
+the row by compare-and-set, so the lock is held for the update only; idle workers back off
+(0.25 → 5 s); and a lock error that still happens returns the task to the queue
+(`jobs.release_task`) instead of failing it. Same spec and workers after: **0 lock failures, 0
+retries needed, 141 s** — 4× faster, because the lock had been the bottleneck. Tests:
+`tests/test_jobs.py` (a busy database retries the task; a released task keeps its attempts).
+
+---
+
+## B4 — the run inspector's "what was attempted" read `undefined` ✅
+
+**`cosmetic` · `ui/static/runs.html`.** `attempted()` read the flat `p.molecule` / `p.donors` /
+`p.n_ligands` keys of an old `place` payload; every current payload carries a `components` list
+(`place`), one `component` (`grow`) or a structure and geometry (`relax`). It now renders each
+kind in the spec's own names — `Ni(+2) + 2× tHQ 1-dentate mono · +2 O · CN 4 tetrahedral`,
+`add tHQ … onto task #4288 → task #3376`, `relax structure #279 from geometry #3188 · mace_omol`
+— and still reads the old flat shape, as `runner._components` does. Checked against one real
+payload of each kind from `salt_study_k1.db`.
+
+---
+
 ## B21 — an octahedral centre with chelates and empty vertices was refused ✅
 
 **`correctness` · `geometry/placer.py`, `runner._build_sphere` · reported with D26, fixed in the

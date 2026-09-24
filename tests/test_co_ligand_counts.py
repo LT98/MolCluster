@@ -242,16 +242,27 @@ def test_a_charged_co_ligand_is_not_stepped_and_says_why():
 
 # ── the cap says it bit ──────────────────────────────────────────────────────
 
-def test_a_ladder_cut_by_the_cap_says_so_and_how_big_it_was(monkeypatch):
+def test_a_guarded_ladder_cut_by_the_cap_says_so_and_how_big_it_was(monkeypatch):
+    """The cap binds planning the backend starts on its own (`guard=True`)."""
     uncapped = len(enumerate_plan(aqua_spec()).tasks)
     monkeypatch.setattr(runner, "MAX_PATHWAY_TASKS", 8)
-    planned = enumerate_plan(aqua_spec())
+    planned = enumerate_plan(aqua_spec(), guard=True)
     cap = [d for d in planned.diagnostics if "cap" in d]
     assert len(cap) == 1 and cap[0]["cap"] == 8
     assert cap[0]["uncapped_tasks"] == uncapped > len(planned.tasks)
     assert "co_ligand_window" in cap[0]["hint"]
+
+
+def test_a_submitted_spec_is_planned_in_full_and_only_warned_about(monkeypatch):
+    """A person's spec is never cut: the estimate calls it large and plans all of it."""
+    uncapped = len(enumerate_plan(aqua_spec()).tasks)
+    monkeypatch.setattr(runner, "MAX_PATHWAY_TASKS", 8)
+    planned = enumerate_plan(aqua_spec())
+    assert len(planned.tasks) == uncapped
+    assert not [d for d in planned.diagnostics if "cap" in d]
     guess = estimate(aqua_spec())
-    assert guess["capped"] and guess["capped"][0]["uncapped_tasks"] == uncapped
+    assert guess["capped"] == [] and guess["tasks"] == uncapped
+    assert guess["large"] and guess["large"][0]["tasks"] == uncapped
 
 
 def test_an_uncapped_estimate_says_nothing_was_cut():

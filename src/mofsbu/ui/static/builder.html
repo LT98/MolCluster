@@ -607,7 +607,12 @@ function renderEstimate(res) {
   const capped = (res.capped || []).map(c =>
     `<div class="err">capped at ${c.cap} tasks — the full ladder would be ${c.uncapped_tasks}; `
     + `rungs below some products are NOT planned. ${c.hint}</div>`).join('');
-  el.innerHTML = capped +
+  // Large is advisory: the run is planned in full, so it is a warning about time, in amber,
+  // never a cut.
+  const large = (res.large || []).map(l =>
+    `<div style="color:var(--warn)">large run: ${l.reason}. Expect hours of compute; `
+    + `the run is resumable if stopped.</div>`).join('');
+  el.innerHTML = capped + large +
     `<b>≈ ${res.total} task${res.total === 1 ? '' : 's'}</b> `
     + `<span class="muted">${parts.join(' · ') || 'nothing to build'}</span>${relax}`
     + (res.diagnostics && res.diagnostics.length

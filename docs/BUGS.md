@@ -16,7 +16,6 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 |---|---|---|---|
 | [B2](#b2) | honesty | `runner.py` | Every stored row's `l2_isomer_tag` is `''`, so cis and trans are one row. The classifier exists; the run pipeline declines to use it (**D19**, **D22**) |
 | [B3](#b3) | honesty | registry data | 16 structures have no `site_state`; `n_open_sites` is NULL, not 0. **Self-healing (D19)** |
-| [B4](#b4) | cosmetic | `ui/static/runs.html` | "What was attempted" renders `molecule undefined · undefined×0-dentate` |
 | [B5](#b5) | undecided | `ui/static/builder.html` | The builder posts `spec_version: 1` and no test covers the migration it relies on |
 | [B6](#b6) | undecided | `ui/static/index.html` | The registry page never refreshes, so its counts go stale silently |
 | [B7](#b7) | blocked | `scripts/ingest.py` | The legacy `.xyz` corpus cannot be ingested: no charge, no multiplicity |
@@ -85,25 +84,6 @@ consumer that treats it as 0. Until every row has been touched, the registry is 
 
 *(An earlier revision of this note said 569 of 594. That was a different registry; the numbers
 above are a fresh query against `data/registry.db`.)*
-
----
-
-## B4
-
-**The run inspector's most useful column renders `undefined`.** `cosmetic` ·
-`ui/static/runs.html:433`
-
-For `place` tasks the "what was attempted" column reads
-`molecule undefined · undefined×0-dentate`.
-
-**Cause, confirmed:** the payload shape changed and the page did not follow it. A `place`
-payload used to name one molecule and a count; it now carries a `components` list
-(`runner._components` at [runner.py:246](../src/mofsbu/runner.py:246) still accepts both
-shapes). The JS reads the flat `p.molecule` / `p.donors` / `p.n_ligands` keys, which no new
-payload has.
-
-Fix is to read `components` with the same both-shapes fallback the runner already implements,
-rather than to teach the planner to write the old keys back.
 
 ---
 
