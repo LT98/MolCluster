@@ -1479,8 +1479,10 @@ def _worker_process(db_path: str, store_path: str, spec_json: str, run_id: int,
     exited: while it is clear, an empty relax queue means the builders have not caught up
     yet, and the relax worker waits rather than finishing a run that is not over.
     """
+    from mofsbu.config import name_process
     from mofsbu.registry import BlobStore
 
+    name_process(f"mofsbu-{'relax' if kinds == RELAX_KINDS else 'build'}:{run_id}")
     with Registry(Path(db_path), BlobStore(Path(store_path))) as reg:
         work(reg, BuildSpec.from_json(spec_json), run_id, kinds=kinds,
              exclude_kinds=exclude_kinds,
@@ -1680,6 +1682,8 @@ def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[s
                  if swept["returned_claims"] else ""))
     run_id, n_tasks = plan(reg, spec)
     reg.conn.commit()
+    from mofsbu.config import name_process
+    name_process(f"mofsbu-run:{run_id}")
     pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
     if spec.run_mode != "construct":
         # Printed before any work starts: an accelerator sitting idle for a whole run is

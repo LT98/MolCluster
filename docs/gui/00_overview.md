@@ -16,6 +16,12 @@ for development, `--log-level` (defaults to `warning` so an open run does not bu
 console). `launch/mofsbu.sh`, `launch/mofsbu.bat` and
 `launch/install-desktop-entry.sh` wrap this for a double-click start.
 
+**Finding it later.** On Linux the server names itself `mofsbu-ui:<port>` (and a run's processes
+`mofsbu-run:<id>`, `mofsbu-build:<id>`, `mofsbu-relax:<id>`), so a system monitor shows those rather
+than `python`. That matters when an SSH session drops and a viewer started in it keeps running on its
+own: `pgrep -a mofsbu-ui` finds it, `pkill mofsbu-ui:8000` stops it. Start long-lived viewers inside
+`tmux` so you can reattach instead.
+
 On an interactive terminal, start-up asks two questions before serving: whether to use
 CUDA for this server's `ml_go`/`xtb_go` runs, and whether to allow more than one
 in-process worker. Neither is inferred from the hardware — the device is *declared*, and

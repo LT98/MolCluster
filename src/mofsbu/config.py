@@ -31,6 +31,20 @@ def store_root() -> Path:
     return data_root() / "store"
 
 
+def name_process(name: str) -> None:
+    """Name this process as a system monitor shows it (`top`, `ps -o comm`, GNOME).
+
+    Otherwise every viewer and worker is just `python`, which is what an orphaned viewer
+    looks like after an SSH session drops.  Linux only (`/proc/self/comm`, 15 characters);
+    anywhere else, or if the kernel refuses, nothing happens — a name is a convenience.
+    """
+    try:
+        with open("/proc/self/comm", "w") as f:
+            f.write(name[:15])
+    except OSError:
+        pass
+
+
 # ── machine profile: the laptop must never be swamped by a build ──────────────
 # Ground rule 8.  Parallelism is opt-in.  An unconfigured machine is treated as the
 # laptop and runs ONE in-process worker; the workstation is declared, not detected, so a

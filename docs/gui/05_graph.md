@@ -102,8 +102,10 @@ the chart survive being printed.
 Each route has a line in **routes**: its swatch, where it bottoms out, its total, its rung, its
 worst single step (none for a route with a pivot), a **composed** badge where it turns, and a ×
 to take it off the chart. **drop node** on the *standing on* heading
-removes a node and with it every route that goes through it — a route is a claim about how the
-target is reached, and leaving the remainder of one behind would draw a route nobody built.
+cuts every route that passes through the node: each keeps its part from the target up to the node
+before it, and the node and everything beyond it go. What is left is still a route that was walked
+hop by hop, only shorter, and it is priced again. Routes the cut makes identical merge into one; a
+route left as the target alone is removed. The target itself cannot be dropped.
 
 ## Reading the chart
 
@@ -192,6 +194,13 @@ because one edge names two reagents and stepping into either is a different walk
 Replaying a link rebuilds each route against the registry in front of it rather than trusting
 it. A leg that no longer holds stops that route and says which one, instead of quietly
 producing a shorter walk that would look deliberate.
+
+**The walk survives leaving the page.** The tabs link to a bare `/graph`, so the page also keeps
+the link (and the chosen medium and H⁺ destination) in this browser's `localStorage`, **per
+database**: a structure id means a different species in another registry. Opening `/graph` with no
+hash puts back the last walk for the active database; a link that carries its own hash always
+wins. It is per browser and per viewer address: a different machine, a private window or a
+different forwarded port (`localhost:8000` vs `localhost:8013`) starts clean.
 
 ## Where the numbers come from
 
