@@ -24,6 +24,8 @@ from mofsbu.registry.db import Registry, utcnow
 from mofsbu.spec import BuildSpec
 
 PENDING, CLAIMED, DONE, FAILED, REJECTED = "pending", "claimed", "done", "failed", "rejected"
+#: How many times one claim looks again after another worker took the row it chose.
+CLAIM_ATTEMPTS = 8
 # A build you stopped on purpose is not a build that failed.  Keeping them apart is the
 # same rule as `rejected` vs `failed`: a run list where every abandoned experiment reads
 # as a crash is a run list nobody trusts.
@@ -157,9 +159,10 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
                exclude_kinds: Sequence[str] | None = None) -> Task | None:
     """Atomically take one pending task, or None if there are none left.
 
-    IMMEDIATE acquires the write lock before reading, so the select-then-update cannot
-    interleave with another worker doing the same thing.  Without it two workers happily
-    claim the same row and do the same job twice.
+    The row is taken by a compare-and-set (`UPDATE … WHERE status='pending'`) under
+    IMMEDIATE, so two workers that chose the same row cannot both have it: the loser sees
+    zero rows changed and looks again.  Without that, two workers claim the same row and
+    do the same job twice.
 
     `kinds` / `exclude_kinds` narrow what this worker will take, which is what makes a
     heterogeneous pool possible: the tasks a GPU should run and the tasks that should
@@ -179,6 +182,33 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
 
     who = worker or worker_id()
     conn = reg.conn
+    where = ["status = ?"]
+    args: list[Any] = [PENDING]
+    if run_id:
+        where.append("run_id = ?")
+        args.append(run_id)
+    if kinds is not None:
+        where.append(f"kind IN ({','.join('?' * len(kinds))})")
+        args += list(kinds)
+    if exclude_kinds:
+        where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
+        args += list(exclude_kinds)
+    # A step that joins onto another task's product waits for it (B25).  Only `grow`
+    # names a parent, so only a `grow` row pays for reading its payload.
+    where.append(
+        "(kind != 'grow' OR NOT EXISTS (SELECT 1 FROM tasks dep WHERE dep.id IN ("
+        "json_extract(tasks.payload_json, '$.parent_task'), "
+        "json_extract(tasks.payload_json, '$.ligand_task')) AND dep.status IN (?, ?)))")
+    args += [PENDING, CLAIMED]
+    sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks WHERE "
+           + " AND ".join(where) + " ORDER BY priority DESC, id ASC LIMIT 1")
+
+    # The search is a plain read — WAL lets it run beside a writer — and the write lock is
+    # held only for the compare-and-set that takes the row.  Searching inside the lock held
+    # it for up to ~11 ms per claim on a 13k-task queue, and 32 workers polling that way
+    # starved every real write past BUSY_TIMEOUT.  A row another worker took first is
+    # simply looked for again.
+    #
     # sqlite3 opens an implicit transaction for DML, so an explicit BEGIN IMMEDIATE
     # collides with it.  The connection is switched to manual control for the duration of
     # the claim only: making it global would turn every multi-statement write (put_structure
@@ -188,47 +218,46 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
     previous = conn.isolation_level
     conn.isolation_level = None
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        where = ["status = ?"]
-        args: list[Any] = [PENDING]
-        if run_id:
-            where.append("run_id = ?")
-            args.append(run_id)
-        if kinds is not None:
-            where.append(f"kind IN ({','.join('?' * len(kinds))})")
-            args += list(kinds)
-        if exclude_kinds:
-            where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
-            args += list(exclude_kinds)
-        # A step that joins onto another task's product waits for it: claimed while its
-        # parent was still being built, it was rejected as `pathway_parent_missing`.
-        where.append(
-            "NOT EXISTS (SELECT 1 FROM tasks dep WHERE dep.id IN ("
-            "json_extract(tasks.payload_json, '$.parent_task'), "
-            "json_extract(tasks.payload_json, '$.ligand_task')) AND dep.status IN (?, ?))")
-        args += [PENDING, CLAIMED]
-        sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks WHERE "
-               + " AND ".join(where) + " ORDER BY priority DESC, id ASC LIMIT 1")
-        row = conn.execute(sql, tuple(args)).fetchone()
-        if row is None:
-            conn.execute("COMMIT")
-            return None
-        now = utcnow()
-        conn.execute(
-            "UPDATE tasks SET status=?, claimed_by=?, claimed_at=?, attempts=attempts+1 "
-            "WHERE id=?", (CLAIMED, who, now, row["id"]))
-        # In the same transaction as the claim, because it is the same fact: a worker is
-        # here.  `run_liveness` reads it to tell a run nobody is working on from one
-        # whose worker simply has nothing to report yet.
-        conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?", (now, row["run_id"]))
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+        for _ in range(CLAIM_ATTEMPTS):
+            row = conn.execute(sql, tuple(args)).fetchone()
+            if row is None:
+                return None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = utcnow()
+                taken = conn.execute(
+                    "UPDATE tasks SET status=?, claimed_by=?, claimed_at=?, "
+                    "attempts=attempts+1 WHERE id=? AND status=?",
+                    (CLAIMED, who, now, row["id"], PENDING)).rowcount
+                if taken:
+                    # In the same transaction as the claim, because it is the same fact: a
+                    # worker is here.  `run_liveness` reads it to tell a run nobody is
+                    # working on from one whose worker has nothing to report yet.
+                    conn.execute("UPDATE runs SET heartbeat_at=? WHERE id=?",
+                                 (now, row["run_id"]))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            if taken:
+                return Task(int(row["id"]), int(row["run_id"]), row["kind"],
+                            json.loads(row["payload_json"]), int(row["attempts"]) + 1)
+        return None
     finally:
         conn.isolation_level = previous
-    return Task(int(row["id"]), int(row["run_id"]), row["kind"],
-                json.loads(row["payload_json"]), int(row["attempts"]) + 1)
+
+
+def release_task(reg: Registry, task_id: int) -> None:
+    """Put a claimed task back in the queue, as if it had never been taken.
+
+    For a task that did not fail on its own account — the database was busy — so it is
+    retried by whichever worker claims it next rather than recorded as a failure.
+    `attempts` keeps counting, so a task that keeps being returned is visible.
+    """
+    reg.conn.execute(
+        "UPDATE tasks SET status=?, claimed_by=NULL, claimed_at=NULL WHERE id=? AND status=?",
+        (PENDING, task_id, CLAIMED))
+    reg.conn.commit()
 
 
 def waiting_on_live_work(reg: Registry, run_id: int, *,

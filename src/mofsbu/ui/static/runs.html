@@ -229,6 +229,7 @@ async function render(force){
   state.tasks = tasks.tasks;
   const s = run.summary, c = s.counts || {};
   const spec = run.spec || {};
+  state.spec = spec;                 // `attempted` names molecules and metals from it
 
   // settled = the outcomes that are finished being decided.  A rejection belongs here:
   // the task ran and the answer was no.  Merging rejected into "unsuccessful" alongside
@@ -477,18 +478,54 @@ function stopButton(run){
 }
 
 // ── one task ────────────────────────────────────────────────────────────────
+/* What a task set out to build, in the spec's own names (B4).  Payloads name molecules
+   and metals by their index in the spec; a `place` carries a `components` list, a `grow`
+   the one `component` it adds, a `relax` the structure and geometry it starts from.  The
+   flat keys an older `place` payload used are still read, as `runner._components` does. */
+function molName(i){
+  const m = ((state.spec || {}).molecules || [])[i];
+  return m ? m.name : `molecule ${i}`;
+}
+function metalName(i){
+  const m = ((state.spec || {}).metals || [])[i];
+  return m ? `${m.symbol}(${m.oxidation_state >= 0 ? '+' : ''}${m.oxidation_state})` : `metal ${i}`;
+}
+function protomer(label){
+  // "-1Hcfg(0)sep()" -> "−1H": the configuration detail is on the structure itself.
+  const m = /^-(\d+)H/.exec(label || '');
+  return m ? ` <span class="muted">−${m[1]}H</span>` : '';
+}
+function piece(c){
+  if(c.co_ligand) return `${esc(c.co_ligand)} <span class="muted">(co-ligand)</span>`;
+  return `${c.count > 1 ? c.count + '× ' : ''}${esc(molName(c.molecule))}${protomer(c.label)}`
+    + ` <span class="muted">${c.denticity || 1}-dentate${c.mode ? ' ' + esc(c.mode) : ''}</span>`;
+}
 function attempted(t){
   const p = t.payload || {};
-  if(t.kind === 'co_ligand')
-    return `free co-ligand ${esc(p.smiles || '')}`;
-  if(t.kind === 'ligand')
-    return `molecule ${p.molecule} <span class="muted">protomer ${esc(p.label || '·')} q=${p.charge}</span>`;
-  const bits = [`molecule ${p.molecule}`, `metal ${p.metal}`,
-    `CN ${p.cn} ${esc(p.geometry || '')}`,
-    `${p.n_ligands}×${(p.donors || []).length}-dentate ${esc(p.mode || '')}`];
-  if(p.n_co) bits.push(`+${p.n_co} co-ligand`);
-  if(p.label) bits.push(`protomer ${esc(p.label)}`);
-  return bits.join(' · ');
+  switch(t.kind){
+    case 'co_ligand':
+      return `free co-ligand ${esc(p.smiles || '')}`;
+    case 'ligand':
+      return `free ${esc(molName(p.molecule))}${protomer(p.label)} <span class="muted">q=${p.charge}</span>`;
+    case 'relax':
+      return `relax structure #${p.structure_id} <span class="muted">from geometry #${p.geometry_id}`
+        + `${p.ml_model ? ' · ' + esc(p.ml_model) : ''}${p.solvent ? ' · ' + esc(p.solvent) : ''}</span>`;
+    case 'grow':
+      return `add ${piece(p.component || {})} onto task #${p.parent_task}`
+        + ` <span class="muted">→ task #${p.child_task} · CN ${p.cn} ${esc(p.geometry || '')}</span>`;
+    case 'place': {
+      const comps = p.components || (p.molecule !== undefined
+        ? [{molecule: p.molecule, count: p.n_ligands || 1, denticity: (p.donors || []).length || 1,
+            mode: p.mode, label: p.label}] : []);
+      const bits = [`${esc(metalName(p.metal))} + ${comps.map(piece).join(' + ') || 'no ligand'}`];
+      if(p.n_co) bits.push(`+${p.n_co} ${esc((state.spec || {}).co_ligand || 'co-ligand')}`);
+      if(p.n_vacant) bits.push(`${p.n_vacant} empty`);
+      bits.push(`CN ${p.cn} ${esc(p.geometry || '')}`);
+      return bits.join(' · ');
+    }
+    default:
+      return `<span class="muted">${esc(JSON.stringify(p).slice(0, 120))}</span>`;
+  }
 }
 
 function flags(t){

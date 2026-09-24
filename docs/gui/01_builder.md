@@ -56,10 +56,9 @@ with the code.
   present cannot be selected, and one that is gets named rather than called "MACE".
 - **Estimate before submitting**: `POST /api/estimate` runs the same enumeration
   submitting would, so the number on the page is the number you get. There is a test
-  pinning those two together, because otherwise the number is decoration. When the
-  pathway ladder hits its task cap (`MAX_PATHWAY_TASKS`, 12000) the estimate leads with a
-  red line giving the cap and the size the uncapped ladder would have been — the run is
-  then **incomplete**, not merely large (see [limits](04_limits.md)).
+  pinning those two together, because otherwise the number is decoration. A spec you submit
+  is planned in full; above 12000 tasks (`MAX_PATHWAY_TASKS`) the estimate adds an amber
+  *large run* line — a warning about compute time, not a cut (see [limits](04_limits.md)).
 
 ## Side panels
 

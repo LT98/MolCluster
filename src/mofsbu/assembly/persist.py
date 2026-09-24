@@ -108,6 +108,18 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
 
     prov = Provenance(kind="assembly", reagent_ids=tuple(reagent_ids), note=note,
                       choice_vector_digest=cv.digest if cv else None, depth=depth)
+
+    # Site state is computed BEFORE the first write: SQLite has one write lock, and holding
+    # it through `refresh_state` starved the other workers once there were enough of them.
+    # Sites are INHERITED, never re-perceived here — see the module docstring.
+    sites = list(block.sites)
+    states = block.state
+    if states is None and coords is not None:
+        symbols = [graph.label(i).element for i in graph.nodes()]
+        states = {(s.atom_idx, getattr(s, "slot", 0)): s
+                  for s in refresh_state(sites, coords, graph=graph, symbols=symbols,
+                                         fidelity=fidelity)}
+
     put: Put = put_structure(reg, graph, l2=tag, provenance=prov, tags=tuple(tags))
 
     if coords is None:
@@ -123,15 +135,7 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
                         choice_vector=cv.data if cv else None, qc=qc,
                         seed=seed if seed is not None else (cv.seed if cv else None))
 
-    # Sites are INHERITED, never re-perceived here — see the module docstring.
-    sites = list(block.sites)
     n_sites = put_sites(reg, put.id, sites, algo=f"inherited/{ALGO_VERSIONS['graph_schema']}")
-    symbols = [graph.label(i).element for i in graph.nodes()]
-    states = block.state
-    if states is None:
-        states = {(s.atom_idx, getattr(s, "slot", 0)): s
-                  for s in refresh_state(sites, coords, graph=graph, symbols=symbols,
-                                         fidelity=fidelity)}
     n_states = put_site_state(reg, put.id, geom.id, list(states.values()), fidelity=fidelity)
 
     reaction_id = _edge_for(reg, put.id, prov)
