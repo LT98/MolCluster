@@ -686,12 +686,34 @@ coordinates.
 
   Size, measured on the reference slice re-read at v8: `fill` 722 tasks; `range` with `w` = 1
   1141; **`w` = 2 (the default) 2041**; `w` = 3 2521; CN `4,6` at `w` = 2, 3059. `MAX_PATHWAY_TASKS`
-  was raised from 2000 to 4000 so the default window fits CN `4,6` uncut.
+  was raised from 2000 to 4000 so the default window fits CN `4,6` uncut, then to 12000 for
+  the NiCl₂/Ni(OAc)₂ salt study (acetate spec 11,064 tasks).
   The cap is reported with the uncapped size rather than truncating silently. Migration: every
   `spec_version ≤ 7` reads `co_ligand_counts: fill` (window 2, inert under `fill`) and plans
   byte-identical tasks — pinned against the pre-v8 planner by digest
   (`tests/test_co_ligand_counts.py`), not by comparing the migration with itself. A charged
   co-ligand is not stepped until B20 is fixed; the planner says so.
+
+- **D27** **A species is entered in the form it exists in the study's medium, and its
+  charge is read off that form.** `max_deprotonations` says how far below the entered form
+  it may go; nothing is protonated upward. So chloride is `[Cl-]` with 0 and acetic acid is
+  `CC(=O)O` with 1 — never `Cl` with 1, which created Ni–ClH species that do not exist in
+  water and gave `mvp_ni_thq_cl.db` its most negative "deprotonations" (−3.65 eV). The rule
+  is a rule because the alternative was hand-picking which rows to ignore. It needed
+  `enumerate_protomers` to take the charge from the molecule rather than assume a neutral
+  input (B22). Stated in `data/reference/NOTES.md` beside the specs that follow it; a test
+  pins the anion charges (`tests/test_protomers.py`).
+
+- **D28** **A released proton goes to water unless the reader names another base, and the
+  choice is exact and visible.** A deprotonation edge is recorded with the H₂O/H₃O⁺ couple
+  (one proton, exactly — B23). `price_path(proton_sink=A⁻)` re-points each released H₃O⁺ to a
+  free base whose conjugate acid the registry holds, by adding n × (H₃O⁺ + A⁻ → H₂O + HA) to
+  the step, priced from stored energies in the route's medium. Hess's law makes it exact; the
+  step's terms, the basis and the net equation all name HA, and the chart badges the route.
+  It is a query-time choice (like the medium), never stored and never a default other than
+  water, because which base takes the proton is the chemistry being compared — acetate is a
+  base and chloride is not. Test: `tests/test_path_energy.py` (a deprotonation with acetate as
+  the sink equals the direct AH + OAc⁻ → A⁻ + HOAc).
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in

@@ -14,58 +14,114 @@ project fails to be. These are the first numbers here that `strict=True` accepts
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from mofsbu._types import Fidelity, MofsbuError
 from mofsbu.energy.reference import put_balanced_reaction
+from mofsbu.graph._types import EdgeType, TypedGraph
+from mofsbu.identity import l1_graph_hash
+from mofsbu.registry.api import get_graph
 
-__all__ = ["deprotonation_pairs", "link_protomers", "PROTON_DONOR", "PROTON_ACCEPTOR"]
+__all__ = ["deprotonation_pairs", "ensure_couple", "ensure_species", "labile_hydrogens",
+           "link_protomers", "COUPLE", "PROTON_DONOR", "PROTON_ACCEPTOR"]
 
 #: The couple, by the `TypedGraph.name` `examples` gives them.
 PROTON_DONOR = "water"          # takes the proton away: H2O -> H3O+
 PROTON_ACCEPTOR = "hydronium"
 
-_FORMULA = re.compile(r"([A-Z][a-z]?)(\d*)")
+
+#: The couple as species: (name, SMILES, charge).  Charge is declared, not inferred —
+#: `[OH3+]` is only a proton carrier because we say it carries one.
+COUPLE = ((PROTON_DONOR, "O", 0), (PROTON_ACCEPTOR, "[OH3+]", 1))
 
 
-def _counts(formula: str) -> dict[str, int]:
-    """Element counts from a Hill string, for NARROWING ONLY — the graph decides."""
-    out: dict[str, int] = {}
-    for element, n in _FORMULA.findall(formula or ""):
-        if element:
-            out[element] = out.get(element, 0) + (int(n) if n else 1)
+def ensure_species(reg: Any, name: str, smiles: str, charge: int, *,
+                   target: Fidelity, ml_model: str | None) -> int:
+    """Register a small closed-shell species if absent, with an energy at `target`.
+
+    Relaxed at the level of theory the run used, because `energy.reference` refuses to
+    subtract energies computed at different ones.  A species that already has an energy
+    at `target` is left alone — the run's own `co_ligand` task has usually relaxed water.
+    """
+    from mofsbu._types import MethodSpec
+    from mofsbu.energy.relax import relax_geometry
+    from mofsbu.geometry.embed import embed_molecule, to_xyz
+    from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
+    from mofsbu.registry import put_geometry, put_structure
+
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    graph = from_rdkit(mol, charge=charge, multiplicity=1, name=name)
+    sid = put_structure(reg, graph, tags=[name, "reference"]).id
+    xyz_text = to_xyz(mol, name)
+    put_geometry(reg, sid, xyz_text, fidelity=Fidelity.FF,
+                 method=MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF"))
+    if target <= Fidelity.FF:
+        return sid
+    if reg.conn.execute(
+            "SELECT 1 FROM geometries WHERE structure_id=? AND fidelity=? "
+            "AND energy IS NOT NULL", (sid, int(target))).fetchone():
+        return sid
+    lines = [ln for ln in xyz_text.splitlines()[2:] if ln.strip()]
+    result = relax_geometry([[float(x) for x in ln.split()[1:4]] for ln in lines],
+                            [ln.split()[0] for ln in lines], charge=charge, multiplicity=1,
+                            target=target, ml_model=ml_model)
+    put_geometry(reg, sid, result.to_xyz(name), fidelity=result.fidelity,
+                 method=result.method, energy=result.energy, converged=result.converged)
+    return sid
+
+
+def ensure_couple(reg: Any, *, target: Fidelity, ml_model: str | None) -> tuple[int, int]:
+    """`(water_id, hydronium_id)`, each with an energy at `target`."""
+    ids = [ensure_species(reg, name, smiles, charge, target=target, ml_model=ml_model)
+           for name, smiles, charge in COUPLE]
+    return ids[0], ids[1]
+
+
+def labile_hydrogens(g: TypedGraph) -> list[int]:
+    """Every H bonded to one non-carbon, non-metal atom: the protons a graph can lose."""
+    out = []
+    for i in g.nodes():
+        if g.label(i).element != "H":
+            continue
+        nbrs = g.neighbors(i)
+        if (len(nbrs) == 1 and not g.is_metal(nbrs[0])
+                and g.label(nbrs[0]).element != "C"
+                and g.edge_type(i, nbrs[0]) is EdgeType.COVALENT):
+            out.append(i)
     return out
 
 
 def deprotonation_pairs(reg: Any) -> list[tuple[int, int, int]]:
-    """`(protonated_id, deprotonated_id, n)` for every pair differing by n protons.
+    """`(protonated_id, deprotonated_id, 1)` for every pair exactly one proton apart.
 
-    Candidates only: `put_balanced_reaction` weighs each one on the typed graphs and
-    refuses what does not balance, so nothing here is trusted beyond picking rows to try.
+    Exact, not by formula: each labile H of the protonated graph is removed
+    (`TypedGraph.without_proton`) and the result is looked up by L1 hash, charge and
+    multiplicity. So an edge never also moves which atom binds the metal, and the atoms
+    that differ are exactly one H — which is what makes its dE a deprotonation energy.
+    Two protons apart is two edges through the intermediate, never one.
     """
     rows = [r for r in reg.conn.execute(
-        "SELECT id, formula, net_charge FROM structures WHERE hidden = 0")]
-    by_key: dict[tuple[str, int], list[int]] = {}
+        "SELECT id, l1_graph_hash, net_charge, multiplicity FROM structures WHERE hidden = 0")]
+    index: dict[tuple[str, int, int], list[int]] = {}
     for r in rows:
-        counts = _counts(r["formula"])
-        # Removing a proton takes one H and one unit of charge together, so
-        # `charge - H` is what two protomers of the same molecule share.
-        key = ("".join(f"{e}{counts[e]}" for e in sorted(counts) if e != "H"),
-               int(r["net_charge"] or 0) - counts.get("H", 0))
-        by_key.setdefault(key, []).append(int(r["id"]))
+        index.setdefault((r["l1_graph_hash"], int(r["net_charge"] or 0),
+                          int(r["multiplicity"] or 1)), []).append(int(r["id"]))
 
     out: list[tuple[int, int, int]] = []
-    counts_by_id = {int(r["id"]): _counts(r["formula"]) for r in rows}
-    charge_by_id = {int(r["id"]): int(r["net_charge"] or 0) for r in rows}
-    for group in by_key.values():
-        # Within a group the heavy-atom skeleton and the proton-corrected charge match, so
-        # any two members differ only in how many H they carry.
-        for a in group:
-            for b in group:
-                n = counts_by_id[a].get("H", 0) - counts_by_id[b].get("H", 0)
-                if n > 0 and charge_by_id[a] - charge_by_id[b] == n:
-                    out.append((a, b, n))
+    for r in rows:
+        g = get_graph(reg, int(r["id"]))
+        seen: set[str] = set()
+        for h in labile_hydrogens(g):
+            # The charge left behind is recorded on the atom or delocalised, depending on
+            # the molecule (`from_rdkit`); the rest of the graph must match exactly either way.
+            for localised in (True, False):
+                key = l1_graph_hash(g.without_proton(h, localised=localised))
+                if key in seen:       # a symmetry-equivalent proton: same product
+                    continue
+                seen.add(key)
+                for partner in index.get((key, int(r["net_charge"] or 0) - 1,
+                                          int(r["multiplicity"] or 1)), ()):
+                    out.append((int(r["id"]), partner, 1))
     return out
 
 

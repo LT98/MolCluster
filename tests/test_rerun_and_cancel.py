@@ -73,6 +73,20 @@ def test_rerunning_an_unchanged_spec_queues_no_new_relaxations(reg, null_ml):
     assert second["relaxed_geoms"] == first["relaxed_geoms"]
 
 
+def test_a_rerun_says_how_much_it_did_not_recompute_and_how_long_it_took(reg, null_ml):
+    """The saving is reported on the run, not inferred from a smaller task count."""
+    from mofsbu.registry.jobs import outcome_summary
+
+    first = run(reg, spec(run_mode="ml_go"))
+    assert outcome_summary(reg, first["run_id"])["relax_reused"] == 0
+    second = run(reg, spec(run_mode="ml_go"))
+    summary = outcome_summary(reg, second["run_id"])
+    assert summary["relax_reused"] == _counts(reg)["relax_tasks"]   # every one skipped
+    timing = outcome_summary(reg, first["run_id"])["timing"]
+    assert timing["relax"]["n"] > 0 and timing["place"]["n"] > 0
+    assert all(t["total_s"] >= 0 and t["p90_ms"] >= t["median_ms"] for t in timing.values())
+
+
 def test_a_third_run_is_free_too(reg, null_ml):
     run(reg, spec(run_mode="ml_go"))
     run(reg, spec(run_mode="ml_go"))

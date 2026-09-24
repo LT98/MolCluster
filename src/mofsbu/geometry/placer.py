@@ -181,6 +181,35 @@ def cis_vertices(geometry: str, cn: int, k: int = 2, *,
     return min(combinations(range(cn), k), key=lambda c: (widest(c), c))
 
 
+def reserve_for(geometry: str, cn: int, k: int, ligands: Sequence[LigandPlacement], *,
+                angle_deg: float | None = None) -> tuple[int, ...]:
+    """The `k` vertices to leave empty so that the ligands can still be placed (B21).
+
+    `cis_vertices` alone chooses the empty set before any chelate is served, and on an
+    octahedron that can strand a chelate on a trans pair: four vertices out of six always
+    contain a trans pair, so every set ties at 180 deg and the lowest indices leave the
+    other trans pair — the only one a chelate cannot span — to the ligand.  Candidates are
+    tried in `cis_vertices`'s own order (most cis first, lowest indices on a tie) and the
+    first that `_assign_targets` accepts wins, so a set that already worked is unchanged.
+    None accepted: `cis_vertices`'s answer, and the placer refuses it with its reason.
+    """
+    from itertools import combinations
+
+    targets = site_vectors(geometry, cn, 1.0, angle_deg=angle_deg)
+
+    def widest(combo: tuple[int, ...]) -> float:
+        return max(_angle_between(targets[i], targets[j])
+                   for i, j in combinations(combo, 2))
+
+    for combo in sorted(combinations(range(cn), k), key=lambda c: (widest(c), c)):
+        try:
+            _assign_targets(targets, list(ligands), reserved=combo)
+        except ValueError:
+            continue
+        return combo
+    return cis_vertices(geometry, cn, k, angle_deg=angle_deg)
+
+
 def bridging_metal_positions(mol: Chem.Mol, atom_idx: int, conf=None, *, geometry: str,
                              n_metals: int, d_m: float,
                              angle_deg: float | None = None) -> np.ndarray:

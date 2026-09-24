@@ -33,7 +33,7 @@ from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicit
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import (
-    GEOMETRIES, LigandPlacement, cis_vertices, place_mononuclear, to_rdkit)
+    GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
@@ -45,6 +45,7 @@ from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
     outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
+    waiting_on_live_work,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -119,7 +120,7 @@ def _compositions(kinds: list[dict[str, Any]], total: int,
 #: `MAX_COMPOSITIONS`: the ladder of a homoleptic sweep is short, the sub-multiset lattice
 #: of a mixed one is not, and hitting the ceiling is reported through the diagnostics
 #: rather than silently truncating the chain.
-MAX_PATHWAY_TASKS = 4000
+MAX_PATHWAY_TASKS = 12000
 
 #: A step runs after every rung is built (`place` is 0) and before the relaxations: it
 #: builds nothing the place tasks do not build, and what it adds is the EDGE.
@@ -893,7 +894,9 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
     # and those builds are byte-identical to a `placement 2` one.
     cn_asked = payload.get("cn")
     n_vacant = 0 if cn_asked is None else int(cn_asked) - sum(l.denticity for l in ligands)
-    reserve = (cis_vertices(payload["geometry"], int(cn_asked), n_vacant)
+    # Chosen with the ligands in view (B21): a set picked first could strand a chelate on
+    # the one trans pair left.
+    reserve = (reserve_for(payload["geometry"], int(cn_asked), n_vacant, ligands)
                if n_vacant >= 2 else None)
     try:
         # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
@@ -1111,6 +1114,55 @@ def _vertex_pair(block, donors: Sequence[Any], vacancies: Sequence[Any], metal: 
     return best, (best_verdict or worst)
 
 
+#: Roll offsets from a torsion well that a grow tries, in order, when the well alone
+#: clashes.  Zero first, so a join that needed no offset is unchanged.
+ROLL_OFFSETS_DEG = (0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0,
+                    -150.0, 180.0)
+
+
+def _first_clear_join(block, ligand, vacancies, donor, *, mode: str, metal: str,
+                      element: str, seed: int):
+    """The first monodentate join whose product passes clash QC, or the least bad one.
+
+    `join` takes the vertex, the donor's lone pair, the torsion well and a roll offset from
+    that well as choices, and each lands the ligand somewhere different; `place` searches
+    the sphere as a whole.  A grow that tried only the first choice rejected most products
+    `place` builds without difficulty (measured: every tHQ onto an octahedral rung, where
+    the few wells of an sp2 O swing the ring's other oxygens into the cis waters).  Every
+    vertex, lobe and well is tried at its own angle before any roll offset, so a pick that
+    needed no offset is the one it always was; the order is fixed, so a replay picks the
+    same one, and the pick travels in the choice vector.  Returns `(result, report, n_tried)`.
+    """
+    import numpy as np
+
+    from mofsbu.assembly.join import IncompatibleJoin, compatible, join
+
+    verdicts = [(v, compatible(donor, v, partner=metal, mode=mode, donor_element=element))
+                for v in vacancies]
+    open_ = [(v, verdict) for v, verdict in verdicts if verdict.feasible]
+    if not open_:
+        raise IncompatibleJoin(verdicts[-1][1])
+    best = None
+    tried = 0
+    for roll in ROLL_OFFSETS_DEG:
+        for vacancy, verdict in open_:
+            for lobe, well in itertools.product(range(max(verdict.lone_pairs, 1)),
+                                                range(max(len(verdict.wells or ()), 1))):
+                result = join(block, ligand, vacancy, donor, mode=mode, torsion_well=well,
+                              lone_pair=lobe, seed=seed, roll_deg=roll)
+                tried += 1
+                graph = result.block.graph
+                report = _clash_qc(graph, [graph.label(i).element for i in graph.nodes()],
+                                   np.asarray(result.block.geometry))
+                if report.ok:
+                    return result, report, tried
+                rank = (not report.marginal,
+                        max((c.overlap for c in report.clashes), default=0.0))
+                if best is None or rank < best[0]:
+                    best = (rank, result, report)
+    return best[1], best[2], tried
+
+
 def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Add one ligand to the rung below and record the step as a route to the product.
 
@@ -1127,7 +1179,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """
     import numpy as np
 
-    from mofsbu.assembly.join import IncompatibleJoin, join, join_chelate
+    from mofsbu.assembly.join import IncompatibleJoin, join_chelate
     from mofsbu.assembly.persist import store_block
 
     payload = task.payload
@@ -1181,9 +1233,12 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                 raise _Rejected(verdict.reason, code="chelate_cannot_span",
                                 detail={**detail, "strain": round(verdict.strain, 4)})
             result = join_chelate(block, ligand, list(pair), donors, seed=spec.seed)
+            report = None
         elif len(donors) == 1:
-            result = join(block, ligand, vacancies[0], donors[0], mode=comp["mode"],
-                          seed=spec.seed)
+            result, report, tried = _first_clear_join(
+                block, ligand, vacancies, donors[0], mode=comp["mode"],
+                metal=metal.symbol, element=elements[0], seed=spec.seed)
+            detail["join_choices_tried"] = tried
         else:
             raise _Rejected(
                 f"{len(donors)} donors at once: one donor is `join`, two are "
@@ -1195,10 +1250,10 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
         raise _Rejected(exc.verdict.reason, code="join_refused",
                         detail={**detail, "strain": round(exc.verdict.strain, 4)}) from exc
 
-    graph = result.block.graph
-    coords = np.asarray(result.block.geometry)
-    symbols = [graph.label(i).element for i in graph.nodes()]
-    report = _clash_qc(graph, symbols, coords)
+    if report is None:
+        graph = result.block.graph
+        report = _clash_qc(graph, [graph.label(i).element for i in graph.nodes()],
+                           np.asarray(result.block.geometry))
     if not report.ok and not (report.marginal and spec.run_mode != "construct"):
         raise _Rejected(str(report), code=report.code,
                         detail={**detail, "qc": report.to_dict()})
@@ -1328,8 +1383,11 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     target = MODE_FIDELITY.get(spec.run_mode)
     if target is None:
         return None
-    if existing_relaxation(reg, out.geometry_id, target, out.structure_id,
-                           None, spec.ml_model) is not None:
+    reused = existing_relaxation(reg, out.geometry_id, target, out.structure_id,
+                                 None, spec.ml_model)
+    if reused is not None:
+        # Recorded on the build task, so a run can say how much it did not recompute.
+        out.detail["relax_reused"] = reused
         # Re-running an unchanged spec rebuilds the same constructs, recognises them by
         # identity (D2), and hands back the geometry ids it already had.  Without this,
         # every one of them was queued for relaxation again -- the same starting
@@ -1376,25 +1434,34 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
             if wait_while is not None and wait_while():
                 time.sleep(poll)
                 continue
+            if waiting_on_live_work(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds):
+                # Pending steps are held back until the task they join onto finishes.
+                time.sleep(poll)
+                continue
             break
+        # Wall time of this task alone, in ms: `claimed_at`/`finished_at` are whole seconds.
+        started = time.perf_counter()
         try:
             out = execute(reg, task, spec)
+            out.detail["duration_ms"] = round((time.perf_counter() - started) * 1000)
+            queue_relax(reg, spec, task, out)        # before completing: it notes a reuse
             complete_task(reg, task.id, structure_id=out.structure_id,
                           geometry_id=out.geometry_id,
                           structure_created=out.structure_created,
                           geometry_created=out.geometry_created,
                           detail=out.detail)
-            queue_relax(reg, spec, task, out)
         except _Rejected as exc:
-            fail_task(reg, task.id, str(exc), rejected=True,
-                      code=exc.code, detail=exc.detail)
+            fail_task(reg, task.id, str(exc), rejected=True, code=exc.code,
+                      detail={**(exc.detail or {}), "duration_ms":
+                              round((time.perf_counter() - started) * 1000)})
         except Exception as exc:                                   # noqa: BLE001
             # An unexpected exception is a bug, and the type is the most useful thing to
             # group by — twenty tasks dying of one IndexError is one problem, not twenty.
             fail_task(reg, task.id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                       code=type(exc).__name__,
                       detail={"traceback": traceback.format_exc()[-4000:],
-                              "task_kind": task.kind, "payload": task.payload})
+                              "task_kind": task.kind, "payload": task.payload,
+                              "duration_ms": round((time.perf_counter() - started) * 1000)})
         # After the task, not only at the claim: a worker part-way through a long queue
         # is the case a heartbeat exists to distinguish from one that died at the first.
         touch_run(reg, run_id)
@@ -1492,6 +1559,7 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
     if pool.total <= 1:
         work(reg, spec, run_id)
+        finalise_run(reg, spec, run_id)
         return pool
 
     import multiprocessing as mp
@@ -1533,7 +1601,71 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
             f"{len(dead)} of {pool.total} workers died before the queue was drained: "
             + ", ".join(dead) + ". Their tasks are still pending; the run can be "
             "resumed once the cause is fixed")
+    finalise_run(reg, spec, run_id)
     return pool
+
+
+#: The medium a finished run's energies are corrected into (WORKPLAN_solvation C17).
+FINALISE_MEDIUM = "alpb:water"
+
+
+def _solvate_stage(reg: Registry, target: Fidelity) -> list[dict[str, Any]]:
+    """Continuum corrections on the run's energies, or the stated reason there are none."""
+    from mofsbu.energy.backends import get_backend
+    from mofsbu.energy.solvation import correct_registry
+
+    if target < Fidelity.ML:
+        return [{"stage": "solvate", "count": 0,
+                 "reason": f"no {FINALISE_MEDIUM} corrections: this run computed no energies",
+                 "hint": "construct mode builds geometries only"}]
+    if not get_backend("xtb").available():
+        return [{"stage": "solvate", "count": 0,
+                 "reason": f"no {FINALISE_MEDIUM} corrections: xTB (tblite) is not installed",
+                 "hint": "install tblite, then run scripts/solvate.py on this database"}]
+    out = correct_registry(reg, FINALISE_MEDIUM)
+    stages = [{"stage": "solvate", "count": out["written"],
+               "reason": f"geometries given a {FINALISE_MEDIUM} correction",
+               "hint": "xTB with and without the continuum on each stored geometry"}]
+    stages += [{"stage": "solvate", "count": n, "reason": f"correction refused: {why}",
+                "hint": "that geometry's energy has no medium; routes through it stay gas-only"}
+               for why, n in sorted(out["refused"].items())]
+    return stages
+
+
+def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, Any]]:
+    """Stages that need every build and relaxation in place, run once the queue drains.
+
+    Not queued tasks: the queue orders by priority and has no dependencies, so a task
+    claimed while another worker is still relaxing would link a registry that is not
+    finished yet.  Only for `pathways` runs — linking is provenance, and a run that did not
+    ask for provenance gets none.  Each stage's outcome is appended to the run's
+    diagnostics, so what it did is on the run page rather than in a terminal.
+    """
+    if not spec.pathways or not spec.metals:
+        return []
+    from mofsbu.energy.protons import ensure_couple, link_protomers
+    from mofsbu.energy.relax import MODE_FIDELITY
+    from mofsbu.registry.jobs import get_diagnostics
+
+    target = MODE_FIDELITY.get(spec.run_mode, Fidelity.RAW)
+    ml_model = resolve_ml_model(spec) if target is Fidelity.ML else None
+    water, hydronium = ensure_couple(reg, target=target, ml_model=ml_model)
+    written = link_protomers(reg, water_id=water, hydronium_id=hydronium)
+    refused: dict[str, int] = {}
+    for w in written:
+        if w["why_not"]:
+            refused[w["why_not"]] = refused.get(w["why_not"], 0) + 1
+    stages = [{"stage": "link_protomers",
+               "reason": "deprotonation edges written (one proton, H2O/H3O+ couple)",
+               "hint": "each links a structure to the same structure minus one proton",
+               "count": sum(1 for w in written if w["reaction_id"] is not None)}]
+    stages += [{"stage": "link_protomers", "reason": f"deprotonation edge refused: {why}",
+                "hint": "the pair was found but its equation did not balance", "count": n}
+               for why, n in sorted(refused.items())]
+    stages += _solvate_stage(reg, target)
+    set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + stages)
+    reg.conn.commit()
+    return stages
 
 
 def run(reg: Registry, spec: BuildSpec, *, workers: int | None = None) -> dict[str, Any]:

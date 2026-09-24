@@ -181,6 +181,26 @@ def test_a_consumed_by_leg_prices_through_the_api(client):
     assert "does not produce" in backwards.json()["detail"]
 
 
+def test_the_pricing_options_and_a_medium_reach_the_route(client):
+    """The page's two selects are backed by one endpoint, and the medium it picks is the
+    one the route reports — a chart priced under one thing and labelled another is the
+    failure this guards."""
+    options = client.get("/api/pricing_options")
+    assert options.status_code == 200, options.text
+    assert set(options.json()) == {"media", "proton_sinks"}
+    step = _a_recorded_step(client)
+    if step is None:
+        pytest.skip("the demo registry seeded no edge with a reagent")
+    product, source, rid = step
+    r = client.get("/api/paths/price", params={"nodes": f"{product},{source}",
+                                               "via": str(rid), "medium": "alpb:water"})
+    assert r.status_code == 200, r.text
+    assert r.json()["medium"] == "alpb:water"
+    bad = client.get("/api/paths/price", params={"nodes": f"{product},{source}",
+                                                 "via": str(rid), "proton_sink": product})
+    assert bad.status_code == 400 and "proton sink" in bad.json()["detail"]
+
+
 def test_a_malformed_path_is_refused_with_a_reason_not_a_stack_trace(client):
     for params, expect in (({"nodes": "1,2", "via": ""}, "edges"),
                            ({"nodes": "1,2", "via": "not-a-number"}, "malformed"),

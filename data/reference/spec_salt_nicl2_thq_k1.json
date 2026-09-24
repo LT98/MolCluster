@@ -1,0 +1,56 @@
+{
+  "allow_unsaturated": true,
+  "binding": [
+    "mono"
+  ],
+  "co_ligand": "O",
+  "co_ligand_counts": "range",
+  "co_ligand_window": 2,
+  "coordination": [
+    4,
+    6
+  ],
+  "degree": 1,
+  "geometries": [
+    "tetrahedral",
+    "octahedral"
+  ],
+  "ligands_per_metal": [
+    1,
+    2
+  ],
+  "max_distinct_ligands": 2,
+  "metals": [
+    {
+      "oxidation_state": 2,
+      "spin_class": "hs",
+      "symbol": "Ni"
+    }
+  ],
+  "ml_model": "mace_omol",
+  "molecules": [
+    {
+      "max_deprotonations": 1,
+      "multiplicity": 1,
+      "name": "tHQ",
+      "smiles": "O=C(C(O)=C1O)C(O)=C(O)C1=O"
+    },
+    {
+      "max_deprotonations": 0,
+      "multiplicity": 1,
+      "name": "chloride",
+      "smiles": "[Cl-]"
+    }
+  ],
+  "note": "Salt study, nicl2 fallback. Input rule: each species is entered in the form it exists in water under the study conditions, and max_deprotonations says how far it may go below that form. NiCl2: chloride as [Cl-], 0 deprotonations (HCl does not exist in water, pKa ~ -6). tHQ listed first (reuse between the two salts), up to 1 deprotonation(s). Ni(II) high-spin; square-planar excluded because d8 Ni(II) there is low-spin and only high-spin is modelled.",
+  "pathways": true,
+  "pocket": {
+    "min_anionic": null,
+    "n_anionic": null,
+    "rigid": null,
+    "ring_size": null
+  },
+  "run_mode": "ml_go",
+  "seed": 0,
+  "spec_version": 8
+}

@@ -232,6 +232,12 @@ body.stubs-off .stub{display:none}
       <label for="target-id" class="muted" style="font-size:11px">target</label>
       <input id="target-id" type="number" min="1" step="1" placeholder="id">
       <button id="target-go" class="primary">load</button>
+      <label for="medium" class="muted" style="font-size:11px"
+             title="gas, or a continuum correction stored on each geometry">medium</label>
+      <select id="medium"><option value="">gas</option></select>
+      <label for="proton-sink" class="muted" style="font-size:11px"
+             title="where a proton a route releases goes">H⁺ to</label>
+      <select id="proton-sink"><option value="">water (H3O+)</option></select>
     </div>
     <div id="msg"></div>
     <nav id="trail" aria-label="the walk so far"></nav>
@@ -344,7 +350,7 @@ function mountStubs(){
    route being extended and how far along it, because a fork is what happens when you
    step back into the middle of a route and choose differently. */
 const state = {target: null, routes: [], active: 0, at: 0,
-               data: null, cache: new Map(),
+               data: null, cache: new Map(), medium: "", sink: "",
                prefs: {labels: true, levelValues: false, species: false,
                        colour: true, anchor: "target", derived: false,
                        fontScale: 1}};
@@ -890,7 +896,9 @@ async function priceOne(r){
   const nodes = r.trail.map(n => n.sid).join(",");
   const via = r.trail.slice(1).map(n => n.via).join(",");
   try {
-    const res = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}`);
+    const opts = (state.medium ? `&medium=${encodeURIComponent(state.medium)}` : "")
+      + (state.sink ? `&proton_sink=${encodeURIComponent(state.sink)}` : "");
+    const res = await fetch(`/api/paths/price?nodes=${nodes}&via=${via}${opts}`);
     if(!res.ok){
       const body = await res.json().catch(() => ({}));
       r.path = null;
@@ -905,6 +913,24 @@ async function priceOne(r){
     r.why_not = `could not price this route — ${e.message}`;
     say(r.why_not);
   }
+}
+
+/* The medium and the proton's destination are inputs to every route at once: a chart
+   whose routes were priced under different ones would compare nothing. */
+async function loadPricingOptions(){
+  try {
+    const res = await fetch("/api/pricing_options");
+    if(!res.ok) return;
+    const o = await res.json();
+    $("medium").innerHTML = `<option value="">gas</option>` + (o.media || []).map(m =>
+      `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    $("proton-sink").innerHTML = `<option value="">water (H3O+)</option>`
+      + (o.proton_sinks || []).map(s => `<option value="${esc(s.base)}">`
+        + `${esc(shortLabel(s.base_label) || "#" + s.base)} (→ ${esc(shortLabel(s.acid_label)
+          || "#" + s.acid)})</option>`).join("");
+  } catch(e){ /* the selects keep gas and water, which is what an older server priced */ }
+  $("medium").onchange = () => { state.medium = $("medium").value; priceAll(); };
+  $("proton-sink").onchange = () => { state.sink = $("proton-sink").value; priceAll(); };
 }
 
 async function priceAll(){
@@ -975,6 +1001,18 @@ function renderLegend(){
       bits.push(`<b>${esc(p.total_dE.toFixed(3))} eV</b>`);
       bits.push(`${esc(p.steps.length)} step${p.steps.length === 1 ? "" : "s"}`);
       bits.push(`rung ${esc(p.fidelity_name || "—")}`);
+      bits.push(`in ${esc(p.medium || "gas")}`);
+      if(p.proton_sink)
+        bits.push(`<span class="badge-composed" title="${esc(
+          `each proton this route releases goes to ${p.proton_sink.base_label || "#" + p.proton_sink.base}`
+          + ` instead of water: +${p.proton_sink.protons} × (H3O+ + ${p.proton_sink.base_label}`
+          + ` → H2O + ${p.proton_sink.acid_label}), ${p.proton_sink.dE_per_proton == null ? "unpriced"
+            : p.proton_sink.dE_per_proton.toFixed(3) + " eV each"}`)}">H⁺ → `
+          + `${esc(shortLabel(p.proton_sink.base_label) || "#" + p.proton_sink.base)}</span>`);
+      // Shown whenever there are any: a charge-separating equation can still be isodesmic.
+      if((p.caveats || []).length)
+        bits.push(`<span class="caveat" title="the route's net equation">`
+          + `${esc(p.caveats.join(", ").replace(/_/g, " "))}</span>`);
       if(p.worst_step)
         bits.push(`worst ${p.worst_step.dE > 0 ? "+" : ""}`
                 + `${esc(p.worst_step.dE.toFixed(3))}`);
@@ -1352,6 +1390,7 @@ function boot(){
   mountPanes();
   $("target-go").onclick = () => loadTarget(Number($("target-id").value) || null);
   $("target-id").onkeydown = (e) => { if(e.key === "Enter") $("target-go").click(); };
+  loadPricingOptions();
   mountToggles();
 
   // Geometry, in the two places it answers a different question: a popover while the

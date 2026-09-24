@@ -58,7 +58,8 @@ from mofsbu.energy.reference import (
 )
 from mofsbu.energy.routes import REPORTABLE, decompositions, price_reaction
 
-__all__ = ["price_path", "DERIVED", "CONSUMED", "MADE_FROM", "CONSUMED_BY"]
+__all__ = ["price_path", "proton_sinks", "proton_couple", "DERIVED", "CONSUMED", "MADE_FROM",
+           "CONSUMED_BY"]
 
 #: A leg walked along a split nobody recorded: `"d"` followed by the id of the OTHER
 #: part.  Never a reaction id, and never stored.  Both parts are named because one is
@@ -86,7 +87,8 @@ _AGREE_EV = 1e-6
 
 def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
                min_fidelity: Fidelity = Fidelity.ML,
-               solvent: str | None = None) -> dict[str, Any]:
+               solvent: str | None = None,
+               proton_sink: int | None = None) -> dict[str, Any]:
     """Price a chain of steps read backwards from `nodes[0]`, the target.
 
     `nodes` is the walk: the target, then each node the walk stepped to. `via[i]` is the
@@ -99,6 +101,11 @@ def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
     the one before it). Everything a reference-scheme rule refuses comes back as data, per
     step and on the path, because a route drawn on a chart cannot be a single exception
     any more than a panel of them could.
+
+    `proton_sink` names a free base A⁻ (one of `proton_sinks(reg)`) that takes each proton
+    the route releases instead of water: every step that sheds n H₃O⁺ also runs
+    n × (H₃O⁺ + A⁻ → H₂O + HA), priced in the same medium.  Exact by Hess's law, and the
+    step, the spectators and the net equation all carry it, so nothing is hidden.
     """
     nodes = [int(n) for n in nodes]
     if not nodes:
@@ -121,6 +128,9 @@ def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
             raise ReferenceSchemeError(
                 f"leg {i + 1} walks reaction {b['reaction_id']} straight back to structure "
                 f"{nodes[i + 1]}; that is stepping back along the trail, not a hop")
+    sink = None
+    if proton_sink is not None:
+        sink = _apply_proton_sink(reg, steps, int(proton_sink), solvent=solvent)
 
     # Walk out from the target with one signed tally of spectators: positive is a piece
     # not yet consumed, negative is something that has left.  `y` stops at the first
@@ -177,6 +187,8 @@ def price_path(reg: Any, nodes: Sequence[int], via: Sequence[int | str], *,
         "total_dE": total,
         "basis": out_nodes[-1]["basis"],
         "net_equation": equation,
+        "proton_sink": sink,
+        "medium": solvent,
         "caveats": list(equation["caveats"]) if equation else [],
         "isodesmic": equation["isodesmic"] if equation else None,
         "origin": origin,
@@ -199,6 +211,89 @@ def _node(reg: Any, sid: int, labels: dict[int, str | None], y: float | None,
             "shed": _multiset(reg, shed), "free_pieces": _multiset(reg, free),
             "basis": _basis(sorted(shed.items())),
             "pivot": False, "pivot_kind": None}
+
+
+def proton_couple(reg: Any) -> tuple[int, int] | None:
+    """`(water_id, hydronium_id)` as the recorded deprotonation edges use them, or None."""
+    row = reg.conn.execute(
+        "SELECT MAX(CASE WHEN rr.role = 'solvent' THEN rr.structure_id END) AS water, "
+        "       MAX(CASE WHEN rr.role = 'leaving' THEN rr.structure_id END) AS hydronium "
+        "FROM reactions r JOIN reaction_reagents rr ON rr.reaction_id = r.id "
+        "WHERE r.kind = 'deprotonation'").fetchone()
+    if row is None or row["water"] is None or row["hydronium"] is None:
+        return None
+    return int(row["water"]), int(row["hydronium"])
+
+
+def proton_sinks(reg: Any) -> list[dict[str, Any]]:
+    """Free bases a released proton can be handed to instead of water.
+
+    Every metal-free deprotonation edge whose acid is metal-free too — so only a base the
+    registry actually holds, with its conjugate acid, at an energy the run computed.  For
+    a chloride run that is the ligand's own anion and nothing else: HCl is not a species.
+    """
+    couple = proton_couple(reg)
+    if couple is None:
+        return []
+    rows = reg.conn.execute(
+        "SELECT DISTINCT r.product_structure_id AS base, rr.structure_id AS acid "
+        "FROM reactions r JOIN reaction_reagents rr ON rr.reaction_id = r.id "
+        "WHERE r.kind = 'deprotonation' AND rr.role = 'reagent' "
+        "AND NOT EXISTS (SELECT 1 FROM structure_metals sm "
+        "                WHERE sm.structure_id IN (r.product_structure_id, rr.structure_id)) "
+        "ORDER BY base").fetchall()
+    labels = _labels(reg, [int(r[k]) for r in rows for k in ("base", "acid")])
+    return [{"base": int(r["base"]), "acid": int(r["acid"]),
+             "base_label": labels.get(int(r["base"])), "acid_label": labels.get(int(r["acid"]))}
+            for r in rows if int(r["base"]) not in couple]
+
+
+def _apply_proton_sink(reg: Any, steps: list[dict[str, Any]], base: int, *,
+                       solvent: str | None) -> dict[str, Any]:
+    """Re-point every proton a route releases from water to `base`, in place.
+
+    A step that releases n H₃O⁺ (route direction) also runs n × (H₃O⁺ + A⁻ → H₂O + HA):
+    its terms gain that equation, so the spectator tally, the basis and the net equation
+    follow, and its dE gains n × the conversion's dE.  A conversion that cannot be priced
+    leaves every step that needed it unpriced, with the reason — never a silent water.
+    """
+    sinks = {s["base"]: s for s in proton_sinks(reg)}
+    if base not in sinks:
+        raise ReferenceSchemeError(
+            f"structure {base} is not a proton sink in this registry; the free bases with a "
+            f"conjugate acid are {sorted(sinks) or 'none'}")
+    water, hydronium = proton_couple(reg)
+    acid = sinks[base]["acid"]
+    conversion = (Term(acid, 1, "product", "product"), Term(water, 1, "leaving", "product"),
+                  Term(hydronium, 1, "reagent", "reagent"), Term(base, 1, "reagent", "reagent"))
+    out: dict[str, Any] = {**sinks[base], "water": water, "hydronium": hydronium,
+                           "dE_per_proton": None, "why_not": None, "protons": 0}
+    try:
+        out["dE_per_proton"] = energy_for_terms(
+            reg, conversion, fidelity=None, solvent=solvent, strict=False,
+            subject=f"H3O+ + {sinks[base]['base_label']} -> H2O + {sinks[base]['acid_label']}"
+        ).dE
+    except REPORTABLE as exc:
+        out["why_not"] = str(exc).splitlines()[0]
+    for step in steps:
+        n = _route_counts(step).get(hydronium, 0)       # released (+) or taken up (-)
+        if not n:
+            continue
+        out["protons"] += n
+        wanted = {hydronium: -n, base: -n, water: n, acid: n}
+        for sid, c in wanted.items():
+            side = "product" if c * step["sign"] > 0 else "reagent"
+            step["terms"].append({"structure_id": sid, "stoich": abs(c), "side": side,
+                                  "role": "leaving" if side == "product" else "solvent",
+                                  "display_label": None})
+        step["proton_sink"] = {"base": base, "acid": acid, "protons": n}
+        if out["dE_per_proton"] is None:
+            step.update(can_price=False, dE=None,
+                        why_not=f"the proton sink's conversion cannot be priced: "
+                                f"{out['why_not']}")
+        elif step["can_price"]:
+            step["dE"] += n * out["dE_per_proton"]
+    return out
 
 
 def _route_counts(step: dict[str, Any]) -> dict[int, int]:

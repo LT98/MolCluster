@@ -81,6 +81,19 @@ def test_a_task_is_claimed_exactly_once(reg):
     assert claim_task(reg, run_id) is None
 
 
+def test_a_step_waits_for_the_rung_it_joins_onto(reg):
+    """Claimed while its parent was still being built, a grow was rejected as
+    `pathway_parent_missing`; it now stays in the queue until the parent settles."""
+    run_id = create_run(reg, catechol_spec())
+    parent = add_task(reg, run_id, "place", {}, priority=0)
+    add_task(reg, run_id, "grow", {"parent_task": parent}, priority=10)
+    first = claim_task(reg, run_id)
+    assert first.id == parent, "the higher-priority step is held back behind its parent"
+    assert claim_task(reg, run_id) is None                 # parent claimed, not finished
+    complete_task(reg, parent)
+    assert claim_task(reg, run_id).kind == "grow"
+
+
 def test_rejected_is_not_failed(reg):
     """A candidate that fails QC is an answer, not a crash.
 

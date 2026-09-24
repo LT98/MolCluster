@@ -57,7 +57,7 @@ with the code.
 - **Estimate before submitting**: `POST /api/estimate` runs the same enumeration
   submitting would, so the number on the page is the number you get. There is a test
   pinning those two together, because otherwise the number is decoration. When the
-  pathway ladder hits its task cap (`MAX_PATHWAY_TASKS`, 4000) the estimate leads with a
+  pathway ladder hits its task cap (`MAX_PATHWAY_TASKS`, 12000) the estimate leads with a
   red line giving the cap and the size the uncapped ladder would have been — the run is
   then **incomplete**, not merely large (see [limits](04_limits.md)).
 

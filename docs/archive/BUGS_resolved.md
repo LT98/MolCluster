@@ -12,6 +12,113 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B21 — an octahedral centre with chelates and empty vertices was refused ✅
+
+**`correctness` · `geometry/placer.py`, `runner._build_sphere` · reported with D26, fixed in the
+salt-study branch.**
+
+Zn(II) + catechol dianion, CN 6 octahedral: `place` refused Zn(cat) with four empty vertices and
+Zn(cat)₂ with two, `placer_refused` — *"best bite angle 180 deg, need 55-115"*. The suspicion in
+the report (order) was right, and it was worse than stated: **four vertices out of six always
+contain a trans pair**, so `cis_vertices(…, 4)` ties every set at 180 deg, the lowest indices
+win, and the two vertices left for the chelate are the other trans pair — the only pair it
+cannot span. With two chelates and two empty, the greedy fill could strand the second chelate
+the same way.
+
+**Fix:** `placer.reserve_for` chooses the empty set with the ligands in view — candidates in
+`cis_vertices`'s own order, the first that `_assign_targets` accepts — and `_build_sphere`
+uses it. A set that already worked is unchanged; none accepted falls back to `cis_vertices`,
+so a truly impossible request still gets the placer's reason. Both cases now build; what the
+placer still refuses there is a *neutral* catechol chelating through its O–H (an H 1.03 Å from
+Zn), which QC rejects on its own terms. Test: `tests/test_placer.py` (the old reserve refuses,
+the new one builds, for 1 chelate/4 empty and 2 chelates/2 empty).
+
+---
+
+## B25 — a step was claimed while the rung it joins onto was still being built ✅
+
+**`correctness` · `registry/jobs.claim_task` · found in the salt-study smoke run.**
+
+The queue orders by priority and nothing else. With eight workers, a `grow` step could be
+claimed while another worker still held its `parent_task`, and `_rung` then rejected it as
+`pathway_parent_missing` with the parent "(claimed)" — a hole in the ladder that the chemistry
+did not cause (13 steps in the NiCl₂ smoke run).
+
+**Fix:** `claim_task` skips a task whose `parent_task` or `ligand_task` is pending or
+claimed. An empty claim then no longer means an empty queue, so `work()` waits while
+`waiting_on_live_work` says the blocking work belongs to a live worker, and exits as before
+once every claim is held by a dead one. Re-measured: every remaining `pathway_parent_missing`
+has a parent that was genuinely rejected. Test: `tests/test_jobs.py`.
+
+---
+
+## B24 — a grow tried one orientation and rejected what `place` built easily ✅
+
+**`correctness` · `runner._execute_grow` · found in the salt-study smoke run.**
+
+`grow` called `join` once — first open vertex, lone pair 0, torsion well 0 — and rejected the
+step on any clash. `place` builds the same compositions from a whole-sphere layout and passed
+them, so the ladder's recorded edges went missing exactly where a crowded sphere needed a
+different pose. Measured on the NiCl₂/tHQ fallback spec (construct): **336 of 336** tHQ steps
+onto an octahedral rung and 178 of 333 onto a tetrahedral one rejected, O···O down to 0.73 Å —
+an sp² O has few wells, and each swung the ring's other oxygens into a cis water.
+
+**Fix:** `_first_clear_join` tries every open vertex, lobe and well, first at the well's own
+angle and then at roll offsets of ±30° steps (`ROLL_OFFSETS_DEG`), and takes the first product
+that passes clash QC, else the least bad. `join(roll_deg=)` records the offset in the choice
+vector only when non-zero, so no existing choice vector changes. Same spec: tetrahedral 336/336
+built, octahedral 168 clean + 63 marginal (built in `ml_go`) of 336; the 105 left are the most
+crowded rungs. Overall rejections 688 → 322 of 1778. Tests: `tests/test_join.py` (roll recorded
+only when used), the pathway suites unchanged.
+
+---
+
+## B23 — a "deprotonation" edge could also change which atom binds the metal ✅
+
+**`correctness` · `energy/protons.py` · found reviewing the MVP energies for the interim
+presentation.**
+
+`deprotonation_pairs` keyed structures on (heavy-atom formula, charge − H count), so it paired
+every protonated row with every row of the same formula one proton lighter. On
+`mvp_ni_thq_cl.db` that was 458 edges, a median of 8 and up to 21 partners per acid, and one
+edge could also move which oxygen bound Ni or which geometry frame was compared. Same-charge
+tHQ deprotonations spanned −3.65 to +5.24 eV: the number was a deprotonation plus an
+isomerisation.
+
+**Fix:** a pair is exact. `TypedGraph.without_proton(h)` removes one labile H (bonded to one
+non-carbon, non-metal atom) and lowers the charge; the result is looked up by L1 hash, charge
+and multiplicity. D15 records a delocalised charge as graph-level only, so both conventions
+(charge on the atom, charge delocalised) are tried; everything else must match exactly. Two
+protons apart is two edges through the intermediate. On the same registry: 87 pairs, at most
+one partner per distinct proton, and Ni²⁺ tHQ deprotonations now span −0.61 to +1.92 eV.
+The Ni–ClH species remain the outliers, which is B22's input rule to prevent, not this rule's.
+Tests: `tests/test_reference.py` (a formula look-alike is refused; equivalent protons give one
+edge).
+
+---
+
+## B22 — an anion entered as one was registered as neutral ✅
+
+**`correctness` · `sites/protomers.py` · found planning the NiCl₂ vs Ni(OAc)₂ salt study.**
+
+`enumerate_protomers` gave every protomer `charge = −k` (k = protons removed) and built the
+parent at charge 0, so the input's own formal charge was discarded. `[Cl-]` and `CC(=O)[O-]`
+both came out **q0**, and every complex built from them carried the error into its net charge
+(`runner._build_sphere` sums component charges). Nothing refused it.
+
+It had stayed hidden because the only chloride dataset (`mvp_ni_thq_cl.db`) entered chloride as
+`Cl` (HCl) with one deprotonation — which charges correctly, but also creates Ni–ClH species
+that do not exist in water, and those produced the most negative "deprotonation" energies in
+that registry (−3.65 eV).
+
+**Fix:** the charge is read off the molecule — `Chem.GetFormalCharge` of the parent and of each
+deprotonated variant (`deprotonate` already sets the formal charges it creates). A neutral input
+is unchanged, so no stored identity moves; an anion's zero-deprotonation state is labelled
+`as_given` rather than `neutral`. Tests: `tests/test_protomers.py` (anion charges, acetic acid
+0/−1, and Ni(Cl)(H₂O)₃ +1 / NiCl₂(H₂O)₂ 0 from `_build_sphere`).
+
+---
+
 ## B18 — a `grow` step wrote an edge without the ligand it added ✅
 
 **`correctness` · `runner.py` · found while pricing provenance edges in the viewer, fixed in

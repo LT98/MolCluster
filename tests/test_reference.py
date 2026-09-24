@@ -549,6 +549,33 @@ def test_protomers_of_one_molecule_are_found_by_arithmetic(reg):
     assert (acid, base, 1) in deprotonation_pairs(reg)
 
 
+def _from_smiles(smiles: str, name: str) -> TypedGraph:
+    from rdkit import Chem
+
+    from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
+    mol = mol_from_smiles(smiles)
+    return from_rdkit(mol, charge=Chem.GetFormalCharge(mol), multiplicity=1, name=name)
+
+
+def test_a_formula_match_that_is_not_one_proton_away_is_not_paired(reg):
+    """`[CH2-]OC` has ethoxide's formula and charge, but it is not ethanol minus a proton.
+    Formula keying paired such rows; the exact rule removes a real H and compares graphs."""
+    ethanol = _store(reg, _from_smiles("CCO", "ethanol"), energy=-50.0)
+    ethoxide = _store(reg, _from_smiles("CC[O-]", "ethoxide"), energy=-49.0)
+    impostor = _store(reg, _from_smiles("[CH2-]OC", "methoxymethanide"), energy=-48.0)
+    pairs = deprotonation_pairs(reg)
+    assert (ethanol, ethoxide, 1) in pairs
+    assert not any(b == impostor for _, b, _ in pairs)
+
+
+def test_symmetry_equivalent_protons_give_one_partner(reg):
+    """Water's two H are equivalent: removing either is the same hydroxide, so one edge."""
+    acid = _store(reg, aqua_ion(2), energy=-100.0)
+    _store(reg, hydroxo_complex(), energy=-95.0)
+    assert [b for a, b, _ in deprotonation_pairs(reg) if a == acid] != []
+    assert len([b for a, b, _ in deprotonation_pairs(reg) if a == acid]) == 1
+
+
 def test_a_deprotonation_edge_is_isodesmic_and_charge_separating(reg):
     """No metal-donor bond changes across a proton transfer, so the bond-type rules have
     nothing to object to — which is the whole reason the couple exists rather than a bare
