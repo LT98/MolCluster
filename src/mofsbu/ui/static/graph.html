@@ -244,8 +244,8 @@ body.stubs-off .stub{display:none}
 
     <h2>standing on
       <button id="drop-node" class="h2-btn"
-              title="take this node off the chart, and with it every route that goes
- through it">drop node</button></h2>
+              title="cut every route here: keep the part up to this node, drop this
+ node and what lies beyond it">drop node</button></h2>
     <div id="focus" class="none">
       <h1 id="focus-label">no target</h1>
       <div id="focus-sub">give a structure id, or press “graph this” on the registry page</div>
@@ -1112,30 +1112,45 @@ function focusAt(routeIx, at){
   showHere();
 }
 
-/* Take a node off the chart, and with it every route that goes through it.  A route
-   is a claim about how this structure is reached; if the node is wrong, so is each of
-   them, and leaving the rest of a route behind would be a route nobody built.  The
-   target is excluded — it is where every route ends, so dropping it is loading a
-   different target, which is a different action with its own control. */
-function dropNode(sid){
+/* Cut every route at a node: each keeps its part from the target up to the node before
+   this one, and the node and everything beyond it go.  What remains is still a route that
+   was built, hop by hop — only shorter.  Routes the cut leaves identical merge; a route
+   left as the target alone goes, unless nothing else is left.  The target is excluded:
+   it is where every route ends, so dropping it is loading a different target. */
+function cutRoutesAt(routes, sid, target){
+  let cut = 0, merged = 0;
+  const out = [], seen = new Set();
+  for(const r of routes){
+    const k = r.trail.findIndex(n => n.sid === sid);
+    const next = k > 0 ? {...r, trail: r.trail.slice(0, k), path: null, why_not: null} : r;
+    if(k > 0) cut++;
+    if(next.trail.length < 2) continue;                   // only the target is left
+    const key = next.trail.map(n => `${n.sid}/${n.via}`).join(">");
+    if(seen.has(key)){ merged++; continue; }              // the cut made it a duplicate
+    seen.add(key);
+    out.push(next);
+  }
+  if(!out.length) out.push({trail: [{sid: target, via: null, label: ""}], path: null,
+                            why_not: null});
+  return {routes: out, cut, merged};
+}
+
+async function dropNode(sid){
   sid = Number(sid);
   if(!state.target) return;
   if(sid === state.target){
     say("the target is where every route ends — load a different one instead");
     return;
   }
-  const before = state.routes.length;
-  const keep = state.routes.filter(r => !r.trail.some(n => n.sid === sid));
-  if(keep.length === before){ say(`no route on the chart passes through #${sid}`); return; }
-  state.routes = keep.length ? keep
-    : [{trail: [{sid: state.target, via: null, label: ""}], path: null, why_not: null}];
-  state.active = 0;
-  state.at = trailOf(0).length - 1;
-  say(keep.length
-    ? `dropped #${sid} and ${before - keep.length} route`
-      + `${before - keep.length === 1 ? "" : "s"} through it`
-    : `every route went through #${sid} — back to the target alone`);
+  const res = cutRoutesAt(state.routes, sid, state.target);
+  if(!res.cut){ say(`no route on the chart passes through #${sid}`); return; }
+  state.routes = res.routes;
+  state.active = Math.min(state.active, state.routes.length - 1);
+  state.at = trailOf(state.active).length - 1;
+  say(`cut ${res.cut} route${res.cut === 1 ? "" : "s"} at #${sid}`
+      + (res.merged ? `, merged ${res.merged} that became identical` : ""));
   writeHash();
+  await priceAll();            // a cut route has a new total; it must be priced again
   showHere();
 }
 
