@@ -432,7 +432,22 @@ def test_a_worker_that_dies_while_the_server_is_up_is_reported_on_the_read_path(
     assert "gone" in row["liveness"]["reason"]
 
 
-def test_resuming_an_interrupted_run_returns_its_tasks_to_the_queue(registry, active):
+def _status_after(db, store, run_id, *, leaving, seconds=30.0):
+    import time
+
+    end = time.time() + seconds
+    while True:
+        with Registry(db, BlobStore(store)) as reg:
+            status = reg.conn.execute("SELECT status FROM runs WHERE id=?",
+                                      (run_id,)).fetchone()["status"]
+        if status != leaving or time.time() > end:
+            return status
+        time.sleep(0.2)
+
+
+def test_resuming_an_interrupted_run_executes_its_tasks(registry, active):
+    """Resume used to flip flags and say 'resubmit the spec' — nothing ran (issue #33).
+    It now starts the run's own executor, and the run leaves `running` when it is done."""
     db, store = registry
     run_id = _strand_a_run(db, store)
     client = TestClient(create_app(db, store, active))
@@ -440,10 +455,24 @@ def test_resuming_an_interrupted_run_returns_its_tasks_to_the_queue(registry, ac
     body = client.post(f"/api/runs/{run_id}/resume").json()
     assert body["was"] == "interrupted"
     assert body["pending"] == 2, "the claimed task is stranded, not in flight"
+    assert body["started"] is True
+    # The stranded tasks carry placeholder payloads, so executing them fails; what matters
+    # is that they were executed and the run was closed out, not left `running`.
+    assert _status_after(db, store, run_id, leaving="running") in ("failed", "done")
 
+
+def test_stopping_a_run_nothing_is_executing_closes_it_at_once(registry, active):
+    """With no executor there is nobody to notice `cancelling`, so the page said
+    'stopping' for ever.  Now the stop closes such a run out itself."""
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    client = TestClient(create_app(db, store, active))
+
+    body = client.post(f"/api/runs/{run_id}/cancel").json()
+    assert "stopped" in body["note"]
     with Registry(db, BlobStore(store)) as reg:
         assert reg.conn.execute("SELECT status FROM runs WHERE id=?",
-                                (run_id,)).fetchone()["status"] == "running"
+                                (run_id,)).fetchone()["status"] == "cancelled"
 
 
 # ── the worker count on the page has to reach the work ───────────────────────

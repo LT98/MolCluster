@@ -69,6 +69,16 @@ soft-delete; a real delete is refused (see `registry/api.set_hidden`).
 `GET /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/tasks`,
 `POST /api/runs/{id}/cancel`, `POST /api/runs/{id}/resume`.
 
+**Stop and resume.** *Stop* is cooperative: workers finish the task in hand and stop claiming,
+and the run becomes `cancelled`. If nothing is executing the run — no executor in this server
+and no live worker holding its tasks — there is nobody to notice the flag, so the stop closes
+the run out at once ("stopped — nothing was executing this run") instead of saying *stopping*
+for ever. *Resume* puts the cancelled tasks back in the queue — plus any that failed only
+because the database was busy — and **executes them** with the spec stored on the run, the same
+way a submit does. It will not start a second executor on a run this server is already running,
+or one whose tasks are held by live workers elsewhere. A run from an earlier session (killed
+shell, closed laptop) is resumable the same way: the start-up sweep marks it `interrupted`.
+
 What makes this page the useful one:
 
 - **Refusals are grouped by code, then drillable.** The summary says `×212 qc_clash`; the

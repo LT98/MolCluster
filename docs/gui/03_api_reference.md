@@ -23,12 +23,12 @@ Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only wr
 | GET | `/api/specs` | Builder | list named specs |
 | GET | `/api/specs/{source}/{name}` | Builder | load one |
 | POST | `/api/spec` | Builder | write one |
-| POST | `/api/estimate` | Builder | **the same enumeration submitting performs**; `capped` lists a cap that cut the ladder, with its uncapped size |
+| POST | `/api/estimate` | Builder | **the same enumeration submitting performs**; `large` flags a run above 12000 tasks (advisory — a submitted spec is never cut); `capped` is only ever filled by guarded backend planning |
 | POST | `/api/runs` | Runs | queue a run |
 | GET | `/api/runs` | Runs | list runs, with computed liveness |
 | GET | `/api/runs/{run_id}` | Runs | one run |
 | POST | `/api/runs/{run_id}/cancel` | Runs | cancel |
-| POST | `/api/runs/{run_id}/resume` | Runs | resume |
+| POST | `/api/runs/{run_id}/resume` | Runs | re-queue cancelled (and lock-failed) tasks and execute them with the stored spec |
 | GET | `/api/runs/{run_id}/tasks` | Runs | tasks; `status=`, `code=`, `limit=`, `offset=` |
 | GET | `/api/structures` | Registry | listing; filters + `include_hidden=1` |
 | GET | `/api/structures/{id}` | Registry | one record |

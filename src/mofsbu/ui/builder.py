@@ -83,6 +83,32 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
     def current() -> Path:
         return active.path
 
+    def _start_execution(run_db: Path, spec: Any, run_id: int) -> None:
+        """Execute a planned run on a background thread — for a new run and a resumed one.
+
+        `runner.execute_run` is the one place a worker pool is built, so a run started or
+        resumed from the page has the same shape as one started from a shell.  The run is
+        closed out whatever happens, or the page polls a row that says `running` for ever.
+        """
+        from mofsbu.registry import BlobStore, Registry, relabel_all
+        from mofsbu.registry.jobs import finish_run
+        from mofsbu.runner import execute_run
+
+        def execute() -> None:
+            try:
+                with Registry(run_db, BlobStore(store_path)) as r2:
+                    try:
+                        execute_run(r2, spec, run_id)
+                    finally:
+                        relabel_all(r2)
+                        finish_run(r2, run_id)
+                running.pop(run_id, None)
+            except Exception as exc:                               # noqa: BLE001
+                running[run_id] = f"{type(exc).__name__}: {exc}"
+
+        running[run_id] = "running"
+        threading.Thread(target=execute, daemon=True, name=f"mofsbu-run-{run_id}").start()
+
     @router.get("/builder", response_class=HTMLResponse)
     def builder_page() -> str:
         return (STATIC / "builder.html").read_text(encoding="utf-8")
@@ -514,7 +540,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         the same spec started from a shell.
         """
         from mofsbu.registry import BlobStore, Registry
-        from mofsbu.runner import execute_run, plan, plan_workers
+        from mofsbu.runner import plan, plan_workers
 
         spec = _parse(payload.get("spec") or {})
         device = payload.get("device") or None
@@ -542,25 +568,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             except MofsbuError as exc:
                 raise HTTPException(400, str(exc)) from exc
 
-        def execute() -> None:
-            from mofsbu.registry import relabel_all
-            from mofsbu.registry.jobs import finish_run
-
-            try:
-                with Registry(run_db, BlobStore(store_path)) as r2:
-                    try:
-                        execute_run(r2, spec, run_id)
-                    finally:
-                        # Even a run whose workers died gets closed out, or the page
-                        # polls a row that says `running` for ever.
-                        relabel_all(r2)
-                        finish_run(r2, run_id)
-                running.pop(run_id, None)
-            except Exception as exc:                               # noqa: BLE001
-                running[run_id] = f"{type(exc).__name__}: {exc}"
-
-        running[run_id] = "running"
-        threading.Thread(target=execute, daemon=True, name=f"mofsbu-run-{run_id}").start()
+        _start_execution(run_db, spec, run_id)
         from mofsbu.config import compute_device
 
         pool = plan_workers(relaxes=spec.run_mode != "construct")
@@ -620,7 +628,9 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         abandoned experiment reads as a crash is a run list nobody trusts.
         """
         from mofsbu.registry import BlobStore, Registry
-        from mofsbu.registry.jobs import request_cancel, task_counts
+        from mofsbu.registry.jobs import (
+            finalise_cancel, request_cancel, run_liveness, task_counts,
+        )
 
         with Registry(current(), BlobStore(store_path)) as reg:
             row = reg.conn.execute("SELECT status FROM runs WHERE id=?",
@@ -628,40 +638,65 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             if row is None:
                 raise HTTPException(404, f"no run {run_id}")
             changed = request_cancel(reg, run_id)
+            # Stopping is cooperative: a worker notices the flag and the executor closes
+            # the run out.  With no executor — nothing here is running it and no live
+            # worker holds its tasks — nobody ever would, and the page would say
+            # "stopping" for ever.  Then this closes it out itself.
+            closed = False
+            if running.get(run_id) != "running" and \
+                    run_liveness(reg, run_id)["verdict"] != "live":
+                finalise_cancel(reg, run_id)
+                closed = True
             counts = task_counts(reg, run_id)
-        return {"run_id": run_id, "requested": changed, "was": row["status"],
+        return {"run_id": run_id, "requested": changed or closed, "was": row["status"],
                 "pending": counts.get("pending", 0),
                 "in_flight": counts.get("claimed", 0),
-                "note": ("stopping — the task in hand will finish, then the workers stop "
+                "note": ("stopped — nothing was executing this run" if closed else
+                         "stopping — the task in hand will finish, then the workers stop "
                          "claiming" if changed else
                          f"nothing to stop: this run is {row['status']}")}
 
     @router.post("/api/runs/{run_id}/resume")
     def resume_run_route(run_id: int) -> dict[str, Any]:
-        """Put a stopped run's remaining tasks back in the queue.
+        """Put a stopped run's remaining tasks back in the queue, and execute them.
 
         Sweeps this run first, so a run whose process died is resumable from the page
         without waiting for the next server start: the sweep is what turns "claimed by a
         pid that no longer exists" back into "pending", and a resume that skipped it
         would revive a run whose in-flight tasks nobody can claim.
+
+        Then it RUNS them, with the spec stored on the run — the same executor a submit
+        starts, so a resumed run has the same shape as a fresh one (issue #33).  Not when
+        this server is already executing the run, or live workers elsewhere hold its tasks:
+        two executors on one queue would each close it out.
         """
         from mofsbu.registry import BlobStore, Registry
-        from mofsbu.registry.jobs import resume_run, sweep_interrupted
+        from mofsbu.registry.jobs import (
+            resume_run, run_liveness, sweep_interrupted, task_counts,
+        )
 
-        from mofsbu.registry.jobs import task_counts
-
-        with Registry(current(), BlobStore(store_path)) as reg:
-            was = reg.conn.execute("SELECT status FROM runs WHERE id=?",
+        run_db = current()
+        with Registry(run_db, BlobStore(store_path)) as reg:
+            was = reg.conn.execute("SELECT status, spec_json FROM runs WHERE id=?",
                                    (run_id,)).fetchone()
             if was is None:
                 raise HTTPException(404, f"no run {run_id}")
             swept = sweep_interrupted(reg, run_id=run_id)
+            live = run_liveness(reg, run_id)
+            elsewhere = (running.get(run_id) != "running" and bool(live["workers"])
+                         and live["verdict"] == "live")
             revived = resume_run(reg, run_id)
             pending = task_counts(reg, run_id).get("pending", 0)
-        note = (f"{pending} task(s) waiting — resubmit the spec to execute them"
+        started = False
+        if pending and running.get(run_id) != "running" and not elsewhere:
+            _start_execution(run_db, BuildSpec.from_json(was["spec_json"]), run_id)
+            started = True
+        note = (f"resumed: executing {pending} task(s)" if started else
+                "already executing" if pending and running.get(run_id) == "running" else
+                f"{pending} task(s) waiting; live workers elsewhere are executing this run"
                 if pending else "nothing left to do in this run")
         return {"run_id": run_id, "revived": revived, "was": was["status"],
-                "swept": swept, "pending": pending, "note": note}
+                "swept": swept, "pending": pending, "started": started, "note": note}
 
     @router.get("/api/runs/{run_id}/tasks")
     def get_run_tasks(run_id: int, status: str | None = None,
