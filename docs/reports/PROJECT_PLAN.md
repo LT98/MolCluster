@@ -3,7 +3,85 @@
 *Presentation-oriented: what the project does, how each step compares with existing tools, and how
 each claim will be benchmarked. The code-level plans are `docs/PLAN_implementation.md` and
 `docs/WORKPLAN_energy.md`. Written 2026-09-28; demand figures are measured on `salt_study_k1.db`.
-The learning layer (§4) and experimental benchmarking (§5) were added the same day.*
+The rationale ("Why this project"), the learning layer (§4) and experimental benchmarking (§5)
+were added the same day.*
+
+---
+
+## Why this project
+
+### Where computational MOF research is strong
+Computational work on metal–organic frameworks is heavily weighted toward **applications and
+structure screening**, and it is mathematically elegant:
+- **Reticular chemistry** treats a framework as a net: nodes (SBUs) joined by linkers [62, 63].
+- **Topological generators** enumerate hypothetical frameworks by placing known SBUs and linkers onto
+  RCSR nets — hMOF [64], ToBaCCo [10], AuToGraFS [11], PORMAKE [9]. The result is databases of 10⁵–10⁶
+  structures.
+- Those structures are **screened for properties**: gas uptake by GCMC, electronic structure by DFT
+  (QMOF [65]), stability and more, increasingly by ML. The experimental CoRE MOF [66] and ARC-MOF [67]
+  collections serve the same pipeline.
+
+### Where it is weak: the synthesis end
+Every one of these pipelines **starts from the building unit, and assumes it forms**. Whether a given
+metal salt and ligand, in a given solvent, actually assemble into that SBU — rather than into a
+different cluster, a coordination polymer of the wrong connectivity, an amorphous solid or nothing —
+is outside their scope. That is the step where syntheses succeed or fail, and it is governed by
+solution chemistry that the topology does not see:
+- **Metal speciation.** Aqua and hydroxo complexes, and hydrolysis, depend on pH.
+- **Ligand protonation.** A carboxylic acid or polyphenol must lose protons to bind, and something
+  must take them.
+- **Competition from counterions, modulators and solvent** for the same coordination sites.
+  Modulators (acetate, formate, benzoate) are routinely used to steer phase, crystallinity and defects
+  [68, 69]. The salt anion — chloride, nitrate or acetate — changes the product.
+- **Several near-degenerate clusters** at similar energy, where conditions tip the balance.
+
+So MOF synthesis is still optimised by **empirical grids** of salt, solvent, temperature, modulator
+and pH, and a successful synthesis is often a product of chance. Current approaches treat the
+problem from the outside:
+- **Statistical models of synthesis conditions** mined from the literature [70, 71] learn which
+  conditions tend to work, without the molecular chemistry of why.
+- **Framework free-energy calculations** [72] judge whether a *finished* framework is plausible,
+  not whether its node can be reached.
+- **In situ nucleation and growth studies** [73] reveal the mechanism case by case,
+  experimentally.
+
+### Hence: MolCluster
+MolCluster models the step **before** the topology — **the molecular chemistry of node formation in
+solution**. Given the ingredients of a synthesis, it asks:
+> Which metal–ligand clusters (candidate SBUs and their precursors) can form, by which routes, and
+> which conditions favour a target one?
+
+This turns the unpredictable part of synthesis into an explicit, auditable graph of species and
+reactions:
+- **Every species is identified exactly.** Bridging vs chelating, protonation state and hydration
+  number are part of identity.
+- **Every step is a balanced reaction**, including the proton and counterion bookkeeping that
+  decides real syntheses. Energies are priced with a stated level of theory and refused when the
+  equation would mislead.
+- **Conditions are inputs:** salt anion, solvent, pH and modulator. The first study already
+  recovered a textbook synthesis rule from first principles: the acetate salt succeeds largely
+  because acetate is a built-in base. It also showed that with a common base the chloride complex
+  forms more readily.
+
+**The link to the existing field is direct.** Topological generators *consume* SBUs; MolCluster
+*produces* them, together with the conditions under which they are accessible. Coupled, the two give
+**synthesis-aware screening**: hypothetical frameworks whose nodes are reachable from real
+ingredients, ranked beside their predicted properties.
+
+### Why now
+- **MLIPs trained on large DFT datasets** (MACE-OMOL-0 / OMol25, ωB97M-V) relax a coordination
+  species in about 5 s at near-DFT geometry quality. That makes it affordable to enumerate thousands
+  of candidate species and hydration states, a combinatorial space that DFT alone could not cover.
+- **The registry and identity layer** keep that enumeration from becoming noise. Each species is
+  stored once, every route is recorded, and every number carries its provenance, so screening
+  results can be escalated to DFT and checked against experiment (§5).
+
+### What it does not claim
+- It does not model nucleation, crystal growth or framework crystallisation kinetics.
+- It predicts the **solution-phase precursor chemistry**: which species dominate and how they
+  interconvert. That is a prior on which conditions favour a target node, not a guarantee of a
+  crystal.
+- It covers labile metals, where thermodynamics governs (§2.6). Inert centres are a stated boundary.
 
 ---
 
@@ -553,3 +631,18 @@ checked for this document.
 59. Marcus, *J. Chem. Soc., Faraday Trans.* **87**, 2995 (1991) — ion hydration free energies.
 60. Davies, *Ion Association* (Butterworths, 1962) — the Davies activity equation.
 61. Gans, Sabatini & Vacca, *Talanta* **43**, 1739 (1996) — Hyperquad.
+62. Yaghi et al., *Nature* **423**, 705 (2003) — reticular synthesis.
+63. O'Keeffe, Peskov, Ramsden & Yaghi, *Acc. Chem. Res.* **41**, 1782 (2008) — the RCSR.
+64. Wilmer et al., *Nat. Chem.* **4**, 83 (2012) — large-scale hypothetical MOF screening (hMOF).
+65. Rosen et al., *Matter* **4**, 1578 (2021) — QMOF database.
+66. Chung et al., *Chem. Mater.* **26**, 6185 (2014); *J. Chem. Eng. Data* **64**, 5985 (2019) — CoRE MOF.
+67. Burner et al., *Chem. Mater.* **35**, 900 (2023) — ARC-MOF.
+68. Tsuruoka et al., *Angew. Chem. Int. Ed.* **48**, 4739 (2009) — coordination modulation.
+69. Schaate et al., *Chem. Eur. J.* **17**, 6643 (2011) — modulated synthesis of Zr MOFs.
+70. Moosavi et al., *Nat. Commun.* **10**, 539 (2019) — capturing chemical intuition in MOF synthesis.
+71. Luo et al., *Angew. Chem. Int. Ed.* **61**, e202200242 (2022) — MOF synthesis prediction from mined
+    data.
+72. Anderson & Gómez-Gualdrón, *Chem. Sci.* **11**, 4164 (2020) — free energies toward synthetic
+    likelihood.
+73. Van Vleet, Weng, Li & Schmidt, *Chem. Rev.* **118**, 3681 (2018) — in situ studies of MOF
+    nucleation and growth.
