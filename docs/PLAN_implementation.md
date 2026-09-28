@@ -34,6 +34,13 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 **Open decision gates:** C2's energy window (blocked on [B9](BUGS.md#b9)), C6 and C7 (forced by
 M8). See §3. C9 and C10 were M6's and are called — D24 and D25.
 
+**Energy work follows [`WORKPLAN_energy.md`](WORKPLAN_energy.md).** The builder is a model
+generator; MACE relaxes, ranks within an identity, triages routes and accelerates Hessians and
+sampling. Reported numbers are stage-5 recipe results (DFT//MACE + SMD + qRRHO, calibrated). Its
+slices E0–E7 carry M7's remaining work and M8's energy side; gate E1 (connectivity check after
+relaxation) comes before any number is reported. The presentation-level view of the whole
+project, with comparisons and benchmarks, is [`reports/PROJECT_PLAN.md`](reports/PROJECT_PLAN.md).
+
 ---
 
 ## 0. Ground rules (invariants — true from the first commit, never retrofitted)

@@ -214,6 +214,11 @@ S0 ─► S1 ─► S2 ─► S3
 
 ## 5. Where this sits
 
+- **In the energy pipeline** ([`WORKPLAN_energy.md`](WORKPLAN_energy.md)): the continuum
+  correction is the stage-3 *screen*, SMD is the stage-5 refine. The co-ligand window (D26) is
+  already the explicit first shell of every metal, so C19–C20's H-bonded shells are needed only
+  for free ions, the proton carrier and a second shell. C21's standard-state, activity and pH
+  terms are stage 6.
 - **B19** (two heights for one structure): the 7.356 eV gap between the routes *is* R1 — one
   gas-phase charge separation. S1 puts `charge_separation` on the step that carries it, and
   in `alpb:water` the gap shrinks to ~1.6 eV but does not vanish: the routes still differ by a
