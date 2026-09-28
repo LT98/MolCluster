@@ -13,6 +13,7 @@ notebook without anything being lost.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -657,7 +658,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                          f"nothing to stop: this run is {row['status']}")}
 
     @router.post("/api/runs/{run_id}/resume")
-    def resume_run_route(run_id: int) -> dict[str, Any]:
+    def resume_run_route(run_id: int, payload: dict = Body(default={})) -> dict[str, Any]:
         """Put a stopped run's remaining tasks back in the queue, and execute them.
 
         Sweeps this run first, so a run whose process died is resumable from the page
@@ -669,16 +670,27 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         starts, so a resumed run has the same shape as a fresh one (issue #33).  Not when
         this server is already executing the run, or live workers elsewhere hold its tasks:
         two executors on one queue would each close it out.
+
+        The device is part of the resume (issue #54).  `compute_device()` reads the
+        environment when the executor runs, and a resume starts a fresh executor — often
+        after a server restart, when nothing has declared a device and the relaxation
+        silently falls back to cpu.  So the device is declared here, in this order: an
+        explicit `device`/`workers` in the request body; else what this process already
+        has declared; else what the run row says it was submitted under.  Re-applying the
+        run's own recorded declaration is not the code choosing hardware — a person made
+        that choice at submit time.
         """
         from mofsbu.registry import BlobStore, Registry
         from mofsbu.registry.jobs import (
             resume_run, run_liveness, sweep_interrupted, task_counts,
         )
+        from mofsbu.ui.active import declare_compute
 
         run_db = current()
         with Registry(run_db, BlobStore(store_path)) as reg:
-            was = reg.conn.execute("SELECT status, spec_json FROM runs WHERE id=?",
-                                   (run_id,)).fetchone()
+            was = reg.conn.execute(
+                "SELECT status, spec_json, device, workers FROM runs WHERE id=?",
+                (run_id,)).fetchone()
             if was is None:
                 raise HTTPException(404, f"no run {run_id}")
             swept = sweep_interrupted(reg, run_id=run_id)
@@ -689,14 +701,25 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             pending = task_counts(reg, run_id).get("pending", 0)
         started = False
         if pending and running.get(run_id) != "running" and not elsewhere:
+            device = payload.get("device") or (
+                None if os.environ.get("MOFSBU_DEVICE") else (was["device"] or None))
+            workers = payload.get("workers") or (
+                None if os.environ.get("MOFSBU_WORKERS") else (was["workers"] or None))
+            try:
+                declare_compute(device, int(workers) if workers else None)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(400, str(exc)) from exc
             _start_execution(run_db, BuildSpec.from_json(was["spec_json"]), run_id)
             started = True
         note = (f"resumed: executing {pending} task(s)" if started else
                 "already executing" if pending and running.get(run_id) == "running" else
                 f"{pending} task(s) waiting; live workers elsewhere are executing this run"
                 if pending else "nothing left to do in this run")
+        from mofsbu.config import compute_device
+
         return {"run_id": run_id, "revived": revived, "was": was["status"],
-                "swept": swept, "pending": pending, "started": started, "note": note}
+                "swept": swept, "pending": pending, "started": started, "note": note,
+                "device": compute_device() if started else None}
 
     @router.get("/api/runs/{run_id}/tasks")
     def get_run_tasks(run_id: int, status: str | None = None,
