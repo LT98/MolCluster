@@ -2,7 +2,86 @@
 
 *Presentation-oriented: what the project does, how each step compares with existing tools, and how
 each claim will be benchmarked. The code-level plans are `docs/PLAN_implementation.md` and
-`docs/WORKPLAN_energy.md`. Written 2026-09-28; demand figures are measured on `salt_study_k1.db`.*
+`docs/WORKPLAN_energy.md`. Written 2026-09-28; demand figures are measured on `salt_study_k1.db`.
+The rationale ("Why this project"), the learning layer (§4) and experimental benchmarking (§5)
+were added the same day.*
+
+---
+
+## Why this project
+
+### Where computational MOF research is strong
+Computational work on metal–organic frameworks is heavily weighted toward **applications and
+structure screening**, and it is mathematically elegant:
+- **Reticular chemistry** treats a framework as a net: nodes (SBUs) joined by linkers [62, 63].
+- **Topological generators** enumerate hypothetical frameworks by placing known SBUs and linkers onto
+  RCSR nets — hMOF [64], ToBaCCo [10], AuToGraFS [11], PORMAKE [9]. The result is databases of 10⁵–10⁶
+  structures.
+- Those structures are **screened for properties**: gas uptake by GCMC, electronic structure by DFT
+  (QMOF [65]), stability and more, increasingly by ML. The experimental CoRE MOF [66] and ARC-MOF [67]
+  collections serve the same pipeline.
+
+### Where it is weak: the synthesis end
+Every one of these pipelines **starts from the building unit, and assumes it forms**. Whether a given
+metal salt and ligand, in a given solvent, actually assemble into that SBU — rather than into a
+different cluster, a coordination polymer of the wrong connectivity, an amorphous solid or nothing —
+is outside their scope. That is the step where syntheses succeed or fail, and it is governed by
+solution chemistry that the topology does not see:
+- **Metal speciation.** Aqua and hydroxo complexes, and hydrolysis, depend on pH.
+- **Ligand protonation.** A carboxylic acid or polyphenol must lose protons to bind, and something
+  must take them.
+- **Competition from counterions, modulators and solvent** for the same coordination sites.
+  Modulators (acetate, formate, benzoate) are routinely used to steer phase, crystallinity and defects
+  [68, 69]. The salt anion — chloride, nitrate or acetate — changes the product.
+- **Several near-degenerate clusters** at similar energy, where conditions tip the balance.
+
+So MOF synthesis is still optimised by **empirical grids** of salt, solvent, temperature, modulator
+and pH, and a successful synthesis is often a product of chance. Current approaches treat the
+problem from the outside:
+- **Statistical models of synthesis conditions** mined from the literature [70, 71] learn which
+  conditions tend to work, without the molecular chemistry of why.
+- **Framework free-energy calculations** [72] judge whether a *finished* framework is plausible,
+  not whether its node can be reached.
+- **In situ nucleation and growth studies** [73] reveal the mechanism case by case,
+  experimentally.
+
+### Hence: MolCluster
+MolCluster models the step **before** the topology — **the molecular chemistry of node formation in
+solution**. Given the ingredients of a synthesis, it asks:
+> Which metal–ligand clusters (candidate SBUs and their precursors) can form, by which routes, and
+> which conditions favour a target one?
+
+This turns the unpredictable part of synthesis into an explicit, auditable graph of species and
+reactions:
+- **Every species is identified exactly.** Bridging vs chelating, protonation state and hydration
+  number are part of identity.
+- **Every step is a balanced reaction**, including the proton and counterion bookkeeping that
+  decides real syntheses. Energies are priced with a stated level of theory and refused when the
+  equation would mislead.
+- **Conditions are inputs:** salt anion, solvent, pH and modulator. The first study already
+  recovered a textbook synthesis rule from first principles: the acetate salt succeeds largely
+  because acetate is a built-in base. It also showed that with a common base the chloride complex
+  forms more readily.
+
+**The link to the existing field is direct.** Topological generators *consume* SBUs; MolCluster
+*produces* them, together with the conditions under which they are accessible. Coupled, the two give
+**synthesis-aware screening**: hypothetical frameworks whose nodes are reachable from real
+ingredients, ranked beside their predicted properties.
+
+### Why now
+- **MLIPs trained on large DFT datasets** (MACE-OMOL-0 / OMol25, ωB97M-V) relax a coordination
+  species in about 5 s at near-DFT geometry quality. That makes it affordable to enumerate thousands
+  of candidate species and hydration states, a combinatorial space that DFT alone could not cover.
+- **The registry and identity layer** keep that enumeration from becoming noise. Each species is
+  stored once, every route is recorded, and every number carries its provenance, so screening
+  results can be escalated to DFT and checked against experiment (§5).
+
+### What it does not claim
+- It does not model nucleation, crystal growth or framework crystallisation kinetics.
+- It predicts the **solution-phase precursor chemistry**: which species dominate and how they
+  interconvert. That is a prior on which conditions favour a target node, not a guarantee of a
+  crystal.
+- It covers labile metals, where thermodynamics governs (§2.6). Inert centres are a stated boundary.
 
 ---
 
@@ -25,10 +104,20 @@ It runs as two lines of work with opposite cost profiles:
 The lines meet at the registry: Line 2 reads only species Line 1 has identified, and writes numbers
 back against them.
 
+Two further layers close the loop:
+- **Learning (§4)** turns what Line 1 stores into compute Line 2 doesn't have to spend. The registry
+  is training data for models that say *what to compute next*, not models that replace computing.
+- **Experiment (§5)** is the only external judge. Every claim either line makes is scored against a
+  measured observable.
+
 ```
-ingredients ─► 1.1 ligands ─► 1.2 sites ─► 1.3 spheres ─► 1.4 identity ─► 1.5 registry
-                                                                              │
+ingredients ─► 1.1 ligands ─► 1.2 sites ─► 1.3 spheres ─► 1.4 identity ─► 1.5 registry ◄──┐
+                                                                              │            │
+                                                                              ▼            │
 routes ◄─ 2.6 routes ◄─ 2.5 calibrate ◄─ 2.4 refine ◄─ 2.3 select ◄─ 2.2 screen ◄─ 2.1 relax
+   │                        ▲                           ▲                                   │
+   │                        │                           └──── 4 learning (triage, Δ) ◄──────┘
+   └──► 5 experiment ───────┘  (calibration, validation)
 ```
 
 ## 1. Measured demand today
@@ -296,7 +385,137 @@ Chemoton-style kinetics would be needed.
 
 ---
 
-## 4. Where MolCluster sits
+## 4. Learning layer — the registry as training data
+
+**The idea.** Every structure Line 1 identifies, every construction it rejects and every equation
+Line 2 prices is a labelled example. A model trained on them can **nudge computation toward viable
+routes** — which species to relax, which routes to refine — and, with the right labels, predict a
+little beyond what was computed. Line 1's storage cost pays for Line 2's compute savings.
+
+**The limit, stated first.** MACE-OMOL-0 and UMA are already the "large model", trained on ~10⁸
+ωB97M-V calculations (OMol25). A model trained on MACE-labelled registry rows is a distillation of
+MACE onto a narrower domain: faster, never more accurate. Prediction *beyond* explicit calculation
+needs labels MACE lacks — DFT from refinement (2.4) and experiment (§5).
+
+### What the registry already holds
+
+| Asset | Salt study | Learnable signal | Limitation |
+|---|---|---|---|
+| nodes | 1,123 typed graphs, L0–L2, charge, spin | species energy, stability, hydration preference | one metal, three ligands |
+| geometries | 15,722 (3,600 MACE) | conformer priors: which choice vector reaches the minimum | near-duplicates |
+| energies | MACE + ALPB | — | labels at screening fidelity |
+| edges | 19,762 with roles, stoichiometry and `atom_map_json` | reaction energies; a condensed graph of reaction is directly buildable | ΔE depends on proton sink, medium and recipe |
+| task outcomes | 33,829 with rejection codes | construction feasibility | partly the constructor's limits, not chemistry |
+
+### Models, ranked by value against risk
+
+| # | Model | Labels | Data needed | Use | Existing comparator |
+|---|---|---|---|---|---|
+| L1 | **Δ-learning** E_DFT − E_MACE and ΔG_SMD − ΔG_ALPB, with uncertainty (GP or ensemble on RAC descriptors or graph kernels) | refine stage | 10²–10³ | corrects screening numbers; a "MACE trust" map (e.g. redox non-innocent THQ) | Δ-ML [36]; RACs for TMCs [52] |
+| L2 | **Active-learning escalation** — acquisition (expected improvement or UCB) over the route graph from screen mean plus L1 uncertainty; replaces the fixed stage-4 rule | refine stage, iteratively | grows as it runs | **the nudge**: what to refine next | uncertainty-driven TMC discovery [53]; Chemoton heuristics [18] |
+| L3 | **Construction-feasibility classifier** — predicts `qc_clash`, `placer_refused` and `chelate_cannot_span` before building | task outcomes | 10⁴ already | pruning at polynuclear (M6) scale, where enumeration explodes | — (no comparator records rejections) |
+| L4 | **Geometry-free species-energy surrogate** — a GNN on the typed graph | MACE + corrections over a diverse generated corpus | 10⁵ | pruning 10⁶-scale enumerations before relaxing | tmQMg GNNs [16]; Chemprop [54] |
+| L5 | **Foundation fine-tune** — MACE-OMOL or UMA fine-tuned on refine-stage DFT | refine stage | 10²–10³ | the realistic "larger model": better screening *for this chemistry* | MACE foundation fine-tuning [55] |
+| L6 | **Experimental priors** — "is this species observed / stable in solution?" | CSD existence [56]; NIST log β [42] | 10³–10⁵ | the only prediction genuinely beyond calculation | — |
+
+**Not planned:** a from-scratch large model trained on the registry to replace calculation. The data
+is too narrow, the labels are the wrong fidelity, and OMol25-scale models already fill that niche.
+
+### Rules it inherits from the design
+- **A learned number is its own tier.** The fidelity ladder already has `HEURISTIC` for numbers with
+  no structure-specific compute. A learned number gets a `MethodSpec` carrying the model version and
+  training-set hash. The pinned-theory rule refuses any equation mixing learned and computed terms.
+  Learned numbers are never reported as results.
+- **Species-level, not edge-level, energies** for thermodynamics. Edge ΔE then follows by Hess's
+  law, so every cycle closes and balance holds by construction. An edge-level (CGR) model can
+  predict cycles that don't close; keep those for barriers later.
+- **Split by chemistry** (ligand, metal, composition), never at random. Enumerated neighbours are
+  near-duplicates, and a random split overstates accuracy.
+- **Uncertainty is mandatory** for anything that steers computation.
+
+### Data campaign
+The generator is the data engine. At ~5 s per MACE relaxation, 10⁵ structures across the Mn–Zn
+series and a few ligand families is ~140 GPU-h — about 6 days on one workstation GPU — and ~9 GB
+of registry. The same corpus serves the Irving–Williams benchmark (§5).
+
+### Benchmarks
+| Model | Metric | Baseline |
+|---|---|---|
+| L1 | held-out MAE of corrected screening vs DFT; calibration of the uncertainty (coverage of 1σ/2σ) | uncorrected screening |
+| L2 | **selection recall** — top-M DFT routes found per DFT job spent | the fixed stage-4 rule |
+| L3 | precision and recall of rejection; construction time saved | build everything |
+| L4 | MAE vs MACE on held-out metals and ligands; enrichment of top-k | random pruning |
+| L5 | MAE vs DFT on held-out species vs MACE-OMOL-0 | MACE-OMOL-0 |
+| L6 | AUROC for CSD existence; log β RMSE | a composition-only model |
+
+**First step (cheap, useful now):** a dataset exporter. Nodes, edges with atom maps and roles,
+outcomes with rejection codes and energies per recipe, split by chemistry, with a datasheet. It also
+makes the registry citable as a data contribution.
+
+---
+
+## 5. Experimental benchmarking
+
+Computation benchmarked only against more computation can be consistently wrong. Each claim below is
+paired with a measured observable, the model output it is scored against, and where the data
+comes from. **Status:** *exists* = published data to collect; *source* = the value still needs a
+citation; *measure* = needs a wet-lab experiment.
+
+### 5.1 Structure and identity (Line 1)
+| Observable | Data | Compared with | Metric | Status |
+|---|---|---|---|---|
+| coordination geometry and M–L distances of Ni(II) complexes | CSD [56] | relaxed geometries of the same species | heavy-atom RMSD; M–O distance error | exists |
+| Ni(H₂O)₆²⁺ structure (Ni–O ≈ 2.05–2.07 Å, CN 6) | X-ray/neutron diffraction, EXAFS [57] | the aqua ion as built and relaxed | Ni–O error; preferred hydration number | exists |
+| which isomer crystallises (cis/trans, fac/mer) | CSD | lowest-energy L2 isomer | hit rate | exists (needs working L2) |
+| donor atoms actually used by each ligand | CSD | perceived donor sets | recall and precision | exists |
+| metal–THQ coordination motifs (bridging vs chelating) | CSD survey of metal–THQ and related polymers | predicted dominant motif | agreement | **source** (survey to do) |
+
+### 5.2 Solution thermodynamics (Line 2)
+| Observable | Data | Compared with | Metric | Status |
+|---|---|---|---|---|
+| pKa of acetic acid, phenol, catechol, H₃O⁺ | IUPAC / standard compilations | proton-exchange ΔG (three schemes) | RMSE in pKa units | exists |
+| pKa₁, pKa₂ of tHQ | literature (the analogue DHBQ measures 2.95 / 5.25) | same | error | **source** |
+| stepwise log β of Ni²⁺ with Cl⁻, acetate, catecholate/salicylate | NIST SRD 46 [42] | ligand-exchange ΔG | RMSE in log units | exists |
+| first hydrolysis constant of Ni(H₂O)₆²⁺ | Brown & Ekberg [58] | deprotonation of the aqua ion | error in log units | exists |
+| absolute hydration free energy of Ni²⁺, Cl⁻ | Marcus [59] | solvation scheme on bare ions | error in eV | exists |
+| Irving–Williams order (Mn < Fe < Co < Ni < Cu > Zn) | Irving & Williams [45] | the same ligand across the Mn–Zn series | rank order | exists (needs the multi-metal corpus) |
+
+**Comparing like with like.**
+- **Temperature:** constants are reported at 25 °C.
+- **Ionic strength:** often I = 0.1–1 M, so correct to I = 0 with the Davies equation [60], or model
+  the supporting electrolyte.
+- **Standard state:** 1 M solutes, pure liquid water.
+- **Hydrolysis:** it competes at high pH, so compare over the stated pH range.
+
+### 5.3 Electronic structure (Line 2)
+| Observable | Data | Compared with | Metric | Status |
+|---|---|---|---|---|
+| Ni(II) spin ground state (octahedral triplet; μ_eff ≈ 2.9–3.3 μB) | magnetic susceptibility literature; SSE17 [41] | spin ordering at the refine stage | correct ground state; splitting error | exists |
+| d–d band positions of Ni(II) species (UV-vis) | literature; own measurements | TD-DFT, or ligand-field ordering of predicted species | band shift direction on substitution | exists / measure |
+| metal oxidation state in THQ complexes | EPR, XANES where reported | spin density on Ni (`oxidation_state_mismatch`) | agreement | **source** |
+
+### 5.4 The project's own question — proposed experiments
+These test the salt result (acetate vs chloride as the Ni source for THQ complexation) directly:
+1. **Potentiometric (pH-metric) titration** of Ni²⁺ + THQ in NiCl₂ and in Ni(OAc)₂ media at fixed
+   ionic strength. Fit with Hyperquad [61] to get log β and the species distribution against pH, and
+   compare with the predicted speciation (E7). This is the decisive experiment.
+2. **UV-vis titration** of the same systems. The appearance of the complex band against pH is an
+   independent speciation readout.
+3. **Isothermal titration calorimetry** gives ΔH and TΔS separately, which tests the entropy terms
+   (5d) that screening lacks.
+4. **Synthesis outcome.** Does the solid obtained (PXRD, single-crystal structure) contain the SBU
+   predicted as the dominant solution species? It's a weaker link, since crystallisation selects, but
+   it is the question MOF synthesis actually asks.
+
+### 5.5 Kinetic domain check
+Water-exchange rates [51] set where thermodynamic control holds: fast for Ni(II), slow for Cr(III)
+and Co(III). A benchmark system with an inert centre (for example Co(III) ammines) is a deliberate
+**negative control**. There, the thermodynamic prediction should *disagree* with the observed
+kinetic product, and the plan should say so rather than claim coverage.
+
+---
+
+## 6. Where MolCluster sits
 
 | Step | Best existing | MolCluster |
 |---|---|---|
@@ -311,12 +530,14 @@ Chemoton-style kinetics would be needed.
 | DFT + thermo | ORCA / PySCF + qRRHO | consumer; MACE Hessians as accelerator |
 | pathways | Chemoton (kinetics) | thermodynamic, curated; **refusal of non-isodesmic and charge-separating equations — differentiator** |
 | speciation | HySS, PHREEQC | computes the constants they take as input |
+| learning | Δ-ML, Chemprop, MACE fine-tuning, TMC active learning | consumer of methods; **the data — balanced edges with recorded rejections — is the differentiator** |
+| validation | CSD, NIST SRD 46, titration | uses standard data; adds its own titration of the salt question |
 
 **In one line:** the contribution is integration, identity and refusal discipline — not a new
 method at any single step. Every step that is not a differentiator uses, or benchmarks against, the
 field's standard tool.
 
-## 5. Benchmark roadmap
+## 7. Benchmark roadmap
 
 | # | Benchmark | Line | Cost | Establishes |
 |---|---|---|---|---|
@@ -328,8 +549,15 @@ field's standard tool.
 | 6 | Ni(II) log β vs NIST 46; Irving–Williams | 2 | ~a week of DFT | the chemistry claim |
 | 7 | registry scaling to 10⁶ | 1 | a day, synthetic | the storage claim |
 | 8 | end-to-end Ni–acetate speciation | 1 + 2 | after 1–6 | the project claim |
+| 9 | dataset exporter + chemistry-split datasheet | 4 | a day | learning is possible at all |
+| 10 | Δ-learning with calibrated uncertainty (L1) | 4 | after 3 | the "MACE trust" map |
+| 11 | active-learning selection recall vs the fixed rule (L2) | 4 | after 10 | the nudging claim |
+| 12 | CSD geometry and Ni aqua-ion structure (5.1) | 5 | days | structures match experiment |
+| 13 | pKa, log β, hydrolysis, hydration energies (5.2) | 5 | with 2 and 6 | numbers match experiment |
+| 14 | Ni–THQ titration in chloride vs acetate media (5.4) | 5 | wet lab, weeks | **the project's question, answered by experiment** |
 
-Feasible before an external review: 1 and 2. Benchmark 3 needs the DFT backend (E4).
+Feasible before an external review: 1, 2 and 9. Benchmark 3 needs the DFT backend (E4); 14 needs a
+collaborator with a titrator.
 
 ---
 
@@ -390,3 +618,31 @@ checked for this document.
 49. Gao et al., *Comput. Phys. Commun.* **203**, 212 (2016) — RMG.
 50. Kozuch & Shaik, *Acc. Chem. Res.* **44**, 101 (2011) — energetic span.
 51. Helm & Merbach, *Chem. Rev.* **105**, 1923 (2005) — water exchange rates.
+52. Janet & Kulik, *J. Phys. Chem. A* **121**, 8939 (2017) — revised autocorrelation (RAC) descriptors.
+53. Janet, Duan, Yang, Nandy & Kulik, *Chem. Sci.* **10**, 7913 (2019) — uncertainty-controlled
+    discovery for TMCs.
+54. Heid & Green, *J. Chem. Inf. Model.* **62**, 2101 (2022) — Chemprop condensed graph of reaction.
+55. Batatia et al., arXiv:2401.00096 (2023) — a foundation model for atomistic materials chemistry
+    (MACE fine-tuning).
+56. Groom, Bruno, Lightfoot & Ward, *Acta Cryst. B* **72**, 171 (2016) — the Cambridge Structural
+    Database.
+57. Ohtaki & Radnai, *Chem. Rev.* **93**, 1157 (1993) — structure of hydrated ions.
+58. Brown & Ekberg, *Hydrolysis of Metal Ions* (Wiley-VCH, 2016).
+59. Marcus, *J. Chem. Soc., Faraday Trans.* **87**, 2995 (1991) — ion hydration free energies.
+60. Davies, *Ion Association* (Butterworths, 1962) — the Davies activity equation.
+61. Gans, Sabatini & Vacca, *Talanta* **43**, 1739 (1996) — Hyperquad.
+62. Yaghi et al., *Nature* **423**, 705 (2003) — reticular synthesis.
+63. O'Keeffe, Peskov, Ramsden & Yaghi, *Acc. Chem. Res.* **41**, 1782 (2008) — the RCSR.
+64. Wilmer et al., *Nat. Chem.* **4**, 83 (2012) — large-scale hypothetical MOF screening (hMOF).
+65. Rosen et al., *Matter* **4**, 1578 (2021) — QMOF database.
+66. Chung et al., *Chem. Mater.* **26**, 6185 (2014); *J. Chem. Eng. Data* **64**, 5985 (2019) — CoRE MOF.
+67. Burner et al., *Chem. Mater.* **35**, 900 (2023) — ARC-MOF.
+68. Tsuruoka et al., *Angew. Chem. Int. Ed.* **48**, 4739 (2009) — coordination modulation.
+69. Schaate et al., *Chem. Eur. J.* **17**, 6643 (2011) — modulated synthesis of Zr MOFs.
+70. Moosavi et al., *Nat. Commun.* **10**, 539 (2019) — capturing chemical intuition in MOF synthesis.
+71. Luo et al., *Angew. Chem. Int. Ed.* **61**, e202200242 (2022) — MOF synthesis prediction from mined
+    data.
+72. Anderson & Gómez-Gualdrón, *Chem. Sci.* **11**, 4164 (2020) — free energies toward synthetic
+    likelihood.
+73. Van Vleet, Weng, Li & Schmidt, *Chem. Rev.* **118**, 3681 (2018) — in situ studies of MOF
+    nucleation and growth.
