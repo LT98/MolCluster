@@ -72,7 +72,7 @@ charge, spin — travels with it in a `methods` row.
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. `charge_separation` blocks in gas, is a caveat in a continuum; `solvent='alpb:water'` is met by energies computed in it or by stored corrections, never both (C16–C18) Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
-| `energy/routes.py` | Prices one edge **for a reader**: a refusal comes back as data, not as an exception, because a panel listing twelve routes cannot be one raise. `decompositions` answers what a structure could have been made from — arithmetic over the registry, flagged `inferred`, never mixed with what was recorded (C15) | ✅ |
+| `energy/routes.py` | Prices one edge **for a reader**: a refusal comes back as data, not as an exception, because a panel listing twelve routes cannot be one raise. `decompositions` answers what a structure could have been made from — arithmetic over the registry, flagged `inferred`, never mixed with what was recorded (C15 → D29) | ✅ |
 | `energy/protons.py` | Finds protomer pairs and links them with a balanced `AH + n H2O → A(n−) + n H3O+`. The H₂O/H₃O⁺ couple exists because a bare proton has no electrons to price; these are the **only isodesmic edges in the project** | ✅ |
 | **assembly/** | | |
 | `assembly/join.py` | `BuildingBlock`, `open_sites`, `compatible`/`chelate_compatible`, `join`, `join_chelate`/`chelate_reach`, `grow`. A join takes `lone_pair=` — which lobe of an sp2 donor binds is worth 2.8 Å of M···M and has no default in the chemistry | ✅ |
@@ -176,6 +176,9 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D18** | Ease floor is zero-QM; **absent components stay absent**; `provisional` = "the table value is the wrong question" |
 | **D19** | Re-derive what is only an **annotation** (`site_catalog`); **version** what is an address (identity). A stored identity keeps the answer its own recipe version gave |
 | **D26** | New specs build co-ligand counts `[full − 2, full]` (`co_ligand_counts: range`, `co_ligand_window` 2) in the requested polyhedron and step the co-ligand inside that window, root = lowest in-window state, no bare metal; specs ≤ v7 read as `fill` and replay byte-identically |
+| **D27** | A species is entered in the form it exists in the medium; its charge is read off that form, and nothing is protonated upward |
+| **D28** | A released proton goes to water unless the reader names another base (`proton_sink`); a query-time choice, never stored |
+| **D29** | A `place` edge cites nothing; "made of what" is the composed ladder, never the free ion. CN is a construction scaffold — "saturated" is not a node property |
 
 **Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
 geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),

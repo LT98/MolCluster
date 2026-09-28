@@ -138,7 +138,7 @@ height would be inventing data.
 ## Derived steps
 
 A `place` edge records a construction rather than a reaction — the runner built the whole
-coordination sphere at once — so it cites no reagents and cannot be priced (**C15**). Those rows
+coordination sphere at once — so it cites no reagents and cannot be priced (**D29**). Those rows
 read `— (built whole)` and are not steps.
 
 **derived too**, beside the *made from* heading, additionally offers splits found by

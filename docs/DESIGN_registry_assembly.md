@@ -682,7 +682,7 @@ coordinates.
   the ligand-free chain through the rungs above it. `w = 0` allows no empty vertex, so it plans
   no step and says so. The free co-ligand is its own task (`co_ligand`), stored and relaxed at
   the run's fidelity like a ligand, so a co-ligand edge cites `[rung below, free co-ligand]` —
-  the ligand step's shape — and prices. `place` edges still cite nothing (C15 unchanged).
+  the ligand step's shape — and prices. `place` edges still cite nothing (D29).
 
   Size, measured on the reference slice re-read at v8: `fill` 722 tasks; `range` with `w` = 1
   1141; **`w` = 2 (the default) 2041**; `w` = 3 2521; CN `4,6` at `w` = 2, 3059. `MAX_PATHWAY_TASKS`
@@ -715,6 +715,24 @@ coordinates.
   base and chloride is not. Test: `tests/test_path_energy.py` (a deprotonation with acetate as
   the sink equals the direct AH + OAc⁻ → A⁻ + HOAc).
 
+- **D29 (C15 resolved)** **A `place` edge records a construction and cites nothing; what a
+  structure is made of is answered by composing the recorded ladder, never by citing the free
+  ion.** The pieces a `place` edge could cite are the bare metal ion and free ligands: every
+  such equation is blocked by `check_reference_quality` (`bare_ion`, `coordination_change`) in
+  gas and in a continuum, and in a D26 `range` spec citing them creates the bare-metal row D26
+  says is never built. Under `pathways` the co-ligand and grow ladder links every in-window
+  state by recorded edges, and `price_path` composes them into exchanges (Ni(H₂O)₂ + cat →
+  Ni(cat)(H₂O) + H₂O) that balance and come out isodesmic; `decompositions` is the secondary,
+  `inferred` answer. A spec's CN is a construction scaffold, not a claim: an empty vertex leaves
+  no trace in the graph, so "saturated" is not a property of a node, the window's hydration
+  states stay stored, and which one dominates is decided by energy at query time. A substitution
+  is the composition (co-ligand edge walked back, then the grow edge), never a stored one-step
+  edge, because a recorded edge is an operation that was performed. Tests:
+  `tests/test_pathways.py` (`test_the_step_reaches_the_structure_the_place_task_built`,
+  `test_the_ladder_reaches_down_to_the_bare_centre`), `tests/test_co_ligand_counts.py`
+  (`test_the_co_ligand_ladder_is_built_and_connected`), `tests/test_path_energy.py`
+  (`test_a_route_is_judged_on_its_net_equation_not_its_legs`).
+
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in
 [`archive/DESIGN_history.md`](archive/DESIGN_history.md).
@@ -722,7 +740,7 @@ history — how each one was argued and what it cost — is in
 ## 8. Open Checkpoints (need a call)
 
 *Resolved: C1 → D10 (L2-aware). C4 → D12 (polynuclear-native). C5 → D18 (heuristic floor).
-C8 → curated tables (`data/reference/*.tsv`, each row carrying `source` + `source_version`).*
+C15 → D29 (a `place` edge cites nothing). C8 → curated tables (`data/reference/*.tsv`, each row carrying `source` + `source_version`).*
 
 Each open checkpoint is scheduled at the milestone where code first forces the call — see
 [`PLAN_implementation.md`](PLAN_implementation.md) §3 for that placement.
@@ -732,35 +750,23 @@ Each open checkpoint is scheduled at the milestone where code first forces the c
   minimum vs. a bad geometry. Also governs whether a basin-crossing DFT relax spawns a new L3.
 - **C6 — Barrier proxy (leaning, §6.6):** confirm v1 = ΔG + sink-detection + concurrent-bond-change
   + exchange-lability proxies (with the 1D-scan hook), vs. thermodynamics-only. Input constraint
-  already fixed: a **pivot** node on a composed route (`pathways.route`, `pivot: true`) is
-  bookkeeping, and its `y` must never be read as a barrier or an intermediate by any proxy.
+  already fixed: a **pivot** node on a composed route (`pathways.route`, `pivot: true`) is never
+  read as a barrier by any proxy. Its `y` is a balanced state (node plus spectators), so it may be
+  shown **for reference only**, labelled as the dissociative (parent pivot) or associative
+  (product pivot) intermediate the walk implies; traversal through it stays allowed, and it is
+  never a reported result or a proxy input.
 - **C7 — Partner-dependence (leaning, §6.6):** confirm the factorized HSAB-match model (descriptor
   vectors combined at query time) over a stored ease matrix.
-- **C15 — what tells a placed structure from a grown one (open, found by measurement):** the
-  ladder currently distinguishes them by **whether the edge has reagents**: a `place` edge cites
-  nothing, a `grow` edge cites the rung below and the ligand added. `test_the_step_reaches_the_
-  structure_the_place_task_built` asserts both kinds arrive at one node, and
-  `test_the_ladder_reaches_down_to_the_bare_centre` walks down by following only reagent-bearing
-  edges.
-  That discriminator is load-bearing and it is also the reason a `place` edge cannot be priced:
-  with no reagents, `reaction_terms` injects the product alone and the balance report is its
-  entire composition. Giving `place` its real reagents (the ion, the ligands, the co-ligands —
-  the runner knows all three) was **built and reverted** on this branch, because it makes every
-  edge reagent-bearing and the ladder walk then descends into the bare ion. The patch is small;
-  the decision is not.
-  *Options:* discriminate on `kind` instead of on reagent presence, and let the ladder reach the
-  literal bare centre · keep `place` citing nothing and answer "what is this made of" by
-  derivation only (`energy.routes.decompositions`, which needs no rebuild) · record the pieces
-  under a role that the ladder walk ignores.
-  *Note:* `put_reaction` can now express stoichiometry, which was the blocking prerequisite
-  either way — a diaqua complex has to be able to say *two* waters.
 - **C16–C21 — solvation, cluster-continuum (open, measured):** where a medium is recorded
   (C16), whether ML energy + xTB continuum correction on the same geometry is an acceptable
   medium (C17), charge separation as a reference-quality rule (C18), how an explicit solvent
   count attaches to a species without touching L0/L1 (C19), the reference count and its ±2
   window (C20), and the proton reference and standard state (C21). Options, measurements and
   recommendations in [`WORKPLAN_solvation.md`](WORKPLAN_solvation.md) §3; S1 builds C16–C18's
-  recommendations provisionally. Ledger entry **D-TBD**.
+  recommendations provisionally. Ledger entry **D-TBD**. The pricing anchor, the solvent
+  reference S, multi-solvent release, the no-root refusal and the shell method were **called on
+  2026-09-28 and are not built** — [`WORKPLAN_solvation.md`](WORKPLAN_solvation.md) §3a; each
+  takes its D-number when the slice that implements it lands with a test.
 *(C8 — descriptor-layer sourcing — was here; resolved in M1 in favour of curated tables with
 per-row `source` + `source_version`. See `archive/PLAN_completed.md` rev 19.)*
 

@@ -159,6 +159,42 @@ RT·ln(55.3) ≈ 0.10 eV term per water consumed; other solutes at 1 M. These go
 `ReactionEnergy` as **named terms beside dE**, never folded into stored energies, and wait for
 the thermochemistry slice.
 
+### 3a. Called 2026-09-28 — not built
+
+Settled with the user while resolving C15 (D29). Each rule takes a D-number when the slice that
+implements it lands with a test; until then it is a decision, not behaviour.
+
+1. **One medium per spec and per equation.** The co-ligand, the continuum, the solvent reference
+   S and the proton carrier derive from it (`WORKPLAN_energy.md` stage 0). No equation mixes
+   continua. **Solvent mixtures of comparable ratio are out of scope**: a small explicit cluster
+   cannot represent them and ALPB/SMD are parametrised for pure solvents. A minority solvent in a
+   bulk is a monodentate ligand entered with a concentration.
+2. **The pricing anchor is the solvated metal, never the free ion.** A formation energy is a
+   composed route (D29) from the metal's hydration states in the medium, plus free ligands, to the
+   target, with released solvent S counted explicitly:
+   ΔE = AB(s) + d·S − (A(s) + B). Which hydration state anchors is decided by energy — the lowest
+   at screening, a speciation at stage 6 — not by the spec's CN.
+3. **No solvated root, no price.** With `pathways` off, or a co-ligand that is not stepped, there
+   is no ladder to compose, and pricing refuses by name rather than falling back to a bare ion.
+4. **The energy of S** is the solvent molecule with the continuum added on the **same rung** as
+   the equation, where that continuum is compatible with the rung (C17's composite at screening;
+   SMD at DFT). Where no compatible continuum exists, S is priced from a solvent cluster
+   (Bryantsev, Diallo & Goddard 2008 for water). Its liquid activity term (C21) stays named beside
+   ΔE.
+5. **A step that releases several solvent molecules is priced, not refused.** A chelate displacing
+   two waters is balanced with 2 × E(S), and the site changes are modelled as they occur.
+   `hydration_change` marks the step so the missing TΔS is visible until stage 5 supplies it; it
+   is not blocking.
+6. **C19/C20 revised — explicit shells for free species only, found by measurement and frozen.**
+   Not a count per site: hydrogen bonds are not additive (a carboxylate's two O share solvent).
+   For each free species (ligand, anion, proton carrier, solvent reference) add solvent one at a
+   time, sample arrangements, and stop when the next molecule binds no better than bulk
+   (variational cluster-continuum; Pliego & Riveros — citation to be checked before it is
+   quoted). The resulting n is recorded once per (species, solvent, method, version) — as C20's
+   `n_ref`, with the scan as its source — and reused by every equation, never re-derived (D19).
+   Complexes keep their explicit first shell through the co-ligand window; a second shell is for
+   escalated species only. The stopping tolerance is stated in S5, and n depends on item 4's S.
+
 ---
 
 ## 4. Slices
