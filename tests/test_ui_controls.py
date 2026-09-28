@@ -461,6 +461,110 @@ def test_resuming_an_interrupted_run_executes_its_tasks(registry, active):
     assert _status_after(db, store, run_id, leaving="running") in ("failed", "done")
 
 
+def _clean_compute_env(monkeypatch):
+    # setenv-then-delenv so monkeypatch restores whatever `declare_compute` writes later.
+    for name in ("MOFSBU_DEVICE", "MOFSBU_WORKERS", "MOFSBU_PROFILE"):
+        monkeypatch.setenv(name, "x")
+        monkeypatch.delenv(name)
+
+
+def _device_seen_by_resume(monkeypatch, db, store, run_id, body=None):
+    """Resume, and return the device `compute_device()` reports where the work runs."""
+    import threading
+
+    from mofsbu.config import compute_device
+
+    seen: dict[str, str] = {}
+    done = threading.Event()
+
+    def fake_execute_run(reg, spec, rid):
+        seen["device"] = compute_device()
+        done.set()
+
+    monkeypatch.setattr("mofsbu.runner.execute_run", fake_execute_run)
+    client = TestClient(create_app(db, store, ActiveDatabase(db)))
+    resp = client.post(f"/api/runs/{run_id}/resume", **({"json": body} if body else {}))
+    assert resp.json()["started"] is True
+    assert done.wait(30)
+    return seen["device"], resp.json()
+
+
+def test_resuming_a_run_restores_the_device_it_was_submitted_under(
+        registry, monkeypatch):
+    """Issue #54.  A resume starts a fresh executor, but the device is read from the
+    environment when it runs — so after a restart the ML relaxation ran on cpu even though
+    the run row said cuda.  The run's recorded declaration has to reach the executor."""
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    with Registry(db, BlobStore(store)) as reg:
+        reg.conn.execute("UPDATE runs SET device='cuda' WHERE id=?", (run_id,))
+        reg.conn.commit()
+    _clean_compute_env(monkeypatch)
+
+    device, body = _device_seen_by_resume(monkeypatch, db, store, run_id)
+    assert device == "cuda"
+    assert body["device"] == "cuda"
+
+
+def test_resume_keeps_a_device_the_process_already_declares_and_honours_the_body(
+        registry, monkeypatch):
+    """The stored device is the fallback, not an override: a declaration made since
+    (page or shell) wins over it, and an explicit one in the request wins over both."""
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    with Registry(db, BlobStore(store)) as reg:
+        reg.conn.execute("UPDATE runs SET device='cuda' WHERE id=?", (run_id,))
+        reg.conn.commit()
+    _clean_compute_env(monkeypatch)
+
+    monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
+    device, _ = _device_seen_by_resume(monkeypatch, db, store, run_id)
+    assert device == "cpu"
+
+    run_id = _strand_a_run(db, store)
+    device, _ = _device_seen_by_resume(monkeypatch, db, store, run_id,
+                                       body={"device": "cuda:0"})
+    assert device == "cuda:0"
+
+
+def test_rerunning_a_structure_uses_the_device_its_run_recorded(registry, monkeypatch):
+    """Issue #54, same gap as resume: the re-run executes on a fresh thread and read
+    whatever the environment said, so a restarted server re-ran the relaxation on cpu."""
+    import threading
+
+    from mofsbu.config import compute_device
+    from mofsbu.registry.jobs import complete_task
+
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    with Registry(db, BlobStore(store)) as reg:
+        sid = reg.conn.execute("SELECT id FROM structures LIMIT 1").fetchone()["id"]
+        task_id = reg.conn.execute("SELECT id FROM tasks WHERE run_id=? LIMIT 1",
+                                   (run_id,)).fetchone()["id"]
+        complete_task(reg, task_id, structure_id=sid, structure_created=True)
+        reg.conn.execute("UPDATE runs SET device='cuda' WHERE id=?", (run_id,))
+        reg.conn.commit()
+    _clean_compute_env(monkeypatch)
+
+    seen: dict[str, str] = {}
+    done = threading.Event()
+
+    def fake_work(reg, spec, rid):
+        seen["device"] = compute_device()
+        done.set()
+
+    monkeypatch.setattr("mofsbu.runner.work", fake_work)
+    client = TestClient(create_app(db, store, ActiveDatabase(db)))
+    resp = client.post(f"/api/structures/{sid}/rerun")
+    assert resp.status_code == 202, resp.text
+    assert done.wait(30)
+    assert seen["device"] == "cuda"
+    with Registry(db, BlobStore(store)) as reg:
+        new = reg.conn.execute("SELECT device FROM runs WHERE id=?",
+                               (resp.json()["run_id"],)).fetchone()
+    assert new["device"] == "cuda", "the new run row must say what the work used"
+
+
 def test_stopping_a_run_nothing_is_executing_closes_it_at_once(registry, active):
     """With no executor there is nobody to notice `cancelling`, so the page said
     'stopping' for ever.  Now the stop closes such a run out itself."""

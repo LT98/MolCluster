@@ -13,6 +13,7 @@ notebook without anything being lost.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,28 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
 
     def current() -> Path:
         return active.path
+
+    def _restore_compute(payload: dict, stored_device: str | None,
+                         stored_workers: int | None) -> None:
+        """Declare compute for work that is about to start on a fresh thread (issue #54).
+
+        `compute_device()` reads the environment when the work runs, and a resume or a
+        re-run starts after whatever declared a device may be gone (a server restart), so
+        the relaxation would silently fall back to cpu.  Order: an explicit value in the
+        request body; else what this process already has declared; else what the source
+        run recorded.  Re-applying that record is not the code choosing hardware — a
+        person made the choice when the run was submitted.
+        """
+        from mofsbu.ui.active import declare_compute
+
+        device = payload.get("device") or (
+            None if os.environ.get("MOFSBU_DEVICE") else (stored_device or None))
+        workers = payload.get("workers") or (
+            None if os.environ.get("MOFSBU_WORKERS") else (stored_workers or None))
+        try:
+            declare_compute(device, int(workers) if workers else None)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     def _start_execution(run_db: Path, spec: Any, run_id: int) -> None:
         """Execute a planned run on a background thread — for a new run and a resumed one.
@@ -657,7 +680,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                          f"nothing to stop: this run is {row['status']}")}
 
     @router.post("/api/runs/{run_id}/resume")
-    def resume_run_route(run_id: int) -> dict[str, Any]:
+    def resume_run_route(run_id: int, payload: dict = Body(default={})) -> dict[str, Any]:
         """Put a stopped run's remaining tasks back in the queue, and execute them.
 
         Sweeps this run first, so a run whose process died is resumable from the page
@@ -669,6 +692,8 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         starts, so a resumed run has the same shape as a fresh one (issue #33).  Not when
         this server is already executing the run, or live workers elsewhere hold its tasks:
         two executors on one queue would each close it out.
+
+        The device is part of the resume (issue #54); see `_restore_compute`.
         """
         from mofsbu.registry import BlobStore, Registry
         from mofsbu.registry.jobs import (
@@ -677,8 +702,9 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
 
         run_db = current()
         with Registry(run_db, BlobStore(store_path)) as reg:
-            was = reg.conn.execute("SELECT status, spec_json FROM runs WHERE id=?",
-                                   (run_id,)).fetchone()
+            was = reg.conn.execute(
+                "SELECT status, spec_json, device, workers FROM runs WHERE id=?",
+                (run_id,)).fetchone()
             if was is None:
                 raise HTTPException(404, f"no run {run_id}")
             swept = sweep_interrupted(reg, run_id=run_id)
@@ -689,14 +715,18 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             pending = task_counts(reg, run_id).get("pending", 0)
         started = False
         if pending and running.get(run_id) != "running" and not elsewhere:
+            _restore_compute(payload, was["device"], was["workers"])
             _start_execution(run_db, BuildSpec.from_json(was["spec_json"]), run_id)
             started = True
         note = (f"resumed: executing {pending} task(s)" if started else
                 "already executing" if pending and running.get(run_id) == "running" else
                 f"{pending} task(s) waiting; live workers elsewhere are executing this run"
                 if pending else "nothing left to do in this run")
+        from mofsbu.config import compute_device
+
         return {"run_id": run_id, "revived": revived, "was": was["status"],
-                "swept": swept, "pending": pending, "started": started, "note": note}
+                "swept": swept, "pending": pending, "started": started, "note": note,
+                "device": compute_device() if started else None}
 
     @router.get("/api/runs/{run_id}/tasks")
     def get_run_tasks(run_id: int, status: str | None = None,
@@ -834,7 +864,8 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             con.close()
 
     @router.post("/api/structures/{structure_id}/rerun")
-    def rerun_structure(structure_id: int) -> JSONResponse:
+    def rerun_structure(structure_id: int,
+                        payload: dict = Body(default={})) -> JSONResponse:
         """Queue the one task that built this structure, again.
 
         Not a new enumeration: the originating task's payload and its run's spec are
@@ -845,6 +876,9 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         writes nothing.  That is the CORRECT result and the page reports it as
         "already present" rather than as a no-op — a re-run that changes nothing is how
         you confirm determinism, and it should look like a confirmation.
+
+        The device is declared before the new run row is written, so the row and the work
+        agree; see `_restore_compute` (issue #54).
         """
         from mofsbu.registry import BlobStore, Registry
         from mofsbu.registry.jobs import add_task, create_run
@@ -853,8 +887,8 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         con = _ro()
         try:
             row = con.execute(
-                "SELECT t.id AS task_id, t.run_id, t.kind, t.payload_json, r.spec_json"
-                " FROM tasks t JOIN runs r ON r.id = t.run_id"
+                "SELECT t.id AS task_id, t.run_id, t.kind, t.payload_json, r.spec_json,"
+                " r.device, r.workers FROM tasks t JOIN runs r ON r.id = t.run_id"
                 " WHERE t.structure_id = ?"
                 " ORDER BY t.structure_created DESC, t.id ASC LIMIT 1", (structure_id,)
             ).fetchone()
@@ -868,6 +902,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                        "note": f"re-run of structure {structure_id} "
                                f"(task {row['task_id']}, run {row['run_id']})"})
 
+        _restore_compute(payload, row["device"], row["workers"])
         run_db = current()
         with Registry(run_db, BlobStore(store_path)) as reg:
             reg.migrate("builder")
