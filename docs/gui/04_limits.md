@@ -129,6 +129,17 @@ atoms and charge sum to the target; a three-way split is the ladder M8 builds. A
 full scan of the structures table, so they are asked for rather than always on — except at a
 node whose recorded edges cite nothing, where derivation is the only answer available.
 
+## One solvent, and the medium is not checked against the spec
+
+The `/graph` medium select takes one `model:solvent` token per equation, so a route is priced
+in one pure solvent or in gas. **Solvent mixtures are out of scope** (`WORKPLAN_solvation.md`
+§3a): nothing builds or prices a MeOH/H₂O shell or continuum.
+
+The spec's co-ligand and the page's medium are still **chosen separately**, and nothing checks
+that they agree — a ladder filled with water can be priced in another continuum. Deriving both
+from one medium named in the spec is decided and not built (`WORKPLAN_energy.md` stage 0), as is
+refusing to price a structure that has no solvated root to compose from.
+
 ## Two things that are deliberate, not missing
 
 - **The viewer cannot write.** Not an oversight — `mode=ro` plus `PRAGMA query_only`, with

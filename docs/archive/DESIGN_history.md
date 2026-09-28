@@ -10,6 +10,39 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
+- *(2026-09-28)* **D29 — C15 resolved: a `place` edge cites nothing.** All three options on
+  record were prototyped in a throwaway worktree (never committed) and run against the suite.
+
+  * **What the C15 text got wrong.** Both edge kinds are written `kind='assembly'`, so
+    "discriminate on `kind`" meant a new value (`reactions.kind` is free TEXT and
+    `reaction_reagents.role` already exists — neither option needed a migration). The recorded
+    failure, "the walk descends into the bare ion", was imprecise: measured, the walk from
+    Zn(L)₂ takes the place edge straight to Zn and skips Zn(L). The decisive conflict was not
+    mentioned at all — in a D26 `range` spec, citing the pieces creates a bare Ni²⁺ row.
+  * **Measured.** Option (a), a `place` kind with the ion, ligands and co-ligands as reagents:
+    four failures until the tests read `kind`, then one (`test_the_co_ligand_ladder_is_built_and_
+    connected`, "no bare-metal row"). Option (c), the pieces under a `piece` role the walk
+    ignores: that one failure only. Under both, every place edge priced non-strict and was
+    refused strict for `bare_ion` + `coordination_change`, in gas and in `alpb:water`. Option
+    (b): `price_path` composed `Ni(H₂O)₂ + cat → Ni(cat)(H₂O) + H₂O` from two recorded ladder
+    edges, balanced, isodesmic, no caveats; `decompositions` found nothing for either ladder root.
+  * **Why (b).** The "real reagents" of a place edge are the free ion and free ligands, which
+    D17 refuses and D26 does not build; (a) and (c) paid for a D26 reversal with an edge strict
+    pricing never accepts. A stored one-step substitution edge (saturated parent → saturated
+    product + d S) was also costed — ~100–200 lines in `runner.py`, a `leaving` role on write,
+    `SPEC_VERSION` 9, 3–5 tests rewritten — and rejected: the executor places the vacated parent
+    and joins, so the edge would record a composition as a performed step.
+  * **Saturation is not a node property.** Empty vertices leave no trace in the graph (the bare
+    Zn rung is `Zn q2`), and L2 reads only donor arrangement — runs store `l2=""` anyway (D22) —
+    so a CN-4-saturated and a CN-6-divacant Ni(cat)(H₂O)₂ are one node. The polyhedron is
+    recorded only as the `place` edge's note, a statement about the construction; `geometries`
+    has no scaffold column, so a relaxed geometry claims no CN.
+  * **Carried with it.** The C6 pivot constraint was narrowed from "never a barrier or an
+    intermediate" to "never a barrier; shown for reference only". The pricing rules that follow
+    from (b) are called but not built — `WORKPLAN_solvation.md` §3a. A cheap follow-up: one
+    predicate (e.g. `registry.api.is_construction`) so the tests and `graph.html` stop each
+    testing `reagent_ids` truthiness.
+
 - *(M6/S0)* **D20, D24 and D25 — the polynuclear calls, made before the placer exists.**
   Three decisions M6 could not start without, and the first of them reverses the plan's own
   estimate of where the milestone's cost lives.
