@@ -527,6 +527,44 @@ def test_resume_keeps_a_device_the_process_already_declares_and_honours_the_body
     assert device == "cuda:0"
 
 
+def test_rerunning_a_structure_uses_the_device_its_run_recorded(registry, monkeypatch):
+    """Issue #54, same gap as resume: the re-run executes on a fresh thread and read
+    whatever the environment said, so a restarted server re-ran the relaxation on cpu."""
+    import threading
+
+    from mofsbu.config import compute_device
+    from mofsbu.registry.jobs import complete_task
+
+    db, store = registry
+    run_id = _strand_a_run(db, store)
+    with Registry(db, BlobStore(store)) as reg:
+        sid = reg.conn.execute("SELECT id FROM structures LIMIT 1").fetchone()["id"]
+        task_id = reg.conn.execute("SELECT id FROM tasks WHERE run_id=? LIMIT 1",
+                                   (run_id,)).fetchone()["id"]
+        complete_task(reg, task_id, structure_id=sid, structure_created=True)
+        reg.conn.execute("UPDATE runs SET device='cuda' WHERE id=?", (run_id,))
+        reg.conn.commit()
+    _clean_compute_env(monkeypatch)
+
+    seen: dict[str, str] = {}
+    done = threading.Event()
+
+    def fake_work(reg, spec, rid):
+        seen["device"] = compute_device()
+        done.set()
+
+    monkeypatch.setattr("mofsbu.runner.work", fake_work)
+    client = TestClient(create_app(db, store, ActiveDatabase(db)))
+    resp = client.post(f"/api/structures/{sid}/rerun")
+    assert resp.status_code == 202, resp.text
+    assert done.wait(30)
+    assert seen["device"] == "cuda"
+    with Registry(db, BlobStore(store)) as reg:
+        new = reg.conn.execute("SELECT device FROM runs WHERE id=?",
+                               (resp.json()["run_id"],)).fetchone()
+    assert new["device"] == "cuda", "the new run row must say what the work used"
+
+
 def test_stopping_a_run_nothing_is_executing_closes_it_at_once(registry, active):
     """With no executor there is nobody to notice `cancelling`, so the page said
     'stopping' for ever.  Now the stop closes such a run out itself."""

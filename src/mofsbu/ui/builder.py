@@ -84,6 +84,28 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
     def current() -> Path:
         return active.path
 
+    def _restore_compute(payload: dict, stored_device: str | None,
+                         stored_workers: int | None) -> None:
+        """Declare compute for work that is about to start on a fresh thread (issue #54).
+
+        `compute_device()` reads the environment when the work runs, and a resume or a
+        re-run starts after whatever declared a device may be gone (a server restart), so
+        the relaxation would silently fall back to cpu.  Order: an explicit value in the
+        request body; else what this process already has declared; else what the source
+        run recorded.  Re-applying that record is not the code choosing hardware — a
+        person made the choice when the run was submitted.
+        """
+        from mofsbu.ui.active import declare_compute
+
+        device = payload.get("device") or (
+            None if os.environ.get("MOFSBU_DEVICE") else (stored_device or None))
+        workers = payload.get("workers") or (
+            None if os.environ.get("MOFSBU_WORKERS") else (stored_workers or None))
+        try:
+            declare_compute(device, int(workers) if workers else None)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     def _start_execution(run_db: Path, spec: Any, run_id: int) -> None:
         """Execute a planned run on a background thread — for a new run and a resumed one.
 
@@ -671,20 +693,12 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         this server is already executing the run, or live workers elsewhere hold its tasks:
         two executors on one queue would each close it out.
 
-        The device is part of the resume (issue #54).  `compute_device()` reads the
-        environment when the executor runs, and a resume starts a fresh executor — often
-        after a server restart, when nothing has declared a device and the relaxation
-        silently falls back to cpu.  So the device is declared here, in this order: an
-        explicit `device`/`workers` in the request body; else what this process already
-        has declared; else what the run row says it was submitted under.  Re-applying the
-        run's own recorded declaration is not the code choosing hardware — a person made
-        that choice at submit time.
+        The device is part of the resume (issue #54); see `_restore_compute`.
         """
         from mofsbu.registry import BlobStore, Registry
         from mofsbu.registry.jobs import (
             resume_run, run_liveness, sweep_interrupted, task_counts,
         )
-        from mofsbu.ui.active import declare_compute
 
         run_db = current()
         with Registry(run_db, BlobStore(store_path)) as reg:
@@ -701,14 +715,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             pending = task_counts(reg, run_id).get("pending", 0)
         started = False
         if pending and running.get(run_id) != "running" and not elsewhere:
-            device = payload.get("device") or (
-                None if os.environ.get("MOFSBU_DEVICE") else (was["device"] or None))
-            workers = payload.get("workers") or (
-                None if os.environ.get("MOFSBU_WORKERS") else (was["workers"] or None))
-            try:
-                declare_compute(device, int(workers) if workers else None)
-            except (ValueError, TypeError) as exc:
-                raise HTTPException(400, str(exc)) from exc
+            _restore_compute(payload, was["device"], was["workers"])
             _start_execution(run_db, BuildSpec.from_json(was["spec_json"]), run_id)
             started = True
         note = (f"resumed: executing {pending} task(s)" if started else
@@ -857,7 +864,8 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
             con.close()
 
     @router.post("/api/structures/{structure_id}/rerun")
-    def rerun_structure(structure_id: int) -> JSONResponse:
+    def rerun_structure(structure_id: int,
+                        payload: dict = Body(default={})) -> JSONResponse:
         """Queue the one task that built this structure, again.
 
         Not a new enumeration: the originating task's payload and its run's spec are
@@ -868,6 +876,9 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         writes nothing.  That is the CORRECT result and the page reports it as
         "already present" rather than as a no-op — a re-run that changes nothing is how
         you confirm determinism, and it should look like a confirmation.
+
+        The device is declared before the new run row is written, so the row and the work
+        agree; see `_restore_compute` (issue #54).
         """
         from mofsbu.registry import BlobStore, Registry
         from mofsbu.registry.jobs import add_task, create_run
@@ -876,8 +887,8 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
         con = _ro()
         try:
             row = con.execute(
-                "SELECT t.id AS task_id, t.run_id, t.kind, t.payload_json, r.spec_json"
-                " FROM tasks t JOIN runs r ON r.id = t.run_id"
+                "SELECT t.id AS task_id, t.run_id, t.kind, t.payload_json, r.spec_json,"
+                " r.device, r.workers FROM tasks t JOIN runs r ON r.id = t.run_id"
                 " WHERE t.structure_id = ?"
                 " ORDER BY t.structure_created DESC, t.id ASC LIMIT 1", (structure_id,)
             ).fetchone()
@@ -891,6 +902,7 @@ def build_router(db_path: Path, store_path: Path, spec_dir: Path,
                        "note": f"re-run of structure {structure_id} "
                                f"(task {row['task_id']}, run {row['run_id']})"})
 
+        _restore_compute(payload, row["device"], row["workers"])
         run_db = current()
         with Registry(run_db, BlobStore(store_path)) as reg:
             reg.migrate("builder")
