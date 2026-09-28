@@ -68,7 +68,7 @@ charge, spin — travels with it in a `methods` row.
 | `geometry/distances.py` | M–L target distance as a property of the *pair*. `metal_metal_distance` is the M–M half and has **no table behind it**: a named motif is refused, because the element symbols do not carry the bond order | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
 | `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
-| **energy/** | | |
+| **energy/** | *How the pieces below combine — screen, select, refine, calibrate — is [`WORKPLAN_energy.md`](WORKPLAN_energy.md); MACE numbers are the screening tier* | |
 | `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. `charge_separation` blocks in gas, is a caveat in a continuum; `solvent='alpb:water'` is met by energies computed in it or by stored corrections, never both (C16–C18) Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
