@@ -4,12 +4,12 @@
 > module table, invariants, decision ledger one-liners. This document is the detail behind
 > it — remaining milestones, exit gates, open decision gates.
 
-**This file holds only unfinished work.** M0–M4 are done; they and the full changelog live in
+**This file holds only unfinished work.** M0–M5 are done; they and the full changelog live in
 [`archive/PLAN_completed.md`](archive/PLAN_completed.md). Things that are *built and behaving
 wrongly* are not milestones — they are in [`BUGS.md`](BUGS.md).
 
 **Companion to** [`DESIGN_registry_assembly.md`](DESIGN_registry_assembly.md). That doc says
-*what* is being built and *why* (ledger D1–D18). This doc says *what code exists*, *in what
+*what* is being built and *why* (ledger D1–D29). This doc says *what code exists*, *in what
 order*, and *what has to be true before the next thing starts*.
 
 **Form:** dependency-ordered milestones, no calendar dates. Each has the modules it lands, an
@@ -21,25 +21,32 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 | | |
 |---|---|
 | **Done** | M0 rails · M1 descriptors · M2 graph + identity · M3 registry · M3.5 viewer · M4 sites · **M5 assembly** |
-| **Partly done** | **M7** — backends, `MethodSpec`, reference scheme and the relax runner all shipped; the regression exit gate has a harness and no recorded result |
-| **In progress** | **M6** polynuclear nodes — the first milestone that builds a real SBU. S0 closed (D20/D24/D25 called, [B12](archive/BUGS_resolved.md) fixed) and S1's well branch landed; `WORKPLAN_M6.md` carries the slice-level detail |
-| **Then** | M8 pathways (the actual contribution) · M9 folded in opportunistically |
+| **Partly done** | **M7** screening tier — backends, `MethodSpec`, the reference scheme, the relax runner, the `alpb:water` medium (solvation S1–S3) and `price_path` all shipped; E1, route enumeration and the seams are open, and the regression has a harness with no recorded result |
+| **In progress** | **M6** polynuclear nodes — the first milestone that builds a real SBU. S0 closed (D20/D24/D25 called, [B12](archive/BUGS_resolved.md) fixed); the bridge and metal–metal joins are built; `WORKPLAN_M6.md` carries the slice-level detail |
+| **Then** | **M7R** refine tier (the first reportable number) · M8 pathways (the actual contribution) · M9 folded in opportunistically |
 
 ```
-[M0 · M1 · M2 · M3 · M3.5 · M4 · M5 — done] ─► M6 polynuclear ─┐
-                                                               ├─► M8 pathways
-        M7 energy — primitives built, route evaluation open ───┘
+[M0 · M1 · M2 · M3 · M3.5 · M4 · M5 — done] ─► M6 polynuclear ─────────────────┐
+                                                                               ├─► M8 pathways (+E7)
+   M7 screen (WORKPLAN_M7, E1, E-MH, E2) ─► M7R refine (E3–E6, GPU4PySCF) ─────┘
 ```
 
 **Open decision gates:** C2's energy window (blocked on [B9](BUGS.md#b9)), C6 and C7 (forced by
-M8). See §3. C9 and C10 were M6's and are called — D24 and D25.
+M8), C11–C14 (M7), C16–C21 (solvation, partly called), whether xTB stays. See §3. C9, C10 and
+C15 are called — D24, D25, D29.
 
 **Energy work follows [`WORKPLAN_energy.md`](WORKPLAN_energy.md).** The builder is a model
 generator; MACE relaxes, ranks within an identity, triages routes and accelerates Hessians and
-sampling. Reported numbers are stage-5 recipe results (DFT//MACE + SMD + qRRHO, calibrated). Its
-slices E0–E7 carry M7's remaining work and M8's energy side; gate E1 (connectivity check after
-relaxation) comes before any number is reported. The presentation-level view of the whole
-project, with comparisons and benchmarks, is [`reports/PROJECT_PLAN.md`](reports/PROJECT_PLAN.md).
+sampling. Reported numbers are stage-5 recipe results (DFT//MACE + SMD + qRRHO, calibrated), so
+**M7 produces screening numbers and M7R produces the first reportable ones**; its slice table
+maps each E-slice to one of them. Gate E1 (connectivity check after relaxation) comes before any
+number is reported. Solvation detail is [`WORKPLAN_solvation.md`](WORKPLAN_solvation.md). The
+presentation-level view, with comparisons and benchmarks, is
+[`reports/PROJECT_PLAN.md`](reports/PROJECT_PLAN.md).
+
+**Called 2026-09-29, not built:** relaxation moves to **MACE-MH**, after study E-MH measures how
+it reconciles with MACE-OMOL-0; the DFT backend is **GPU4PySCF**; whether xTB stays is reopened.
+Plans and the xTB analysis are in `WORKPLAN_energy.md` §3a.
 
 ---
 
@@ -89,6 +96,10 @@ These are cheap to hold now and expensive to add later. Every one of them is a t
    canonical certificate is pure Python and depends on no optional native package (D16).
    Nothing that is installed on only one machine may ever produce a key, or the laptop and the
    workstation disagree about identity. The golden-hash test in M2 is what enforces this.
+11. **A reported energy is a recipe result.** MACE and MACE+continuum numbers are the screening
+   tier: they relax, rank, triage and accelerate, and are never presented as a result. A number
+   is at the recipe of its equation's weakest term (`WORKPLAN_energy.md` §0), and a recipe is a
+   named, versioned composite — ground rule 3 applied to an equation rather than to one value.
 
 ---
 
@@ -360,18 +371,30 @@ def check_balance(reg, reaction_id) -> BalanceReport
 def check_reference_quality(reg, reaction_id, ...) -> ReferenceQuality
 def reaction_balanced_energy(reg, ...) -> ReactionEnergy      # strict=False to reproduce legacy
 def store_reaction_energy(...) / put_balanced_reaction(...)
+#   charge_separation blocks in gas, is a caveat in a continuum; solvent='alpb:water' is met by
+#   energies computed in it or by stored corrections, never both (C16–C18)
+
+# solvation.py — the screening continuum (C17): xTB gas + ALPB on the SAME geometry
+def correct(reg, geometry_id, medium) -> ...         # writes through registry.put_solvation_correction
+
+# routes.py — prices one edge for a reader; a refusal is data.  decompositions() is `inferred`
+# protons.py — protomer pairs linked by AH + n H2O -> A(n-) + n H3O+ (the isodesmic edges)
 ```
+
+`pathways/route.py` composes priced edges into a route (`price_path`: running sum, pivots,
+`basis`, net-equation quality, `proton_sink` per D28). It does not search, score or rank.
 
 #### The run layer, and `scripts/`
 
-`spec.py` (`BuildSpec`, versioned + migrated, currently v5) is the input; `runner.plan` writes
+`spec.py` (`BuildSpec`, versioned + migrated, currently v8) is the input; `runner.plan` writes
 tasks and `runner.work` drains them; `registry/jobs.py` is the queue. `naming.py` derives labels
 from retrieved rows and is never an input to retrieval.
 
 There is **no unified `mofsbu` CLI with subcommands.** `pyproject.toml` declares one console
 script, `mofsbu-ui`. Everything else is a standalone file under `scripts/`: `build.py`,
 `run_spec.py`, `verify_registry.py`, `regress_m7.py`, `seed_demo_registry.py`,
-`build_metal_descriptors.py`, `check_cases.py`, `regen_golden.py`, `viewer.py`, `check.sh`.
+`build_metal_descriptors.py`, `check_cases.py`, `regen_golden.py`, `viewer.py`, `check.sh`,
+`solvate.py`, `link_protomers.py`, `build_zn_thq.py`, `callgraph.py`.
 Those scripts contain no logic — they parse args and call the package. Consolidating them behind
 one entry point is M9, not a thing that already happened.
 
@@ -383,33 +406,12 @@ Do not code against these as though they were real; each currently raises. `NotB
 (a `NotImplementedError` subclass) means *missing body*; `EnergyBackendUnavailable` means
 *missing install*. Never collapse the two (ground rule 8).
 
+*Built since this list was written, and removed from it:* `l2_isomer_tag` / `l3_conformer_id`
+(`identity/isomers.py`, `identity/conformers.py`), `assembly/choice.py`, `assembly/construct.py`,
+and every join in `assembly/join.py` including `join_bridge` and `join_metal_metal` — see
+`CODE_ARCHITECTURE.md` §2.
+
 ```python
-# identity/keys.py — signatures are final and IN THE SCHEMA; bodies return the unset placeholder
-def l2_isomer_tag(g, geom=None) -> str            # cis/trans, fac/mer, Δ/Λ        -> M5
-def l3_conformer_id(choice_vector=None, geom=None) -> str                        # -> M5
-
-# assembly/join.py — HALF built.  BuildingBlock and open_sites work today:
-@dataclass
-class BuildingBlock:
-    structure_id; graph; geometry; sites; net_charge; provenance
-    def open_sites(self, ...) -> list[Site]       # RAISES on a block with no state, by design
-def compatible(a, b, *, partner=None) -> Compatibility     # raises NotBuiltYet -> M5
-def join(a, b, site_a, site_b, *, ...) -> JoinResult       # raises NotBuiltYet -> M5
-def grow(seed_block, partners, *, ...)                     # raises NotBuiltYet -> M5/M6
-
-# assembly/choice.py — NOT WRITTEN -> M5
-@dataclass(frozen=True)
-class Choice: kind: Literal["A","B","C"]; name: str; value: Any
-@dataclass(frozen=True)
-class ChoiceVector:
-    choices: tuple[Choice, ...]
-    def digest(self) -> str
-    def replay(self) -> ConstructSpec
-
-# assembly/construct.py — NOT WRITTEN -> M5
-def construct(spec, *, seed) -> ConstructResult            # deterministic; emits choice_vector
-def enumerate_constructs(spec) -> Iterator[ConstructSpec]  # Kind-B/C branch tree, live-DOF gated
-
 # geometry/placer.py — reconciliation (S3) -> M6.  SIGNATURES NOW IN THE CODE, bodies raise.
 @dataclass                    # element is NOT always a metal: a bridging atom is a centre (§4)
 class Center: element; cn; local_geometry; charge=0; oxidation_state=None; spin_class=None
@@ -429,7 +431,20 @@ def check_intercentre(coords, constraints, *, metal_idxs, symbols=None) -> list[
 def node_template(name) -> TemplateNode          # "cu_paddlewheel", "fe3_mu3_oxo", "zn4o"
 def graft(template, joins, *, seed) -> PlacementResult
 
-# pathways/ — EMPTY package -> M8
+# pathways/ — M7 (WORKPLAN_M7 S2–S4): the seams and route enumeration, naive policies only
+def policy_for(kind, name) -> Policy                        # pathways/policy.py; raises listing known names
+def routes_to(reg, structure_id, *, max_depth, route_filter="all") -> list[Route]   # route.py
+def route_energies(reg, route, *, fidelity, step_filter="all", ranking="none")      # evaluate.py
+
+# energy/ — M7 and M7R (WORKPLAN_energy §5)
+def connectivity_check(symbols, coords, graph) -> ConnectivityReport   # E1; mismatch -> connectivity_changed
+class MACEMHBackend(MACEBackend): head: str; charge_aware: bool         # E-MH; head is in the MethodSpec
+class DFTBackend: single_point / relax / hessian                        # E4, GPU4PySCF; fills Fidelity.DFT
+def thermo_correction(reg, geometry_id) -> ThermoRow                    # E3, MACE Hessian -> qRRHO
+def escalation_set(reg, routes, k=3) -> EscalationSet                   # E5, energy/escalate.py
+def speciation(reg, species, conditions) -> Speciation                  # E7
+
+# pathways/ — M8
 @dataclass
 class ProxyRecord: concurrent_bond_changes; exchange_lability; coulomb_penalty; bep_estimate; ...
 def barrier_proxy(reg, reaction) -> ProxyRecord
@@ -479,12 +494,13 @@ oxo clusters cannot be built without it. It is one scalar per edge, not a genera
 
 **Work** — ✅ the lone-pair well as a Kind-B branch, ✅ recorded in the choice vector and
 ✅ `join`'s `n_metals > 1` guard lifted, which together make a bridged dimer emerge from two
-one-contact joins at 2.673 Å. Still to build: `bridge_compatible` and a two-point form of
-`join`; bridging atoms as centres, plus the bent CN-2 geometry; reconciliation via
-`place_multicentre`; vacancy↔vacancy joins for a declared nucleus, with
-`metal_metal_distance` in `geometry/distances.py`; `geometry/qc.py` extended with
-`check_intercentre`; multi-metal `to_rdkit`. *(The CN=5 item this section used to carry is
-done — both CN-5 polyhedra are in `site_vectors` and tested.)*
+one-contact joins at 2.673 Å. Also built since: `bridge_compatible` / `join_bridge` (one ligand
+across two metals in one move), bridging atoms as centres (`bridging_metal_positions`), and the
+declared nucleus (`metal_metal_compatible` / `join_metal_metal`, with `metal_metal_distance`,
+which refuses a named motif rather than guessing a bond order). **Still to build:**
+reconciliation via `place_multicentre` (S3), `check_intercentre` (S6) and multi-metal
+`to_rdkit` (S7). The first two are stubs that raise `NotBuiltYet`; `to_rdkit` still takes one
+metal.
 
 **Ground-truth targets:** a battery, not one motif — paddlewheel, under-bridged Cu₂(µ-O₂CH)₂,
 its benzoate analogue, a pyrazolate dimer, Cu₂(µ-OH)₂, Fe₃(µ₃-O) in both valence patterns, and
@@ -496,9 +512,9 @@ carboxylate and not, symmetric and mixed-valence.
 window it must land in. It is the interface for adding a case — add a row, no code changes —
 and `tests/test_m6_battery.py` checks the rows against each other, against the fixture graphs,
 and against the code's own `site_vectors`, so a typo in a target is not discovered as a clash
-out of a placer that is working correctly. Two rows carry `blocked_on` rather than numbers —
-[B13](BUGS.md#b13) for the hydroxide bridge, [B14](BUGS.md#b14) for the pyrazolate one — and
-the blockers themselves are asserted, so the battery cannot claim to be waiting on a defect
+out of a placer that is working correctly. One row carries `blocked_on` rather than numbers —
+[B14](BUGS.md#b14) for the pyrazolate bridge ([B13](archive/BUGS_resolved.md), the hydroxide
+one, is fixed and its row now has targets) — and the blockers themselves are asserted, so the battery cannot claim to be waiting on a defect
 that has been fixed. **Its numbers are typical of the named compound class, not a refinement of
 a deposited structure**: no CIF was consulted, which is why every row carries a window and why
 narrowing one against the CSD is a prerequisite for any quantitative claim it backs.
@@ -507,8 +523,8 @@ narrowing one against the CSD is a prerequisite for any quantitative claim it ba
 **nucleus-first** route (declare the dimer, add bridges) reach **one** node with **two**
 incoming provenance edges. That is M5's "one node, two routes" generalised to polynuclear, and
 it is M8's Path A vs Path B made buildable here. Plus: the battery builds QC-clean or is refused
-with a stated number; each cluster's M···M is within literature range; an xTB relax does not
-tear a node apart; and the failed route `Cu(HCOO)₂ + Cu` is **refused with its measurement**
+with a stated number; each cluster's M···M is within literature range; a relaxation does not
+tear a node apart — judged by E1's `connectivity_changed`, not by eye; and the failed route `Cu(HCOO)₂ + Cu` is **refused with its measurement**
 (1.46 Å), not silently absent.
 
 **Plan B, declared in advance (see §4):** `geometry/templates.py` — place from a stored
@@ -519,50 +535,67 @@ while recording that the risk it guards has largely retired.
 
 ---
 
-### M7 — Energy over a route, with the decision points left open · **M remaining**
+### M7 — Route evaluation at the screening tier · **M**
 
-**Re-scoped — see [`WORKPLAN_M7.md`](WORKPLAN_M7.md).** This section described what is left
-as an exit gate: re-run two archived datasets and record the result. That is a test, not a
-capability. What is missing is route-level evaluation — `reaction_balanced_energy` scores one
-reaction and nothing composes steps, so there is no way to ask what a *route* costs — and
-anywhere to decide what is worth computing: `runner.queue_relax` relaxes everything that was
-built, and `estimate` reports `relaxations = builds`.
+**What M7 is now.** It covers [`WORKPLAN_M7.md`](WORKPLAN_M7.md) (the four named seams, route
+enumeration, per-step energies, the archive regression) plus the energy slices that make a
+screening number honest: **E1** (connectivity check after relaxation), **E-MH** (the MACE-MH
+relaxer and its comparison with MACE-OMOL-0), **E2** (the screening label, the ALPB–GBSA error
+bar, `hydration_change`, the pH / water-reference terms and the solvation §3a pricing rules),
+and solvation **S0** (ledger calls for C16–C21) and **S7** (the archive's solvation sweep). M7
+produces numbers that decide *what escalates*. It produces nothing that is reported: that is
+M7R, by ground rule 11.
 
-**M7 builds the evaluation and only the seams for the decisions.** Everything is still
-evaluated: no pruning, no ranking, four named decision points with naive defaults that
-reproduce today's behaviour. What a real policy reads and how it scores is deferred until
-there is something to measure it against; barrier proxy, sink detection and ranking stay M8
-(C6, C7). The "S remaining" size below applies to the gate alone and is superseded.
+**Built already** — `energy/backends.py` (xTB via tblite, MACE-MP-0, MACE-OMOL-0, Null) behind one
+protocol; a `MethodSpec` on every stored number; the `relaxed_from` fidelity ladder exercised by
+a real relax runner; `energy/reference.py`, which **refuses** unbalanced and non-isodesmic
+equations (D17) and blocks `charge_separation` in gas; the `alpb:water` medium on stored
+energies (solvation S1–S3, written after every run by `finalise_run`); and `pathways/route.py`'s
+`price_path`, which composes a route a reader walks. Nothing enumerates routes, and nothing
+records a decision about what to compute.
 
-**Built already** (revs 16, 19, 20, 22) — `energy/backends.py` (xTB via tblite, MACE-MP-0,
-MACE-OMOL-0, Null) behind one protocol; a `MethodSpec` on every stored number;
-`high_spin_multiplicity`; the `relaxed_from` fidelity ladder exercised by a real relax runner;
-and `energy/reference.py`, which **refuses** unbalanced and non-isodesmic equations (D17) —
-the fix for the design doc's first known risk, gas-phase xTB on isolated highly-charged anions.
+**The regression.** `scripts/regress_m7.py` is the harness, in two stages, and **no result from
+either is recorded anywhere.** Stage 1 (`--refs`, minutes, needs tblite) recomputes the four
+reference energies the archived Fe(III) run subtracted: a calculator-identity check, not a
+ranking check (WORKPLAN_M7 C14). Stage 2 (`--rankings`) needs the archived candidate set
+re-derived under a different construction path, and is deferred to M8 (WORKPLAN_M7 S7). The
+archived equation needs `strict=False` and carries `isodesmic=False`; the comparison is between
+the old number and the new one, not an endorsement of the old scheme.
 
-**What is left is the exit gate.** `scripts/regress_m7.py` is the harness and it is written in
-two stages; **no result from either is recorded anywhere.**
+**Exit gate:**
+- E1 in place: a relaxation that forms or breaks a bond is marked `connectivity_changed` and
+  excluded from energy selection;
+- `routes_to` and `route_energies` return M6's two paddlewheel routes with per-step energies or
+  a stated reason per step, and each seam honours an injected restrictive policy (WORKPLAN_M7
+  S3–S5);
+- every number shown carries the screening label and its ALPB–GBSA spread;
+- E-MH recorded in `reports/` with its outcome chosen, and the stage-2 relaxer set accordingly;
+- regression stage 1 recorded, both metals (WORKPLAN_M7 S6);
+- the xTB decision made (§3).
 
-**Exit gate — regression against your own archived work:** re-run the Ni/BTC and Fe/BTC cases
-through the new stack and reproduce the rankings in `reports/ni_btc_report.md` and
-`reports/fe_btc_report.md` within noise. Same for the solvation sweep. If the new stack can't
-reproduce the old results, one of them is wrong and you want to know *now*, not in M8 — which
-takes these numbers as given.
+---
 
-* **Stage 1 — `--refs`, minutes, needs tblite.** Recomputes the four reference energies the
-  archived Fe(III) run subtracted (sextet Fe³⁺, and the BTC / EDTA / EDDA anions) against
-  `legacy/fe_btc_refs.json`. Same method, same species, so this is a direct check that
-  `XTBBackend` is the same calculator that produced the archived numbers. It is **not** a check
-  of the ranking and does not pretend to be. Tolerance is 1 eV deliberately: the archived ligand
-  geometries came from `ebu_core.LigandBuilder` and these come from `geometry.embed`, so a few
-  tenths is two ETKDG conformers, not a disagreement about energy.
-* **Stage 2 — `--rankings`, not built.** It raises and says why: it needs the archived candidate
-  set, which means it is not a re-run but a re-derivation under a different construction path.
-  That is the substantive half of this gate and the reason M7 is still open.
+### M7R — Refine and calibrate: the first reportable number · **L**
 
-Note the archived equation needs `strict=False` to evaluate at all, and the value carries
-`isodesmic=False`. That is the point: the comparison is between the old number and the new one,
-not an endorsement of the old scheme.
+**What M7R is.** Stage 5 and stage 6 of [`WORKPLAN_energy.md`](WORKPLAN_energy.md): **E3** (MACE
+Hessian → `thermo_corrections`, recipe selection in `energy/reference`), **E4** (the GPU4PySCF
+`DFTBackend` with the spin and oxidation-state checks), **E5** (`escalation_set` and the `refine`
+task kind) and **E6** (calibration). Its first step is installing GPU4PySCF in `ebu` and
+answering WORKPLAN_energy §3a's list (SMD, VV10, unrestricted KS for Ni(II), memory on 20 GB,
+exclusive use of the card) before E4 is sized. The escalation unit is the equation, so the two
+demo routes escalate as a closed set (~15 species, ~45 DFT jobs).
+
+**Exit gate:**
+- 5a recorded: the stage-2 relaxer's geometries against DFT re-optimisation on ~10 species (RMSD,
+  and ΔE of the single point at the relaxer geometry minus the DFT minimum; proposal < 0.05 eV
+  mean);
+- the two demo routes refined end to end, every term at one recipe (DFT//MACE + SMD +
+  qRRHO(MACE)), with the refusal codes (`not_a_minimum`, `oxidation_state_mismatch`) exercised;
+- the E6 calibration fit on the pKa and log β set (acetic acid, phenol, catechol, H₂O/H₃O⁺;
+  Ni(II)–acetate, –Cl⁻ and the first hydrolysis), its slope, intercept and scatter recorded in
+  `reports/` as the reported uncertainty.
+
+M7R's exit is the first time the project may print an energy as a result.
 
 ---
 
@@ -582,17 +615,25 @@ v7 spec and does **not** have them. Called: the slice is re-built as v8 at CN `4
 (`data/reference/spec_ni_thq_cl_slice_v8.json`, 3059 tasks), and `MAX_PATHWAY_TASKS` is 4000
 so that fits uncut.
 
-**Work** — `pathways/reaction.py`, `proxy.py`, `score.py` (max barrier, cumulative ΔG,
-rate-limiting step, **sink detection**), `search.py`, and the A-vs-B driver script.
+**Work** — `pathways/reaction.py`, `proxy.py`, `score.py` (max barrier, cumulative ΔG, rate-limiting step,
+**sink detection**), `search.py`, the A-vs-B driver script, a real `Ranking` behind M7's seam 4,
+and **E7** — the speciation solver that turns refined route legs into equilibrium constants at a
+stated pH and concentration. Route enumeration (`routes_to`) moved to M7. The archive's
+rankings re-derivation (WORKPLAN_M7 S7) lands here if anything needs it.
 
 **Decision gates: C6** (barrier-proxy form) and **C7** (partner dependence — factorized vs. stored
-matrix). Both are forced here and not before.
+matrix). Both are forced here and not before. C6's pivot constraint is already narrowed: a pivot
+is never a barrier, and is shown for reference only.
 
-**Exit gate — the first real result:** the Cu paddlewheel **Path A (nucleus-first) vs. Path B
-(sequential)** comparison produces a ranked answer with per-step numbers, intermediates stored as
-first-class registry nodes, and a written report in `reports/`. Secondary: sink detection
-reproduces the EDTA sequestration finding from `solvation_report.md`, now generalized from
-endpoints to intermediates.
+**Exit gate — the first real result, in two tiers** (ground rule 11):
+- *Screening (needs M6 + M7):* the Cu paddlewheel **Path A (nucleus-first) vs. Path B
+  (sequential)** ordering, and whether it is stable under the cheap proxies — this is what
+  decides C6.
+- *Reported (needs M7R):* the same comparison at the refine recipe, with per-step numbers,
+  intermediates as first-class registry nodes, calibrated error bars, and a written report in
+  `reports/`. Secondary: sink detection reproduces the EDTA sequestration finding from
+  `solvation_report.md`, generalized from endpoints to intermediates — a solvation result, so it
+  needs the medium (built) and, to be reported, M7R.
 
 ---
 
@@ -606,13 +647,25 @@ milestone lands, not as a block at the end.
 
 | Gate | Milestone | Forced by | What you need in hand to decide |
 |---|---|---|---|
-| **C2** — L3 thresholds (θ_geom **called**, energy window open) | **M5**, at the first conformer generation | clustering can't run without numbers | θ_geom = 0.15 Å, calibrated. The window waits on [B9](BUGS.md#b9) — the measurement available today is contaminated by the rigid-core defect |
+| **C2** — L3 thresholds (θ_geom **called**, energy window open) | **M7**, at stage-2 pruning (`WORKPLAN_energy.md` stage 2 proposes 0.25 eV within an identity) | conformer pruning can't run without the window | θ_geom = 0.15 Å, calibrated. The window waits on [B9](BUGS.md#b9) — the measurement available today is contaminated by the rigid-core defect — and on the E-MH relaxer, since it is a window in that model's energies |
 | **C6** — barrier proxy | **M8**, before the first path score | `PathScore.max_barrier` needs a definition | whether the paddlewheel A-vs-B ordering is stable under the cheap proxies alone |
 | **C7** — partner dependence | **M8**, alongside C6 | `ease(site, partner)` is called at query time | how many (site, partner) pairs you actually intend to screen — the factorization only pays off if that number is large |
+| **C11–C14** — how a policy is named, what a verdict records, which archived duplicate is the reference, what the calculator check means | **M7**, WORKPLAN_M7 S0 | the first seam | recommendations in `WORKPLAN_M7.md` §7; none has a ledger entry yet |
+| **C16–C18** — where a medium is recorded, the ML + xTB composite, charge separation | **M7**, solvation S0 | already built provisionally (S1–S3) | nothing new — the calls are bookkeeping for code that exists |
+| **C19–C21** — explicit shells, their count, the proton reference | **M7** (the E2 pricing rules) and after **M7R** (shells, S4–S6) | E2; then S4 | partly called 2026-09-28 (`WORKPLAN_solvation.md` §3a); the stopping tolerance for frozen clusters is S5's |
+| **Does xTB stay** | **M7**, before E2 fixes the screening error bar | E2 computes the ALPB–GBSA spread | `WORKPLAN_energy.md` §3a — xTB is the only screening-rung continuum, so dropping it removes C17's composite; recommendation: keep it narrowly |
+| **E-MH outcome** — which model relaxes, which evaluates | **M7** | stage 2 of every run | the E-MH study (planned, not run); a charge-blind MH head ends it early |
 
 *Resolved: C1 → D10 · C4 → D12 · C5 → D18 · C8 → curated tables · C9 → D24 (multiplicity is
 stated, because coupling is not derivable) · C10 → D25 (an M–M edge is declared, never inferred
-from distance).*
+from distance) · C15 → D29 (a `place` edge cites nothing).*
+
+*Called 2026-09-29 by the user, not yet built, so without a D-number:* relaxation moves to
+MACE-MH (after E-MH); the DFT backend is GPU4PySCF; M7 and M7R are separate milestones.
+
+**D-numbers.** Three plans say "D-TBD" or "next free" (WORKPLAN_M7's C11–C14, the solvation and
+energy workplans). Numbers are taken in merge order from **D30**; a plan never reserves one in
+advance, because two branches reserving the same number is how the ledger collides.
 
 One further call was open and is **not** a milestone gate — the L2 backfill-versus-version
 decision ([B2](BUGS.md#b2)). Called as **D22**: no backfill in either direction, and the run
@@ -632,7 +685,9 @@ resolved only in your head is how the two documents drift apart.
 | **M6 overruns** | the battery still will not build | switch to `geometry/templates.py` (grafting onto stored reference nodes). **Trigger: 2026-10-14** — written down at M6's start, as this row asks. Largely retired in advance: the paddlewheel builds QC-clean at 2.673 Å from existing machinery, so the constrained placer this hatch was written against is not on the critical path. What remains is reconciling oxo-centred clusters, measured at ~0.5 Å. |
 | **Two machines disagree about identity** | a fixture hash differs laptop vs. workstation | already mitigated by ground rule 10 (D16: the certificate is pure Python; no optional native package can produce a key). The golden-hash test in M2 is what catches it — do not skip it. |
 | **L3 conformer explosion** | thousands of near-identical rows per (L1, L2) | choice-vector dedup runs *before* geometric clustering; cap conformers per (L1,L2); `TORSION_FREE` sites never branch (that tag is the guard) |
-| **xTB numbers can't carry route claims** | M7 regression reproduces rankings but absolute ΔG look implausible | keep M8 claims *relative and within-metal*; the reaction-balanced reference scheme is the gate on any quantitative statement |
+| **A screening number is read as a result** | a MACE+ALPB ΔE quoted beside a pKa or log β | ground rule 11; the recipe label on every number; the rest of the energy risks are `WORKPLAN_energy.md` §6 |
+| **M7R stalls on the DFT install** | GPU4PySCF lacks SMD, VV10 or memory for a Ni complex at def2-TZVPD | `WORKPLAN_energy.md` §3a's verification list runs *before* E4 is sized; a missing piece is `EnergyBackendUnavailable`, never a quiet fallback to another level |
+| **The relaxer changes under the data** | E-MH adopted and old geometries mixed with new in one equation | a relaxer is part of the `MethodSpec`, so `energy/reference` already refuses the mix; old rows keep their method (D19) |
 | **Identity retrofit pressure** | a temptation in M5/M6 to "just add a flag" to L1 | the M2 discrimination table is the contract; changing it means a version bump and a re-hash of the corpus, which is exactly the cost that should make you think twice |
 | **Scope creep into periodic frameworks** | topology/net questions start appearing in tickets | out of scope for v1 (design §11) — record them as future work; MOFid/MOFkey is the reference oracle when you get there |
 
@@ -644,8 +699,9 @@ resolved only in your head is how the two documents drift apart.
 |---|---|
 | *(today)* | store, dedupe, query and **see** every structure built; ask a stored structure what sites it has, which are open, and which are worth spending QM on; build a mononuclear structure from stored blocks and rebuild it exactly from its provenance (M5) |
 | M6 | build real SBUs — paddlewheels, µ₃-oxo trimers, Zn₄O — not just mononuclear nodes, and be told which formation route cannot reach one |
-| M7 | ask what a whole **route** costs, not just one reaction — with the decision points for spending QM selectively in place, and every one of them still answering "compute it" |
-| M8 | compare two synthesis routes to the same product and say which is more viable, and why |
+| M7 | ask what a whole **route** costs at the screening tier, in a stated medium and with an error bar — with the decision points for spending QM selectively in place, and every one of them still answering "compute it" |
+| M7R | report a route's energy as a result: DFT//MACE + SMD + qRRHO, calibrated against pKa and log β, with the calibration scatter as its error bar |
+| M8 | compare two synthesis routes to the same product and say which is more viable, and why — and at a stated pH and concentration, what fraction of the metal is in each form |
 
 ---
 
@@ -669,10 +725,13 @@ Four kinds of test, each with a job:
   These guard the ground rules in §0 and are the ones that catch silent identity corruption.
 - **Discrimination tests** — pairs that *must* differ, and pairs that *must not*, at each of L0/L1/L2/L3.
   Write them as one table so the identity boundaries are readable in one place.
-- **Golden/regression tests** — the WL hashes of the fixture set (two-machine parity), and the
-  Ni/Fe/BTC + solvation numbers from `reports/` (M7).
+- **Golden/regression tests** — the WL hashes of the fixture set (two-machine parity); the
+  archived Ni/Fe/BTC + solvation numbers as `tests/test_energy_cases.py` (M7, WORKPLAN_M7 S1);
+  and the E6 calibration fit, the only check against experiment (M7R).
 - **Negative tests** — ambiguous spec raises instead of defaulting; a bad geometry is rejected by QC
-  rather than silently stored; a version bump marks rows stale rather than re-labelling them.
+  rather than silently stored; a version bump marks rows stale rather than re-labelling them; and
+  the energy refusals — `connectivity_changed`, `not_a_minimum`, `oxidation_state_mismatch`, a
+  mixed medium inside one equation, pricing with no solvated root.
 
 Not aiming for coverage percentages. Aiming for: **every claim in the design doc's ledger has a test
 that would fail if the claim stopped being true.**
@@ -681,12 +740,14 @@ that would fail if the claim stopped being true.**
 
 ## 7. What to do next, concretely
 
-1. **Run M7's stage 1 and record the result** — `python scripts/regress_m7.py --refs --json …`
-   on a machine with tblite. Minutes of compute, and it is a *check* rather than a build. Then
-   decide whether stage 2's re-derivation is worth building now or at M8, when the numbers
-   actually carry a claim.
-2. **Work M6 in `WORKPLAN_M6.md`'s order.** S0 is closed — D20/D24/D25 called, B12 fixed, the
-   battery written down as `data/reference/node_cases.tsv` and checked against the fixtures
-   before anything builds them. S1's well branch has landed; its two-point bridge join has not,
-   and S1 and S2 are independently testable in either order.
-3. ~~Write the M6 fallback date down when M6 starts.~~ ✅ **2026-10-14** (§4, first row).
+1. **E1 — the connectivity check after relaxation** (S–M). It gates every reported number, M6's
+   "does not tear a node apart", and E-MH's first metric.
+2. **Agree the E-MH plan, then run it** (`WORKPLAN_energy.md` §3a). Step 0 needs no compute and
+   can end the study: whether the MH head takes charge and spin.
+3. **Install GPU4PySCF in `ebu` and answer §3a's verification list** — a check, not a build — so
+   E4 can be sized. It runs in parallel with 1–2.
+4. **Decide whether xTB stays** before E2 fixes the screening error bar on it.
+5. **Record M7's regression stage 1** — `python scripts/regress_m7.py --refs --json …`, minutes
+   on a machine with tblite — and make the C11–C14 / C16–C18 ledger calls (bookkeeping).
+6. **Work M6 in `WORKPLAN_M6.md`'s order.** What remains is reconciliation (`place_multicentre`),
+   `check_intercentre` and multi-metal `to_rdkit`; the plan-B trigger is **2026-10-14** (§4).

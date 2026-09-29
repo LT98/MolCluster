@@ -46,7 +46,7 @@ next and hands it a smaller set.
 | Stage | Does | Evaluator | Structures (salt-study scale) | Cost each |
 |---|---|---|---|---|
 | 1 Generate | enumerate, build, identity, clash QC | none (RAW) | 10³–10⁴ | ms |
-| 2 Relax + triage | geometry, **connectivity check**, conformer ranking and pruning | **MACE-OMOL-0** | 10³ | ~5 s GPU |
+| 2 Relax + triage | geometry, **connectivity check**, conformer ranking and pruning | **MACE-MH** relaxes (decided, not built — §3a); MACE-OMOL-0 until study E-MH | 10³ | ~5 s GPU |
 | 3 Screen in medium | continuum correction, route pricing, route pruning | MACE + xTB ALPB | 10³ | ~7 s |
 | 4 Select | close candidate routes' equations into an escalation set | rules | 10–50 species × top-k | — |
 | 5 Refine | DFT single points, DFT solvation, thermochemistry | DFT, with **MACE Hessians and sampling** as accelerators | 10² | min–h |
@@ -56,7 +56,8 @@ next and hands it a smaller set.
 MACE's four jobs — none is "final energy":
 
 1. **Geometry accelerator.** OMol25 labels are ωB97M-V/def2-TZVPD, so a MACE minimum is used as the
-   DFT geometry; stage 5a measures whether that holds.
+   DFT geometry; stage 5a measures whether that holds. Relaxation moves to MACE-MH (§3a), whose
+   head and training level differ, so the argument is re-earned by study E-MH and then by 5a.
 2. **Ranker within one identity.** Conformers and L2 isomers of one species: same atoms and
    charge, where systematic error cancels best.
 3. **Triage evaluator.** Comparisons across species and routes at stage 3 decide *what escalates*,
@@ -177,10 +178,10 @@ G(aq) = E_DFT(gas, g)                                 5b
   or xTB Hessians on the 5a sample. Imaginary modes send the geometry back as `not_a_minimum`.
   DFT Hessians are the costliest term and the most tolerant of a cheaper model — MACE's biggest
   accelerator win.
-- **Backend (user decision):** ORCA (external, SMD built in) or GPU4PySCF (in-process, on the
-  RTX 4000 Ada). Either way it is a `DFTBackend` with `single_point` / `relax` / `hessian` behind
-  the existing contract, filling the `Fidelity.DFT` slot that `energy/backends.backend_for`
-  answers with `NotBuiltYet` today.
+- **Backend: GPU4PySCF** (called 2026-09-29; in-process, on the RTX 4000 Ada). A `DFTBackend`
+  with `single_point` / `relax` / `hessian` behind the existing contract, filling the
+  `Fidelity.DFT` slot that `energy/backends.backend_for` answers with `NotBuiltYet` today. Not
+  installed in `ebu` yet (nor PySCF); what must be verified before E4 relies on it is in §3a.
 
 ### Stage 6 — Calibrate, then condition
 - **Terms named beside ΔG (C21):**
@@ -210,6 +211,82 @@ elsewhere.
 
 ---
 
+## 3a. Models and backends — called 2026-09-29, not built
+
+Three calls by the user. None has a body yet; each takes a D-number when the slice that
+implements it lands with a test.
+
+### Relaxation moves to MACE-MH — study E-MH first
+
+MACE-OMOL-0 relaxes today; the call is to relax with **MACE-MH** and measure how well it
+reconciles with OMOL-0 before anything depends on the switch. What is known without running
+anything: `mace-torch` 0.3.16 in `ebu` lists `mh-0` and `mh-1` among `mace_mp`'s models, and
+unlike `mace_omol` (which pins `head="omol"`) that call does not choose a head. The code has no
+MH backend: `config.ML_BACKENDS` is MP-0 and OMOL-0 only, and the default is MP-0.
+
+**E-MH — planned, not run.** Nothing below runs until this plan is agreed.
+
+0. **Zero-compute questions first**, answered from the model card and the loaded model's
+   metadata: which heads `mh-1` carries and at what level of theory each was trained; whether the
+   chosen head takes **total charge and spin** (OMOL-0 does; a charge-blind head cannot relax
+   Ni(tHQ⁻)Cl(H₂O)ₙ⁺ honestly, and would set `charge_aware = False` on its backend exactly as
+   MP-0 does). A charge-blind head ends the study here: it is a relaxer for neutral species only.
+1. **Code, committed rather than throwaway:** a `MACEMHBackend` (the head is a constructor
+   argument and part of the `MethodSpec`, so two heads never share a `methods` row), a config
+   alias `mace-mh-1`, and a comparison script over a registry **copy** — both models' relaxations
+   stored as ordinary geometries under their own method rows, so the comparison is a registry
+   query, not a side file. E1 (connectivity after relaxation) lands first, because metric (a)
+   needs it.
+2. **Sample, ~40 species × up to 3 conformers**, stratified from `salt_study_k1.db` (read
+   through a copy): neutral and charged Ni(II) complexes across the co-ligand window, both salts'
+   routes (#132←#94←#28→#68 and #328…#301), free ligands and anions (tHQ, tHQ⁻, Cl⁻, OAc⁻),
+   H₂O / H₃O⁺. Both models start from the **same** raw construct; a second pass starts MH from the
+   OMOL-0 minimum, which separates "different basin" from "different start".
+3. **Metrics, each with a proposed threshold** (proposals, to be argued before the run):
+   - (a) connectivity changes after relaxation, per model — MH adds none that OMOL-0 does not;
+   - (b) heavy-atom RMSD and Ni–donor distances between the two minima — median < 0.1 Å;
+   - (c) OMOL-0 single point on the MH minimum minus the OMOL-0 minimum — median < 0.05 eV,
+     the same test 5a applies against DFT;
+   - (d) within-identity conformer ranking (Kendall τ, top-1 agreement) — ≥ 80 % top-1;
+   - (e) the six equations of the ion/proton check re-priced on each model's geometries — no
+     sign or ordering change;
+   - (f) failures (non-convergence, charge refusals), wall time and GPU memory per relaxation.
+4. **Cost:** ~40 × 3 × 2 relaxations at ~5 s ≈ 20 min of GPU, plus the cross-start pass.
+5. **Outcomes to choose between:** MH relaxes and OMOL-0 stays the stage-2/3 energy evaluator
+   (a single point on the MH geometry — recorded as two methods, like DFT//MACE); MH does both;
+   or OMOL-0 stays for charged species. Stage 5a then re-tests whichever relaxer won against DFT.
+
+### DFT backend is GPU4PySCF
+
+Replaces the open "ORCA or GPU4PySCF". Neither `gpu4pyscf` nor `pyscf` is installed in `ebu`.
+To verify on install, before E4 is sized: SMD (5c needs it; otherwise PCM with SMD as a gap) on
+GPU; ωB97M-V's non-local (VV10) term on GPU; unrestricted Kohn–Sham for the Ni(II) triplet;
+memory for a ~40-atom Ni complex at def2-TZVPD on 20 GB; and **GPU sharing** — MACE relaxations
+and the local LLM server use the same card, so a DFT job is scheduled exclusively. DFT Hessians
+stay out of scope: 5d's validation uses MACE vs DFT on the 5a sample only.
+
+### xTB — what it does today, and whether it stays (to be decided)
+
+| Role today | Where | Replaceable by |
+|---|---|---|
+| **Screening continuum** — ΔG_solv(ALPB) on each MACE geometry, C17's composite, and the `alpb:water` corrections `finalise_run` writes after every run | `energy/solvation.correct`, `runner.finalise_run` | SMD/PCM in GPU4PySCF, at DFT cost per geometry — orders of magnitude more at 10³ geometries |
+| The screening **error bar** — ALPB–GBSA spread (E2) | planned | a DFT continuum spread, at the same cost |
+| `xtb_go` relaxation run mode | `spec.RUN_MODES`, `relax.MODE_FIDELITY` | MACE; §3 5a already rejects xTB geometries for Ni (−1.9 eV relaxation of a MACE minimum) |
+| A charge-aware rung for deprotonation ease | `descriptors/ease.py` | MACE-OMOL-0, already |
+| M7's calculator-identity check against the archive | `scripts/regress_m7.py` | nothing — the archive *is* GFN2-xTB |
+| Hessian cross-check for 5d | §3 5d | GPU4PySCF on the 5a sample |
+
+**What the decision turns on:** the solvent-reference rule in `WORKPLAN_solvation.md` §3a
+(item 4) adds the continuum "on the same rung" — and at the screening rung the only continuum
+the stack has is xTB's. Dropping xTB leaves screening with no continuum at all, so every
+screening equation falls back to cluster energies and C17's composite goes. Retiring the
+relaxation mode costs nothing, but the run mode cannot be deleted: an old spec replays the run it
+planned (architecture invariant 10). **Recommendation:** keep xTB narrowly, as the screening
+continuum provider and the archive calculator; stop offering `xtb_go` for new specs; revisit when
+g-xTB or a GPU continuum at screening cost is benchmarked (`reports/PROJECT_PLAN.md` E-1).
+
+---
+
 ## 4. Storage and invariants
 
 **Already enforced:** fidelity per geometry; one theory per equation (`_energy_row` pins the
@@ -230,22 +307,26 @@ first term); corrections never borrowed across geometries (C17); absent ≠ zero
 
 ## 5. Slices (each its own PR)
 
-| # | Slice | Size | Unblocks |
-|---|---|---|---|
-| E0 | this plan; the Q2 reframing recorded with the salt-study results | S | — |
-| E1 | connectivity check after relaxation + `connectivity_changed` | S–M | every reported number |
-| E2 | screening tier labelled; ALPB+GBSA spread; `hydration_change`; pH and water reference beside the proton sink (C21) | S | honest screening |
-| E3 | MACE Hessian → `thermo_corrections`; recipe selection in `energy/reference` | M | 5d |
-| E4 | `DFTBackend` + spin and oxidation-state checks | M | 5b, 5c |
-| E5 | `escalation_set` + `refine` task kind | M | stage 4 |
-| E6 | calibration specs + fit script | S | stage 6 |
-| E7 | speciation solver; `/graph` shows refine totals | M | the goal |
-| — | H-bonded shells for ions and H₃O⁺ (solvation S4–S6) | M+ | after E6 shows whether the relative scheme suffices |
+| # | Slice | Size | Unblocks | Milestone |
+|---|---|---|---|---|
+| E0 | this plan; the Q2 reframing recorded with the salt-study results | S | — | — |
+| E1 | connectivity check after relaxation + `connectivity_changed` | S–M | every reported number; E-MH metric (a) | M7 |
+| E-MH | MACE-MH backend + the §3a comparison with MACE-OMOL-0 | S–M | the stage-2 relaxer | M7 |
+| E2 | screening tier labelled; ALPB+GBSA spread; `hydration_change`; pH and water reference beside the proton sink (C21); the solvation §3a pricing rules | S | honest screening | M7 |
+| E3 | MACE Hessian → `thermo_corrections`; recipe selection in `energy/reference` | M | 5d | M7R |
+| E4 | GPU4PySCF `DFTBackend` + spin and oxidation-state checks | M | 5b, 5c | M7R |
+| E5 | `escalation_set` + `refine` task kind | M | stage 4 | M7R |
+| E6 | calibration specs + fit script | S | stage 6 | M7R |
+| E7 | speciation solver; `/graph` shows refine totals | M | the goal | M8 |
+| — | H-bonded shells for ions and H₃O⁺ (solvation S4–S6) | M+ | after E6 shows whether the relative scheme suffices | after M7R |
 
 ```
-E0 ─► E1 ─► E2 ─► E3 ─┐
-            E4 ───────┼─► E5 ─► E6 ─► E7
+E0 ─► E1 ─► E-MH ─► E2 ─► E3 ─┐
+                    E4 ───────┼─► E5 ─► E6 ─► E7
 ```
+
+E-MH sits before E2 because E2's error bar and pricing are computed on the relaxer's
+geometries; E4 needs only the GPU4PySCF install and can start in parallel.
 
 Where the slices touch: `runner._execute_relax` (E1); `energy/backends.backend_for`,
 `energy/relax.MODE_FIDELITY` (E4); `energy/reference` `_energy_row`, `_corrected_row`,
@@ -261,3 +342,6 @@ Where the slices touch: `runner._execute_relax` (E1); `energy/backends.backend_f
 | MACE geometry is not a DFT minimum | 5a ΔE > threshold, imaginary modes | re-optimise at DFT for that chemistry; record it on the recipe |
 | The L0 oxidation state is fiction | spin density disagrees | `oxidation_state_mismatch`, refused, never priced |
 | Hydration comparisons ride on missing entropy | a `hydration_change` step decides a route | caveat until 5d exists |
+| The MACE-MH head is charge-blind | E-MH step 0 | MH relaxes neutral species only; OMOL-0 keeps the charged ones |
+| One GPU, three tenants | a DFT job out of memory while MACE or the local LLM server holds the card | DFT runs exclusively; the queue declares it (architecture invariant 3: declared, never detected) |
+| Dropping xTB removes the screening continuum | xTB retired before a replacement is benchmarked | §3a: keep it as the continuum provider until one is |

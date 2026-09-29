@@ -184,8 +184,8 @@ non-isodesmic scheme is refused rather than returned with a caveat.
 
 ## 7. Decisions to make before writing code
 
-Each needs a Decision Ledger entry with a D-number and a changelog line. Next free numbers are
-after M6's (D23 onward, if M6 lands D20–D22).
+Each needs a Decision Ledger entry with a D-number and a changelog line. Numbers are taken in
+merge order from D30 (`PLAN_implementation.md` §3), never reserved in advance.
 
 **C11 — how a policy is selected.**
 *Options:* a callable passed at the call site · a name resolved from a lookup table.
