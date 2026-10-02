@@ -264,7 +264,9 @@ sampling. Reported numbers are stage-5 recipe results.
 
 ### 2.1 Relaxation and first evaluation — the MLIP accelerator
 **MolCluster.** MACE-OMOL-0 [21] (trained on OMol25 [22], ωB97M-V/def2-TZVPD) relaxes every
-construct, ~5 s on the GPU. **Missing:** the connectivity check after relaxation (gate E1).
+construct today, ~5 s on the GPU. Relaxation moves to **MACE-MH** once study E-MH has measured how
+well it reconciles with MACE-OMOL-0 (`WORKPLAN_energy.md` §3a). **Missing:** the connectivity
+check after relaxation (gate E1).
 
 | Existing | Coverage | Relative to MACE-OMOL-0 |
 |---|---|---|
@@ -274,7 +276,7 @@ construct, ~5 s on the GPU. **Missing:** the connectivity check after relaxation
 | AIMNet2 [26] | 14 main-group elements; no transition metals (a Pd variant exists) | out of scope for Ni |
 | ANI-2x, MACE-OFF | organic | out of scope |
 
-**Benchmark (E-1).** MACE-OMOL-0, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
+**Benchmark (E-1).** MACE-OMOL-0, MACE-MH, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
 MOR41 [27], WCCR10 [28] and a tmQM Ni subset. Metrics:
 - geometry RMSD;
 - **Spearman ρ of conformer ranking** — the property MACE is actually used for;
@@ -325,7 +327,7 @@ screened routes contain the top-M DFT routes?
 - SMD single point on the same geometry.
 - A MACE Hessian → quasi-RRHO G [37].
 - Spin-state and oxidation-state checks.
-- Backend: ORCA or GPU4PySCF — **open decision**.
+- Backend: **GPU4PySCF** (decided 2026-09-29), in-process on the workstation GPU.
 
 | Existing | Relative to MolCluster |
 |---|---|
