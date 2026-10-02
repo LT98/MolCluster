@@ -749,5 +749,36 @@ that would fail if the claim stopped being true.**
 4. **Decide whether xTB stays** before E2 fixes the screening error bar on it.
 5. **Record M7's regression stage 1** — `python scripts/regress_m7.py --refs --json …`, minutes
    on a machine with tblite — and make the C11–C14 / C16–C18 ledger calls (bookkeeping).
-6. **Work M6 in `WORKPLAN_M6.md`'s order.** What remains is reconciliation (`place_multicentre`),
-   `check_intercentre` and multi-metal `to_rdkit`; the plan-B trigger is **2026-10-14** (§4).
+6. **Work M6 in `WORKPLAN_M6.md`'s order — less critical (called 2026-10-02).** What remains is
+   reconciliation (`place_multicentre`) and `check_intercentre`, both stubs, plus widening
+   `to_rdkit` past one metal. They serve M6's oxo-centred clusters (Fe₃O, Zn₄O); the paddlewheel
+   M7 needs builds without them (D20). The plan-B trigger is **2026-10-14** (§4).
+
+### Less critical — triaged 2026-10-02
+
+*Backlog, not scheduled.* Each is small and needs a yes or no before it is done; none blocks M7.
+
+- Ledger calls for C11–C14 (`WORKPLAN_M7.md` §7) and C16–C18 (built provisionally), from D30.
+- C19–C21 leftovers: the frozen-cluster stopping tolerance (solvation S5), and S per solvent.
+- One predicate for "a `place` edge" (e.g. `registry.api.is_construction`) replacing the
+  `reagent_ids` truthiness tests in `tests/test_pathways.py`, `tests/test_co_ligand_counts.py`
+  and `ui/static/graph.html`; repoint the remaining "C15" source comments to D29 in the same change.
+- The water-activity constant: RT ln 55.5 (`WORKPLAN_energy.md`) vs RT ln 55.3
+  (`WORKPLAN_solvation.md` C21) — one value, both docs.
+- `WORKPLAN_solvation.md` §4: state that S4–S6 wait for E6, as `WORKPLAN_energy.md` §5 does.
+- `WORKPLAN_M7.md` §10: the M7 resize is done; correct the rest after the ledger calls.
+- Open bugs: none blocks M7 or M7R. **B9 stays in the backlog** (called 2026-10-02); C2's energy
+  window is tracked in §3 on its own.
+
+### To source — literature, not code
+
+- The experimental pKa₁ of tHQ. Stage 6 needs it before the free-ligand row can calibrate
+  (`WORKPLAN_energy.md` "Why now"); the analogue 2,5-dihydroxy-1,4-benzoquinone is 2.95 / 5.25.
+- The variational cluster-continuum reference (Pliego & Riveros), cited in
+  `WORKPLAN_solvation.md` §3a item 6 as "to be checked".
+
+### Reminders — done when their trigger lands, not before
+
+- `docs/gui/05_graph.md`'s pivot text — when C6's reference-intermediate labelling ships.
+- `CODE_ARCHITECTURE.md` backend rows and `README.md`'s `MOFSBU_ML_MODEL` aliases — when MACE-MH
+  or GPU4PySCF land.
