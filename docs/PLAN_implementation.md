@@ -44,9 +44,12 @@ number is reported. Solvation detail is [`WORKPLAN_solvation.md`](WORKPLAN_solva
 presentation-level view, with comparisons and benchmarks, is
 [`reports/PROJECT_PLAN.md`](reports/PROJECT_PLAN.md).
 
-**Called 2026-09-29, not built:** relaxation moves to **MACE-MH**, after study E-MH measures how
-it reconciles with MACE-OMOL-0; the DFT backend is **GPU4PySCF**; whether xTB stays is reopened.
-Plans and the xTB analysis are in `WORKPLAN_energy.md` §3a.
+**Called 2026-09-29; measured 2026-10-02 to 10-05:** MACE-MH-1 is charge- and spin-blind and DFT
+prefers MACE-OMOL-0's Ni minima, so MH-1 is selectable only (`mace-mh-1`). **MACE-POLAR-1-L** is
+given charge and spin, is DFT-equivalent to OMOL-0 on five of six Ni species and much better on
+the sixth, and as an S → L funnel costs ~0.8× all-OMOL-0 — **whether it becomes the relaxer is
+open**, after stage 5a. OMOL-0 stays until then. The DFT backend is **GPU4PySCF**, built
+(`energy/dft.py`). Whether xTB stays is reopened. Results in `WORKPLAN_energy.md` §3a.
 
 ---
 
@@ -742,10 +745,11 @@ that would fail if the claim stopped being true.**
 
 1. **E1 — the connectivity check after relaxation** (S–M). It gates every reported number, M6's
    "does not tear a node apart", and E-MH's first metric.
-2. **Agree the E-MH plan, then run it** (`WORKPLAN_energy.md` §3a). Step 0 needs no compute and
-   can end the study: whether the MH head takes charge and spin.
-3. **Install GPU4PySCF in `ebu` and answer §3a's verification list** — a check, not a build — so
-   E4 can be sized. It runs in parallel with 1–2.
+2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). One trajectory-capture
+   run, then every pruning, dedup and staging policy is evaluated offline; F3 waits on E1.
+3. **Stage 5a on POLAR-L before the relaxer call** — DFT re-optimisation at def2-TZVPD on ~10
+   species, including #132, and the memory measurement for a ~40-atom Ni complex that §3a still
+   lacks. Runs on the GPU exclusively, in parallel with 1–2.
 4. **Decide whether xTB stays** before E2 fixes the screening error bar on it.
 5. **Record M7's regression stage 1** — `python scripts/regress_m7.py --refs --json …`, minutes
    on a machine with tblite — and make the C11–C14 / C16–C18 ledger calls (bookkeeping).

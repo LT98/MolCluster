@@ -159,13 +159,19 @@ def device_note() -> str:
 
 MACE_MP = "mace"
 MACE_OMOL = "mace_omol"
-ML_BACKENDS = (MACE_MP, MACE_OMOL)
+MACE_MH = "mace_mh"
+MACE_POLAR = {size: f"mace_polar_{size}" for size in "sml"}
+ML_BACKENDS = (MACE_MP, MACE_OMOL, MACE_MH, *MACE_POLAR.values())
 
 _ML_ALIASES = {
     "mace": MACE_MP, "mp": MACE_MP, "mace-mp": MACE_MP, "mace_mp": MACE_MP,
     "mace-mp-0": MACE_MP, "mace_mp_0": MACE_MP, "macemp0": MACE_MP,
     "mace_omol": MACE_OMOL, "omol": MACE_OMOL, "mace-omol": MACE_OMOL,
     "mace-omol-0": MACE_OMOL, "mace_omol_0": MACE_OMOL, "maceomol0": MACE_OMOL,
+    "mace_mh": MACE_MH, "mh": MACE_MH, "mh-1": MACE_MH, "mace-mh": MACE_MH,
+    "mace-mh-1": MACE_MH, "mace_mh_1": MACE_MH, "macemh1": MACE_MH,
+    **{alias: key for size, key in MACE_POLAR.items()
+       for alias in (key, f"mace-polar-1-{size}", f"mace_polar_1_{size}", f"polar-1-{size}")},
 }
 
 
@@ -183,7 +189,7 @@ def resolve_ml_backend(name: str | None) -> str:
     if key is None:
         raise ValueError(
             f"unknown ML model {name!r}; expected one of "
-            f"{sorted({'mace-mp-0', 'mace-omol-0'})} "
+            f"{sorted({'mace-mp-0', 'mace-omol-0', 'mace-mh-1', 'mace-polar-1-s', 'mace-polar-1-m', 'mace-polar-1-l'})} "
             f"(backend keys {list(ML_BACKENDS)})")
     return key
 
@@ -203,6 +209,9 @@ def ml_backend() -> str:
 def ml_note() -> str:
     """One line for a run's header, next to `device_note()`."""
     key = ml_backend()
-    label = "MACE-MP-0 (charge- and spin-blind)" if key == MACE_MP else \
-            "MACE-OMOL-0 (charge- and spin-aware)"
+    label = {MACE_MP: "MACE-MP-0 (charge- and spin-blind)",
+             MACE_OMOL: "MACE-OMOL-0 (charge- and spin-aware)",
+             MACE_MH: "MACE-MH-1 (charge- and spin-blind)",
+             **{k: f"MACE-POLAR-1-{s.upper()} (charge- and spin-aware)"
+                for s, k in MACE_POLAR.items()}}[key]
     return f"ml_model={label}  (set MOFSBU_ML_MODEL to change)"

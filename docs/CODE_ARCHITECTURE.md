@@ -69,7 +69,8 @@ charge, spin — travels with it in a `methods` row.
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
 | `geometry/_linalg.py` | Pure rotation/alignment math, one copy. **Two rotation forms on purpose** — matrix and Rodrigues are not bit-identical and frames were built with the latter | ✅ |
 | **energy/** | *How the pieces below combine — screen, select, refine, calibrate — is [`WORKPLAN_energy.md`](WORKPLAN_energy.md); MACE numbers are the screening tier* | |
-| `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / Null behind one protocol | ✅ |
+| `energy/backends.py` | xTB / MACE-MP-0 / MACE-OMOL-0 / MACE-MH-1 / MACE-POLAR-1 (S/M/L) / DFT / Null behind one protocol. MACE-MH's head and POLAR's size are in the `MethodSpec`; every MH head is charge- and spin-blind, POLAR is given both | ✅ |
+| `energy/dft.py` | `DFTBackend`: GPU4PySCF, the `Fidelity.DFT` rung — single point, geomeTRIC relax, SMD/PCM, Mulliken spin. `check_oxidation_state` raises `oxidation_state_mismatch`. No Hessian (§3a) | ✅ |
 | `energy/relax.py` | `relax_geometry`, `single_point`, `mode_status` | ✅ |
 | `energy/reference.py` | **Refuses bad subtractions** (D17). Balance + isodesmic quality. `charge_separation` blocks in gas, is a caveat in a continuum; `solvent='alpb:water'` is met by energies computed in it or by stored corrections, never both (C16–C18) Each check has a `*_for_terms` twin so an equation that is not a row is weighed by the same rules | ✅ |
 | `energy/routes.py` | Prices one edge **for a reader**: a refusal comes back as data, not as an exception, because a panel listing twelve routes cannot be one raise. `decompositions` answers what a structure could have been made from — arithmetic over the registry, flagged `inferred`, never mixed with what was recorded (C15 → D29) | ✅ |

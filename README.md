@@ -228,8 +228,8 @@ seize hardware or to switch theories:
 
     MOFSBU_PROFILE   laptop | workstation        # how many workers may run
     MOFSBU_WORKERS   N                           # or say exactly how many
-    MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP runs
-    MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0     # WHICH MLIP; default mace-mp-0
+    MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP and DFT run
+    MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0 | mace-mh-1 | mace-polar-1-{s,m,l}   # WHICH MLIP; default mace-mp-0
 
 A run holds two kinds of work and they do not want the same hardware: construction
 (enumerate, embed, perceive, place, hash) scales with cores, while an ML relaxation on one
@@ -247,6 +247,17 @@ and spin multiplicity and is accepted. Their energies are on different scales an
 never subtracted from one another — the `methods` row records which model produced each
 number, and nothing compares energies across method rows. A spec may pin the model
 (`ml_model`), and that beats the environment. MACE-OMOL-0 needs `mace-torch>=0.3.14`.
+**MACE-MH-1** (`mh-1`, multi-head) needs `mace-torch>=0.3.16` and runs its `omol` head unless
+told otherwise; every head is blind to charge and spin, so it carries MP-0's caveats.
+**MACE-POLAR-1** (`-s`, `-m`, `-l`; long-range electrostatics) is given charge and spin like
+OMOL-0 and needs `graph-longrange==0.4.0` beside `mace-torch` 0.3.16 — 0.4.3 and 0.4.4 dropped an
+argument mace-torch 0.3.16 passes. Each size is its own `methods` row.
+
+`dft_go` and the `Fidelity.DFT` rung are **GPU4PySCF** (default ωB97M-V/def2-TZVPD, RKS for a
+singlet, UKS otherwise; continua `smd:<solvent>` and `pcm:<solvent>`). It needs a declared CUDA
+device and a CuPy whose CUDA runtime matches the toolkit torch pins — in `ebu`, torch 2.13 pins
+CUDA 13.0, so `cupy-cuda13x==14.0.1` with `gpu4pyscf-cuda13x`; CuPy 14.2 bundles a 13.2 runtime
+and its reductions then fail to compile against the 13.0 headers.
 
 ### A run that was killed rather than stopped
 
