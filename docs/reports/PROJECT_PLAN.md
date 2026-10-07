@@ -264,9 +264,12 @@ sampling. Reported numbers are stage-5 recipe results.
 
 ### 2.1 Relaxation and first evaluation — the MLIP accelerator
 **MolCluster.** MACE-OMOL-0 [21] (trained on OMol25 [22], ωB97M-V/def2-TZVPD) relaxes every
-construct today, ~5 s on the GPU. Relaxation moves to **MACE-MH** once study E-MH has measured how
-well it reconciles with MACE-OMOL-0 (`WORKPLAN_energy.md` §3a). **Missing:** the connectivity
-check after relaxation (gate E1).
+construct today, ~5 s on the GPU. Study E-MH (`WORKPLAN_energy.md` §3a) rejected **MACE-MH-1** as
+the relaxer — blind to charge and spin, and DFT prefers OMOL-0's Ni minima — and found
+**MACE-POLAR-1-L** DFT-equivalent to OMOL-0 on five of six species and better on the sixth; run as
+a small → large funnel it costs ~0.8× all-OMOL-0. Whether it replaces OMOL-0 waits on stage 5a.
+**Missing:** the connectivity check after relaxation (gate E1), and the partial-relaxation funnel
+(slices F0–F6).
 
 | Existing | Coverage | Relative to MACE-OMOL-0 |
 |---|---|---|
@@ -276,7 +279,7 @@ check after relaxation (gate E1).
 | AIMNet2 [26] | 14 main-group elements; no transition metals (a Pd variant exists) | out of scope for Ni |
 | ANI-2x, MACE-OFF | organic | out of scope |
 
-**Benchmark (E-1).** MACE-OMOL-0, MACE-MH, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
+**Benchmark (E-1).** MACE-OMOL-0, MACE-POLAR-1, MACE-MH, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
 MOR41 [27], WCCR10 [28] and a tmQM Ni subset. Metrics:
 - geometry RMSD;
 - **Spearman ρ of conformer ranking** — the property MACE is actually used for;

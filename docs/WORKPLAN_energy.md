@@ -46,7 +46,7 @@ next and hands it a smaller set.
 | Stage | Does | Evaluator | Structures (salt-study scale) | Cost each |
 |---|---|---|---|---|
 | 1 Generate | enumerate, build, identity, clash QC | none (RAW) | 10³–10⁴ | ms |
-| 2 Relax + triage | geometry, **connectivity check**, conformer ranking and pruning | **MACE-MH** relaxes (decided, not built — §3a); MACE-OMOL-0 until study E-MH | 10³ | ~5 s GPU |
+| 2 Relax + triage | geometry, **connectivity check**, conformer ranking and pruning | **MACE-OMOL-0** (E-MH, §3a: MACE-MH-1 is charge-blind and DFT prefers OMOL-0's minima) | 10³ | ~5 s GPU |
 | 3 Screen in medium | continuum correction, route pricing, route pruning | MACE + xTB ALPB | 10³ | ~7 s |
 | 4 Select | close candidate routes' equations into an escalation set | rules | 10–50 species × top-k | — |
 | 5 Refine | DFT single points, DFT solvation, thermochemistry | DFT, with **MACE Hessians and sampling** as accelerators | 10² | min–h |
@@ -178,10 +178,9 @@ G(aq) = E_DFT(gas, g)                                 5b
   or xTB Hessians on the 5a sample. Imaginary modes send the geometry back as `not_a_minimum`.
   DFT Hessians are the costliest term and the most tolerant of a cheaper model — MACE's biggest
   accelerator win.
-- **Backend: GPU4PySCF** (called 2026-09-29; in-process, on the RTX 4000 Ada). A `DFTBackend`
-  with `single_point` / `relax` / `hessian` behind the existing contract, filling the
-  `Fidelity.DFT` slot that `energy/backends.backend_for` answers with `NotBuiltYet` today. Not
-  installed in `ebu` yet (nor PySCF); what must be verified before E4 relies on it is in §3a.
+- **Backend: GPU4PySCF** (called 2026-09-29; in-process, on the RTX 4000 Ada). `energy/dft.py`'s
+  `DFTBackend` serves `Fidelity.DFT` with `single_point` and `relax`; no `hessian` (5d uses MACE).
+  What was verified on install is in §3a.
 
 ### Stage 6 — Calibrate, then condition
 - **Terms named beside ΔG (C21):**
@@ -211,7 +210,7 @@ elsewhere.
 
 ---
 
-## 3a. Models and backends — called 2026-09-29, not built
+## 3a. Models and backends — called 2026-09-29; E-MH run and E4's backend built 2026-10-02
 
 Three calls by the user. None has a body yet; each takes a D-number when the slice that
 implements it lands with a test.
@@ -224,7 +223,7 @@ anything: `mace-torch` 0.3.16 in `ebu` lists `mh-0` and `mh-1` among `mace_mp`'s
 unlike `mace_omol` (which pins `head="omol"`) that call does not choose a head. The code has no
 MH backend: `config.ML_BACKENDS` is MP-0 and OMOL-0 only, and the default is MP-0.
 
-**E-MH — planned, not run.** Nothing below runs until this plan is agreed.
+**E-MH — run 2026-10-02 (simple form), results below the plan.** The plan as written:
 
 0. **Zero-compute questions first**, answered from the model card and the loaded model's
    metadata: which heads `mh-1` carries and at what level of theory each was trained; whether the
@@ -256,14 +255,195 @@ MH backend: `config.ML_BACKENDS` is MP-0 and OMOL-0 only, and the default is MP-
    (a single point on the MH geometry — recorded as two methods, like DFT//MACE); MH does both;
    or OMOL-0 stays for charged species. Stage 5a then re-tests whichever relaxer won against DFT.
 
-### DFT backend is GPU4PySCF
+**E-MH results.** `MACEMHBackend` (head in the `MethodSpec`, alias `mace-mh-1`) and
+`scripts/compare_relaxers.py` are committed. The study read `salt_study_k1.db` read-only rather than
+storing into a copy, and skipped metric (e) (route re-pricing). Sample: 39 structures, 93 starts
+(9 free species, 43 neutral and 41 charged Ni(II) starts, the demo-route nodes included), both
+models from the same start, LBFGS at fmax 0.05 eV/Å (0.20 run also kept).
 
-Replaces the open "ORCA or GPU4PySCF". Neither `gpu4pyscf` nor `pyscf` is installed in `ebu`.
-To verify on install, before E4 is sized: SMD (5c needs it; otherwise PCM with SMD as a gap) on
-GPU; ωB97M-V's non-local (VV10) term on GPU; unrestricted Kohn–Sham for the Ni(II) triplet;
-memory for a ~40-atom Ni complex at def2-TZVPD on 20 GB; and **GPU sharing** — MACE relaxations
-and the local LLM server use the same card, so a DFT job is scheduled exclusively. DFT Hessians
-stay out of scope: 5d's validation uses MACE vs DFT on the 5a sample only.
+- **Step 0 ends the plan's main branch: every MH-1 head is charge- and spin-blind.** The `omol`
+  head returns the same energy for water at charge 0, ±1 and as a triplet; OMOL-0 moves by tens
+  of meV. `MACEMHBackend` carries `charge_aware = spin_aware = False`, so `energy.reference`
+  refuses its energies on a charged equation, exactly as MP-0's.
+
+| Metric (fmax 0.05, `omol` head) | free | neutral Ni | charged Ni | proposed |
+|---|---|---|---|---|
+| (b) median heavy-atom RMSD, MH vs OMOL-0 min | 0.004 Å | 0.39 Å | 0.47 Å | < 0.1 Å |
+| (b) median largest M–donor change | — | 0.10 Å | 0.14 Å | |
+| cross-start: MH from the OMOL-0 min, median RMSD | 0.002 Å | 0.08 Å | 0.17 Å | |
+| (c) OMOL-0 at MH min − OMOL-0 min, median | 0.002 eV | 0.19 eV | 0.54 eV | < 0.05 eV |
+| (c) starts over 0.05 eV | 3/9 | 29/43 | 36/41 | |
+| (d) top-1 conformer agreement | | 13 / 29 structures (45 %) | | ≥ 80 % |
+| (a) relaxations changing connectivity, OMOL-0 / MH | 0 / 0 | 30 / 29 | 32 / 33 | MH adds none |
+| (f) median wall time, OMOL-0 / MH (s, shared GPU) | 0.8 / 0.4 | 30 / 14 | 27 / 12 | |
+
+The `spice_wB97M` head gives the same picture (median RMSD 0.40 Å, median (c) 0.39 eV, top-1
+11/29). Two findings outside the comparison:
+
+- **Metric (a) indicts today's relaxer as much as MH.** 62 of 84 Ni relaxations (74 %) change
+  connectivity under OMOL-0 at fmax 0.05 (52, 62 %, at 0.20), and MH is no different: a carboxylate O moving onto Ni,
+  a water leaving to 3–6 Å, a proton crossing an H-bond. E1 is the gate this needs.
+- Disagreement with OMOL-0 is not evidence against MH. Only DFT can say which minimum is
+  better — `scripts/dft_arbitrate.py`.
+
+**DFT arbitration** (`scripts/dft_arbitrate.py`, ωB97M-V/def2-SVP single point + gradient on both
+minima, same starts, fmax 0.05). ΔE = E_DFT(MH min) − E_DFT(OMOL-0 min):
+
+| Structure | class | RMSD | ΔE_DFT | DFT max force OMOL-0 / MH (eV/Å) |
+|---|---|---|---|---|
+| #132 | neutral | 0.61 Å | **−0.87 eV** | 3.78 / 1.87 |
+| #68 | neutral | 0.05 Å | −0.004 eV | 0.25 / 0.34 |
+| #569 | neutral | 0.39 Å | +0.21 eV | 0.73 / 1.12 |
+| #28 | charged | 0.25 Å | +0.26 eV | 0.38 / 1.35 |
+| #94 | charged | 0.33 Å | +0.30 eV | 0.68 / 2.14 |
+| #718 | charged | 0.19 Å | +0.69 eV | 1.07 / 3.21 |
+
+DFT prefers the OMOL-0 minimum in 4 of 6 (all 3 charged, by 0.26–0.69 eV), ties on one, and
+prefers MH only on #132, where *both* minima sit far from a DFT stationary point (3.8 / 1.9 eV/Å)
+— the structure whose relaxation moves a proton; unexplained. Median DFT max force: OMOL-0 0.70,
+MH 1.61 eV/Å. Caveats: six species, def2-SVP rather than the training basis, single points
+rather than DFT re-optimisation.
+
+**Outcome (2026-10-02): OMOL-0 stays the stage-2 relaxer; MH-1 is selectable, not default.**
+The rule agreed beforehand was to flip the default only if DFT backed MH, and it does not. Stage
+5a (§3, at def2-TZVPD with DFT re-optimisation) is where #132 and the relaxer get re-tested.
+
+### MACE-POLAR-1 — the same study, three sizes (2026-10-05)
+
+`MACEPolarBackend` (`mace-polar-1-s|m|l`; size in the `MethodSpec`) needs `graph-longrange==0.4.0`
+beside mace-torch 0.3.16 — 0.4.3/0.4.4 dropped the `force_pbc_evaluator` argument mace-torch
+passes. **Step 0 passes:** every size is given charge and spin and its energy responds — water
+loses an electron at +12.65 eV (vertical IP ≈ 12.6 eV), acetate at +3.24 eV.
+
+**OMOL-0's spin response is weak** (`MACEOmolBackend`, same probes): H₂O→H₂O⁺ +0.04 eV, H₂O
+triplet −0.04 eV, acetate triplet +0.61 eV, where POLAR-1-L gives +12.65, +6.57, +4.40 eV.
+Acetate's electron detachment is right in both (+3.13 / +3.24 eV). Every Ni(II) species here is a
+triplet, so this belongs beside any OMOL-0 number that crosses a spin or charge state.
+
+Same 93 starts and settings as E-MH (`compare_relaxers.py --candidate mace_polar_s mace_polar_m
+mace_polar_l`):
+
+| vs OMOL-0 | MH-1 | POLAR-S | POLAR-M | POLAR-L |
+|---|---|---|---|---|
+| neutral Ni: median RMSD / OMOL-0 penalty at the minimum | 0.39 Å / 0.19 eV | 0.27 / 0.12 | 0.15 / 0.035 | **0.11 / 0.004** |
+| charged Ni: median RMSD / penalty | 0.47 / 0.54 | 0.32 / 0.30 | 0.24 / 0.083 | **0.21 / 0.028** |
+| charged Ni: cross-start RMSD | 0.17 Å | 0.12 | 0.030 | **0.021** |
+| top-1 conformer agreement | 13/29 | 11/29 | 13/29 | 17/29 |
+| median s per Ni relaxation (OMOL-0 10.5–13.5) | 12–14 | 6–7 | 10–17 | 26–33 |
+| relaxations changing connectivity (OMOL-0: 62) | 62 | 58 | 61 | 60 |
+
+Agreement improves monotonically with size; started from OMOL-0's minimum POLAR-L barely moves
+(0.015–0.02 Å), so the two share minima and their raw-start differences are mostly basin choice.
+**POLAR-S is not a proxy for POLAR-L** — it disagrees about as much as MH-1.
+
+**DFT check, POLAR-L vs OMOL-0** (same six species and protocol as MH-1):
+
+| | #132 | #68 | #569 | #28 | #94 | #718 |
+|---|---|---|---|---|---|---|
+| ΔE_DFT (POLAR-L − OMOL-0) | −2.69 eV ⚠ | +0.004 | −0.006 | +0.002 | +0.042 | +0.028 |
+| DFT max force OMOL-0 / POLAR-L (eV/Å) | 3.78 / 0.59 | 0.25 / 0.23 | 0.64 / 0.66 | 0.38 / 0.32 | 0.68 / 0.68 | 1.07 / 1.37 |
+
+Five of six are DFT-equivalent (|ΔE| ≤ 0.04 eV). ⚠ **#132 — rechecked with the SCF state
+recorded:** at OMOL-0's minimum the SCF is unstable — ⟨S²⟩ 2.58 against 2.00 for a triplet, 68
+cycles, and three runs at that geometry gave DFT energies 0.56 eV apart (−76242.51 / −76242.93 /
+−76243.07 eV). At POLAR-L's minimum it is a clean triplet (⟨S²⟩ 2.003, Ni spin 1.82, 26 cycles)
+and reproducible to 1 meV. POLAR-L's minimum is **2.1–2.7 eV lower** than OMOL-0's by DFT, and
+the MH minimum (−0.87 eV against its run's OMOL-0 energy) is ~1.4 eV above POLAR-L's. #569 used
+different starts in the MH and POLAR checks, so those two rows are each internally fair but not
+comparable with each other.
+
+**Where this leaves the relaxer (2026-10-05, not yet called):** POLAR-L is DFT-equivalent to
+OMOL-0 on five of six species and much better on the sixth, is given charge and spin with a
+physical response, and costs ~2.5× OMOL-0 per relaxation. Run as an S → L funnel (k = 3) its
+all-conformer cost is ~0.3 × all-L ≈ 0.8 × all-OMOL-0. Whether POLAR-L (direct or funnelled)
+replaces OMOL-0 is the user's call; stage 5a at def2-TZVPD with DFT re-optimisation is the test
+that should precede it.
+
+**Small → large on one structure (prototype, 12 Ni starts).** S → L saves 10 % of L-alone time,
+S → M → L 25 %; a warm start cuts the L stage's steps only 17 %, because S's minimum is not near
+L's. The start also changes the answer: S → L ends in L-alone's minimum in 6/12 starts, S → M →
+L in 3/12, in either direction (−0.88 to +1.06 eV). Per call S is 4–6× cheaper than L and M 2×,
+at 18–41 atoms. Storage is not a constraint: a geometry is a few kB.
+
+**Small → large across conformers — the funnel** (`scripts/funnel_eval.py`; 12 Ni structures, 6
+neutral and 6 charged, 10 raw starts each, fmax 0.05). Every start relaxed by POLAR-L (baseline);
+every start by S or M, then that model's k lowest minima refined by L. Regret = best funnel L
+energy − best baseline L energy, one theory throughout:
+
+| funnel | k | median regret | worst | missed > 0.05 eV | found lower | time vs all-L |
+|---|---|---|---|---|---|---|
+| S → L | 1 | −0.08 eV | +0.57 | 4/12 | 6/12 | 0.22 |
+| S → L | 2 | −0.13 | +0.34 | 3/12 | 7/12 | 0.26 |
+| **S → L** | **3** | **−0.15** | **+0.11** | **2/12** | **7/12** | **0.31** |
+| M → L | 1–3 | +0.01 to −0.04 | +0.23 | 3–4/12 | 5–6/12 | 0.46–0.48 |
+
+- **S → L, k = 3 costs 31 % of all-L and is not worse in the median.** It misses the baseline's
+  best by at most 0.11 eV (2/12) and finds a lower L minimum in 7/12 — by 1.0–1.1 eV on two charged
+  structures (#678, #804).
+- **It works as sampling, not as ranking.** S puts L's best conformer first in 2/12; the gain is that
+  L refined from S minima reaches basins L from raw constructs does not. The same fact says ten raw
+  starts do not converge the conformer search for these complexes under any model.
+- **M is not worth a stage:** half of all-L's time, no better ranking than S.
+- Timings for #596, #614 and #804 were partly measured while two jobs shared the GPU.
+
+### A smarter funnel — partial relaxation (planned, not built)
+
+The funnel above relaxes every conformer **to convergence** with S, then refines k of them with
+L. What it measured decides what "smarter" can mean:
+
+- S's *ranking* is weak (L's best first in 2/12), so pruning harder on S energies alone loses
+  answers; the gain was **sampling** — L reaching basins from S minima it does not reach from raw
+  constructs. Ten raw starts do not converge the search for any model.
+- A warm start cuts L's steps only 17 %: the L stage is paid in L steps, whatever S did.
+- Per call S is 4–6× cheaper than L, and its cost barely grows with system size (~50–70 ms at
+  18–41 atoms), so S is overhead-bound — conformers of one identity share atoms and could share a
+  call.
+- 62 of 84 Ni relaxations change connectivity under every model; finishing those relaxations
+  buys a geometry filed under the wrong identity.
+
+So the levers are: stop a trajectory as soon as its outcome is known (pruned, duplicate, or
+torn apart), spend the saving on *more starts*, batch S, and converge L only where the result is
+used. Partial relaxation is the mechanism for all of them. Proposed slices, each measured
+before the next is built:
+
+| # | Slice | What it settles | Gate to proceed |
+|---|---|---|---|
+| F0 | **Trajectory capture.** `funnel_eval.py` records per-step energy, fmax and coordinates (every n steps) for S, M and L, on the 12 structures and on 20 starts each. One run, kept as data | every policy below is then evaluated **offline** by replaying trajectories — no GPU per policy | — |
+| F1 | **Policy simulator.** Replays F0 under a policy (S step budgets, prune fraction or energy window, dedup θ, k, L stop criterion) and reports regret and cost against all-L, and against the union of everything found | which schedule; whether pruning on a *partial* S energy keeps L's best | a policy at ≤ 0.3× all-L with regret no worse than k = 3 full-S |
+| F2 | **Early dedup.** At each checkpoint, cluster live trajectories with `identity.conformers.cluster` (θ_geom 0.15 Å, calibrated) and keep the lower-energy member. The energy window stays off until [B9](BUGS.md#b9) is fixed — it is uncalibrated | how many of N starts are duplicates after a few dozen S steps | fraction merged, and that no merge removes L's eventual best |
+| F3 | **Early stop on connectivity change.** Needs E1's `connectivity_check`; a trajectory whose graph changes is stopped and recorded `connectivity_changed` rather than finished | steps saved, and that the stop never fires on a relaxation that would have returned to the stored graph | E1 landed; false-stop rate on F0 data |
+| F4 | **Batched S.** All live conformers of one identity in one MACE call (same atoms, so one graph batch) | S wall time per identity versus N separate calls | measured speedup on the 18–41-atom Ni set |
+| F5 | **Staged L.** Refine the survivors to a loose fmax (0.15 eV/Å), re-rank on L, converge only the top 1–2 to 0.05; optionally stop refining when the next candidate's partial L energy is beyond a window of the best | L steps saved without changing the reported minimum | regret ≤ 0.02 eV against full-L refinement on F0 data |
+| F6 | **Runner mode `funnel_go`.** Spec fields (small and large model, schedule, k), a spec-version bump so an old spec replays its run (invariant 10), one `relax` task per *identity* instead of per geometry | the pipeline uses it | F1–F5 settled; the user's call on POLAR-L as the relaxer |
+
+**Storage — a decision for F6, proposed here:** store every **converged** S minimum (cheap, a
+`methods` row of its own, and discarding paid compute is the expensive mistake) and every L
+result; store **no** truncated trajectory point as a geometry — it is at no rung's convergence and
+would read as a minimum. The pruning decisions and their reasons go in the task detail, so a
+pruned start can be re-run.
+
+**Not in scope:** changing S's ranking (fine-tuning) and the energy window (B9). Stage 5a — DFT
+re-optimisation at def2-TZVPD on funnel winners — still comes before POLAR-L becomes the default.
+
+### DFT backend is GPU4PySCF — built (E4, first half)
+
+`energy/dft.DFTBackend`: ωB97M-V/def2-TZVPD by default, RKS for a singlet and UKS otherwise,
+density fitting, continua `smd:<solvent>` / `pcm:<solvent>`, geomeTRIC for `relax`, Mulliken
+charges and spin populations and ⟨S²⟩ in `EnergyResult.extras`, and `check_oxidation_state`
+(`oxidation_state_mismatch`). Functional, basis, grid levels and guess are all in the
+`MethodSpec`. Measured in `ebu` on 2026-10-02:
+
+| Check | Result |
+|---|---|
+| Install | torch 2.13 pins the CUDA **13.0** toolkit (`nvidia/cu13`). `cupy-cuda12x` loads that NVRTC and those headers against its own 12.9 runtime, and `cupy-cuda13x` 14.2 bundles a 13.2 runtime; both fail to compile CuPy's CUB reductions (`cuda_fp8.hpp`), which PCM/SMD hit — and both "work" only when torch is imported first, because torch's 13.0 `libcudart` then wins. **`cupy-cuda13x==14.0.1` + `gpu4pyscf-cuda13x==1.8.1`** has a 13.0 runtime and passes everything without torch. `DFTBackend.available()` compiles a reduction, so the broken pairing reports as unavailable |
+| ωB97M-V incl. VV10 on GPU | yes |
+| UKS triplet | yes (O₂: ⟨S²⟩ 2.006) |
+| SMD and IEF-PCM on GPU | yes, gas and solvated single points |
+| Gradients / geomeTRIC | yes |
+| **VV10 cost** | the NLC grid defaulted to the full XC grid (306k points on a 23-atom Ni complex) and VV10 is quadratic in it: 20.5 s of a 22 s Fock build. NLC level 1 (104k points) costs 4.5 s and moves the energy by 1.1 µEh; level 0 by 0.17 mEh. Default `nlc_grids_level=1` |
+| **Ni(II) SCF** | from the minao guess the triplet oscillates (ΔE of hundreds of Eh in early cycles) and does not converge in 150 cycles; ωB97X also failed in 60. Started from a converged PBE density it converges in 31 cycles. Default `guess_xc="pbe"` |
+| Memory, ~40-atom Ni at def2-TZVPD | not yet measured — the first attempt ran before the two fixes above |
+| GPU sharing | DFT and a MACE study on one card slowed both several-fold; DFT should run exclusively (an E5 `refine` queue concern) |
 
 ### xTB — what it does today, and whether it stays (to be decided)
 
@@ -311,10 +491,11 @@ first term); corrections never borrowed across geometries (C17); absent ≠ zero
 |---|---|---|---|---|
 | E0 | this plan; the Q2 reframing recorded with the salt-study results | S | — | — |
 | E1 | connectivity check after relaxation + `connectivity_changed` | S–M | every reported number; E-MH metric (a) | M7 |
-| E-MH | MACE-MH backend + the §3a comparison with MACE-OMOL-0 | S–M | the stage-2 relaxer | M7 |
+| E-MH | MACE-MH and MACE-POLAR-1 backends + the §3a comparisons with MACE-OMOL-0 — **done** (2026-10-05); the relaxer call is open | S–M | the stage-2 relaxer | M7 |
+| F0–F6 | the partial-relaxation funnel (§3a, "A smarter funnel") | M | the stage-2 relaxer at screening scale | M7 |
 | E2 | screening tier labelled; ALPB+GBSA spread; `hydration_change`; pH and water reference beside the proton sink (C21); the solvation §3a pricing rules | S | honest screening | M7 |
 | E3 | MACE Hessian → `thermo_corrections`; recipe selection in `energy/reference` | M | 5d | M7R |
-| E4 | GPU4PySCF `DFTBackend` + spin and oxidation-state checks | M | 5b, 5c | M7R |
+| E4 | GPU4PySCF `DFTBackend` + spin and oxidation-state checks — **backend and checks built**; the `smd:water` producer and the spin ladder remain | M | 5b, 5c | M7R |
 | E5 | `escalation_set` + `refine` task kind | M | stage 4 | M7R |
 | E6 | calibration specs + fit script | S | stage 6 | M7R |
 | E7 | speciation solver; `/graph` shows refine totals | M | the goal | M8 |
@@ -322,11 +503,13 @@ first term); corrections never borrowed across geometries (C17); absent ≠ zero
 
 ```
 E0 ─► E1 ─► E-MH ─► E2 ─► E3 ─┐
-                    E4 ───────┼─► E5 ─► E6 ─► E7
+       │            E4 ───────┼─► E5 ─► E6 ─► E7
+       └─► F3   F0 ─► F1 ─► F2, F4, F5 ─► F6
 ```
 
 E-MH sits before E2 because E2's error bar and pricing are computed on the relaxer's
-geometries; E4 needs only the GPU4PySCF install and can start in parallel.
+geometries; E4 needs only the GPU4PySCF install and can start in parallel. F0–F2, F4 and F5
+need no other slice; F3 needs E1's connectivity check, and F6 the relaxer call.
 
 Where the slices touch: `runner._execute_relax` (E1); `energy/backends.backend_for`,
 `energy/relax.MODE_FIDELITY` (E4); `energy/reference` `_energy_row`, `_corrected_row`,
