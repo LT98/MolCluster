@@ -30,7 +30,8 @@ RUN_MODES = ("construct", "ml_go", "xtb_go", "dft_go")
 # `None` means "whatever this machine declares in MOFSBU_ML_MODEL", and either way the
 # resolved model is written into the `methods` row of every number, so a stored energy
 # never loses the name of the model that produced it.
-ML_MODELS = ("mace-mp-0", "mace-omol-0")
+ML_MODELS = ("mace-mp-0", "mace-omol-0", "mace-mh-1",
+             "mace-polar-1-s", "mace-polar-1-m", "mace-polar-1-l")
 
 # How many co-ligands (water or any named solvent/co-ligand) a product carries (D26).
 # `fill` puts one on every vertex the ligands leave free; `range` also builds the counts up
@@ -226,7 +227,7 @@ class BuildSpec:
     co_ligand_window: int = 2
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     # Which ML potential `ml_go` means.  None = the machine's declared default.
-    ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | None
+    ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | mace-mh-1 | None
     note: str = ""
 
     def __post_init__(self) -> None:

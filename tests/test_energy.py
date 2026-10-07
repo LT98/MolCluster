@@ -11,9 +11,14 @@ import pytest
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MethodSpec
 from mofsbu.assembly.join import NotBuiltYet
 from mofsbu.energy.backends import (
-    ML_BACKENDS, MACEBackend, MACEOmolBackend, NullBackend, XTBBackend, available_backends,
+    ML_BACKENDS, MACEBackend, MACEMHBackend, MACEOmolBackend, MACEPolarBackend, NullBackend,
+    XTBBackend,
+    available_backends,
     backend_for, check_spin, combined_multiplicity, d_electrons, electron_count,
     high_spin_multiplicity, minimal_multiplicity, ml_backend_key, spin_class_multiplicity,
+)
+from mofsbu.energy.dft import (
+    DFTBackend, OxidationStateMismatch, check_oxidation_state, expected_unpaired,
 )
 from mofsbu.energy.relax import (
     MODE_FIDELITY, available_modes, ml_model_status, mode_status, relax_geometry,
@@ -233,10 +238,15 @@ def test_same_theory_ignores_charge_and_spin_but_not_the_medium():
 
 # ── availability is a property of the machine, not of the code ───────────────
 
-def test_dft_is_a_missing_body_not_a_missing_install():
-    """Ground rule 8: the two are different failures and get different exceptions."""
-    with pytest.raises(NotBuiltYet, match="DFT"):
-        backend_for(Fidelity.DFT)
+def test_dft_on_a_cpu_declared_machine_is_a_missing_install_not_a_fallback(monkeypatch):
+    """GPU4PySCF serves the DFT rung; declared cpu makes it unavailable, never a CPU run."""
+    monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
+    backend = backend_for(Fidelity.DFT)
+    assert isinstance(backend, DFTBackend)
+    assert backend.available() is False
+    assert "MOFSBU_DEVICE" in backend.install_hint()
+    with pytest.raises(EnergyBackendUnavailable, match="MOFSBU_DEVICE"):
+        backend.single_point(*WATER, charge=0, multiplicity=1)
 
 
 def test_raw_and_ff_have_no_backend_because_they_are_not_energies():
@@ -245,11 +255,12 @@ def test_raw_and_ff_have_no_backend_because_they_are_not_energies():
             backend_for(rung)
 
 
-def test_available_modes_covers_every_declared_run_mode():
+def test_available_modes_covers_every_declared_run_mode(monkeypatch):
+    monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
     modes = available_modes()
     assert set(modes) == set(MODE_FIDELITY)
     assert modes["construct"] is True
-    assert modes["dft_go"] is False            # no external code is wired up
+    assert modes["dft_go"] is False            # GPU4PySCF needs a declared CUDA device
 
 
 def test_mode_status_explains_a_disabled_mode():
@@ -266,9 +277,10 @@ def test_relax_refuses_an_unavailable_backend_with_an_install_hint():
         relax_geometry(WATER[1], WATER[0], charge=0, multiplicity=1, target=Fidelity.XTB)
 
 
-def test_available_backends_answers_for_all_four():
+def test_available_backends_answers_for_every_backend():
     got = available_backends()
-    assert set(got) == {"xtb", "mace", "mace_omol", "null"}
+    assert set(got) == {"xtb", "mace", "mace_omol", "mace_mh", "mace_polar_s", "mace_polar_m",
+                        "mace_polar_l", "dft", "null"}
     assert got["null"] is True
 
 
@@ -340,3 +352,174 @@ def test_omol_reads_the_charge_it_is_given():
     calc = b._calculator()
     assert calc.info_keys["total_charge"] == b.charge_key
     assert calc.info_keys["total_spin"] == b.spin_key
+
+
+# ── MACE-MH: multi-head, and blind to the electronic state ───────────────────
+
+def test_mace_mh_is_selected_by_its_alias_and_carries_both_caveats():
+    b = backend_for(Fidelity.ML, ml_model="mace-mh-1")
+    assert isinstance(b, MACEMHBackend) and b.method == "MACE-MH-1"
+    assert b.charge_aware is False and b.spin_aware is False
+    extras = b.method_spec(charge=0, multiplicity=1).extras
+    assert extras["charge_blind"] is True and extras["spin_blind"] is True
+
+
+def test_mace_mh_head_is_part_of_the_method_row():
+    """Two heads are two theories; they must never share a `methods` row."""
+    omol = MACEMHBackend(head="omol").method_spec(charge=0, multiplicity=1)
+    spice = MACEMHBackend(head="spice_wB97M").method_spec(charge=0, multiplicity=1)
+    assert omol.extras["head"] == "omol" and omol.code_version.endswith("/omol")
+    assert "OMol25" in omol.extras["training_set"]
+    assert not omol.same_theory(spice)
+
+
+def test_mace_mh_refuses_an_unknown_head():
+    """`mace_mp` would fall back to its last head with a log line; refused here instead."""
+    with pytest.raises(ValueError, match="unknown MACE-MH head"):
+        MACEMHBackend(head="omol25")
+
+
+def test_mace_mh_omol_head_ignores_charge_and_spin():
+    """Why `charge_aware` is False: the head's energy does not move with the state."""
+    pytest.importorskip("torch", reason="the ML stack is not installed on this machine")
+    pytest.importorskip("mace.calculators", reason="mace-torch not installed on this machine")
+    from pathlib import Path
+
+    if not (Path.home() / ".cache" / "mace" / "macemh1model").is_file():
+        pytest.skip("MACE-MH-1 checkpoint is not cached on this machine")
+    b = MACEMHBackend(device="cpu")
+    calc = b._calculator()
+    energies = set()
+    for q, mult in ((0, 1), (1, 2), (0, 3)):
+        atoms = b._atoms(*WATER, charge=q, multiplicity=mult)
+        atoms.info.update({"charge": q, "spin": mult})
+        atoms.calc = calc
+        energies.add(round(float(atoms.get_potential_energy()), 8))
+    assert len(energies) == 1
+
+
+# ── MACE-POLAR-1: three sizes, given the electronic state ───────────────────
+
+@pytest.mark.parametrize("alias,size", [("mace-polar-1-s", "S"), ("polar-1-m", "M"),
+                                        ("mace_polar_l", "L")])
+def test_polar_sizes_are_selected_by_alias_and_named_in_the_method_row(alias, size):
+    b = backend_for(Fidelity.ML, ml_model=alias)
+    assert isinstance(b, MACEPolarBackend)
+    assert b.method == f"MACE-POLAR-1-{size}"
+    assert b.charge_aware and b.spin_aware
+    spec = b.method_spec(charge=1, multiplicity=3)
+    assert spec.code_version.endswith(f"polar-1-{size.lower()}")
+    assert "charge_blind" not in spec.extras and "spin_blind" not in spec.extras
+
+
+def test_polar_sizes_are_different_theories():
+    s = backend_for(Fidelity.ML, ml_model="mace-polar-1-s").method_spec(charge=0, multiplicity=1)
+    big = backend_for(Fidelity.ML, ml_model="mace-polar-1-l").method_spec(charge=0, multiplicity=1)
+    assert not s.same_theory(big)
+
+
+def test_polar_refuses_an_unknown_size():
+    with pytest.raises(ValueError, match="unknown MACE-POLAR-1 size"):
+        MACEPolarBackend(model="polar-1-xl")
+
+
+def test_polar_energy_responds_to_charge():
+    """Ionising water costs ~12.6 eV; a model that is told the charge must show it."""
+    pytest.importorskip("torch", reason="the ML stack is not installed on this machine")
+    pytest.importorskip("mace.calculators", reason="mace-torch not installed on this machine")
+    from pathlib import Path
+
+    if not (Path.home() / ".cache" / "mace" / "MACEPOLAR1Smodel").is_file():
+        pytest.skip("MACE-POLAR-1-S checkpoint is not cached on this machine")
+    b = MACEPolarBackend(model="polar-1-s", device="cpu")
+    if not b.available():
+        pytest.skip(f"MACE-POLAR-1 is not loadable here: {b.install_hint()}")
+    neutral = b.single_point(*WATER, charge=0, multiplicity=1).energy
+    cation = b.single_point(*WATER, charge=1, multiplicity=2).energy
+    assert 10.0 < cation - neutral < 15.0
+
+
+# ── DFT: the method row, the medium, and the oxidation-state refusal ────────
+
+def test_dft_method_names_functional_basis_and_reference():
+    b = DFTBackend(device="cpu")
+    singlet = b.method_spec(charge=0, multiplicity=1)
+    triplet = b.method_spec(charge=2, multiplicity=3, solvent="smd:water")
+    assert singlet.method == "wb97m-v/def2-tzvpd" and singlet.code == "gpu4pyscf"
+    assert singlet.extras["reference"] == "RKS" and triplet.extras["reference"] == "UKS"
+    assert triplet.solvent == "smd:water"
+    other = DFTBackend(device="cpu", basis="def2-svp").method_spec(charge=0, multiplicity=1)
+    assert not singlet.same_theory(other)
+
+
+@pytest.mark.parametrize("medium,match", [
+    ("water", "model:solvent"),            # a solvent alone does not name the continuum
+    ("cosmo:water", "not wired"),
+    ("smd:unobtanium", "unknown solvent"),
+])
+def test_dft_refuses_a_medium_it_cannot_compute(medium, match):
+    with pytest.raises(ValueError, match=match):
+        DFTBackend(device="cpu").method_spec(charge=0, multiplicity=1, solvent=medium)
+
+
+def test_dft_checks_the_request_before_the_machine():
+    """An unreachable multiplicity is wrong on every machine, so it is not reported as cpu."""
+    with pytest.raises(ValueError, match="cannot give multiplicity"):
+        DFTBackend(device="cpu").single_point(*WATER, charge=0, multiplicity=2)
+
+
+class _Result:
+    def __init__(self, pops):
+        self.extras = {} if pops is None else {"spin_populations": pops}
+
+
+def test_oxidation_state_check_passes_a_ni2_triplet_and_refuses_a_ligand_radical():
+    expected = expected_unpaired("Ni", 2, "hs")
+    assert expected == 2
+    assert check_oxidation_state(_Result([1.68, 0.1, 0.1]), 0, expected) == 1.68
+    with pytest.raises(OxidationStateMismatch, match="oxidation_state_mismatch"):
+        check_oxidation_state(_Result([0.95, 0.9, 0.1]), 0, expected)
+    # closed shell: no spin density at all, which is right only for zero unpaired
+    assert check_oxidation_state(_Result(None), 0, 0) == 0.0
+    with pytest.raises(OxidationStateMismatch):
+        check_oxidation_state(_Result(None), 0, expected)
+
+
+def _gpu_dft():
+    b = DFTBackend(xc="pbe", basis="def2-svp", device="cuda")
+    if not b.available():
+        pytest.skip(f"GPU4PySCF is not usable here: {b.install_hint()}")
+    return b
+
+
+def test_dft_single_point_on_the_gpu():
+    b = _gpu_dft()
+    r = b.single_point(*WATER, charge=0, multiplicity=1)
+    assert r.converged and r.fidelity is Fidelity.DFT
+    assert -2080 < r.energy < -2060                     # PBE/def2-SVP water, eV
+    assert abs(sum(r.extras["mulliken_charges"])) < 1e-6
+
+
+def test_dft_open_shell_reports_spin_populations():
+    b = _gpu_dft()
+    o2 = (["O", "O"], [[0.0, 0.0, 0.0], [0.0, 0.0, 1.21]])
+    r = b.single_point(*o2, charge=0, multiplicity=3)
+    assert r.method.extras["reference"] == "UKS"
+    assert abs(sum(r.extras["spin_populations"]) - 2.0) < 1e-6
+    assert abs(r.extras["s2"] - r.extras["s2_ideal"]) < 0.05
+
+
+def test_dft_continuum_lowers_a_polar_molecule():
+    b = _gpu_dft()
+    gas = b.single_point(*WATER, charge=0, multiplicity=1)
+    smd = b.single_point(*WATER, charge=0, multiplicity=1, solvent="smd:water")
+    assert smd.method.solvent == "smd:water"
+    assert smd.energy < gas.energy
+
+
+def test_dft_relaxes_water():
+    b = _gpu_dft()
+    r = b.relax(*WATER, charge=0, multiplicity=1, fmax=0.05, steps=50)
+    assert r.converged and r.n_steps >= 1
+    assert r.energy <= (r.initial_energy or 0.0) + 1e-6
+    assert r.fmax <= 0.05 + 1e-9

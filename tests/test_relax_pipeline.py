@@ -181,7 +181,8 @@ def test_the_device_reaches_the_stored_method(monkeypatch):
     assert spec.extras["device"] == "cuda"
 
 
-def test_relaxation_is_marked_as_wired():
+def test_relaxation_is_marked_as_wired(monkeypatch):
     """If this flag is ever flipped back, the modes must go unavailable with it."""
+    monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
     assert relax_mod.RELAXATION_IS_EXECUTED is True
     assert relax_mod.mode_status()["dft_go"]["available"] is False

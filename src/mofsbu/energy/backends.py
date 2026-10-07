@@ -621,24 +621,136 @@ class MACEOmolBackend(MACEBackend):
     min_mace_version = "0.3.14"
 
 
+class MACEMHBackend(MACEBackend):
+    """MACE-MH-1, a multi-head foundation model; one head per level of theory.
+
+    **Charge- and spin-blind in every head**, the `omol` head included: total charge and
+    multiplicity leave its energy unchanged (measured, `docs/WORKPLAN_energy.md` E-MH step 0).
+    So it carries MP-0's flags, and `energy.reference` refuses its energies on a charged
+    equation exactly as it refuses MP-0's.
+
+    The head is a constructor argument and travels into the `MethodSpec` (`extras["head"]`
+    and `code_version`), so two heads never share a `methods` row.
+    """
+
+    name = "mace_mh"
+    charge_aware = False
+    spin_aware = False
+    method = "MACE-MH-1"
+
+    loader = "mace_mp"
+    default_model = "mh-1"
+    min_mace_version = "0.3.16"
+
+    #: head -> its training data and level.  `mace_mp` falls back to the LAST head with
+    #: only a log line when asked for one it lacks, so an unknown head is refused here.
+    HEADS = {
+        "omol": "OMol25 (wB97M-V/def2-TZVPD)",
+        "spice_wB97M": "SPICE (wB97M-D3(BJ)/def2-TZVPPD)",
+        "matpes_r2scan": "MatPES (r2SCAN)",
+        "omat_pbe": "OMat24 (PBE)",
+        "mp_pbe_refit_add": "Materials Project (PBE, refit)",
+        "oc20_usemppbe": "OC20 (PBE)",
+    }
+    default_head = "omol"
+
+    def __init__(self, *, head: str | None = None, **kwargs: Any) -> None:
+        head = self.default_head if head is None else head
+        if head not in self.HEADS:
+            raise ValueError(f"unknown MACE-MH head {head!r}; have {sorted(self.HEADS)}")
+        super().__init__(**kwargs)
+        self.head = head
+        self.training_set = self.HEADS[head]
+
+    def available(self) -> bool:
+        if not super().available():
+            return False
+        from mace.calculators import foundations_models
+
+        return self.model in getattr(foundations_models, "mace_mp_urls", {})
+
+    def code_version(self) -> str:
+        return f"{super().code_version()}/{self.head}"
+
+    def method_spec(self, *, charge, multiplicity, solvent=None) -> MethodSpec:
+        spec = super().method_spec(charge=charge, multiplicity=multiplicity, solvent=solvent)
+        return replace(spec, extras={**spec.extras, "head": self.head})
+
+    def _calculator(self):
+        if self._calc_cache is None:
+            from mace.calculators import mace_mp
+
+            self._calc_cache = mace_mp(model=self.model, device=self.device,
+                                       default_dtype=self.default_dtype, head=self.head)
+        return self._calc_cache
+
+
 # ── selection ────────────────────────────────────────────────────────────────
 
+class MACEPolarBackend(MACEBackend):
+    """MACE-POLAR-1: explicit long-range electrostatics, given total charge and spin.
+
+    Three sizes (`polar-1-s/m/l`); the size is in `method` and `code_version`, so two sizes
+    never share a `methods` row.  Needs `graph-longrange` at the version mace-torch calls
+    (0.4.0 for mace-torch 0.3.16).  Its total energies sit on OMOL-0's scale — water agrees
+    to 0.1 meV — which is an observation, not a licence to mix the two in one equation.
+    """
+
+    name = "mace_polar"
+    charge_aware = True
+    spin_aware = True
+    loader = "mace_polar"
+    default_model = "polar-1-l"
+    training_set = "OMol25-scale (wB97M-V/def2-TZVPD) total energies, inferred"
+    min_mace_version = "0.3.16"
+    SIZES = ("polar-1-s", "polar-1-m", "polar-1-l")
+
+    def __init__(self, *, model: str | None = None, **kwargs: Any) -> None:
+        super().__init__(model=model, **kwargs)
+        if self.model not in self.SIZES:
+            raise ValueError(f"unknown MACE-POLAR-1 size {self.model!r}; have {self.SIZES}")
+        self.method = f"MACE-POLAR-1-{self.model.rsplit('-', 1)[-1].upper()}"
+
+    def available(self) -> bool:
+        if not super().available():
+            return False
+        try:
+            import graph_longrange  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    def install_hint(self) -> str:
+        return (f"pip install 'mace-torch>={self.min_mace_version}' graph-longrange==0.4.0 "
+                "(the graph-longrange version must match what mace-torch calls)")
+
+
+def _polar(size: str):
+    def make(**kwargs: Any) -> MACEPolarBackend:
+        return MACEPolarBackend(model=f"polar-1-{size}", **kwargs)
+    return make
+
+
+from mofsbu.energy.dft import DFTBackend                                 # noqa: E402
+
 _BACKENDS: dict[str, Any] = {"xtb": XTBBackend, "mace": MACEBackend,
-                             "mace_omol": MACEOmolBackend, "null": NullBackend}
+                             "mace_omol": MACEOmolBackend, "mace_mh": MACEMHBackend,
+                             "mace_polar_s": _polar("s"), "mace_polar_m": _polar("m"),
+                             "mace_polar_l": _polar("l"),
+                             "dft": DFTBackend, "null": NullBackend}
 
 #: Backend keys that serve the ML rung.  More than one, which is the whole point: the
 #: ladder says how good a number is, not which theory produced it.
-ML_BACKENDS = ("mace", "mace_omol")
+ML_BACKENDS = ("mace", "mace_omol", "mace_mh", "mace_polar_s", "mace_polar_m", "mace_polar_l")
 
 # Which backend serves each rung of the ladder.  FF is RDKit's MMFF, which lives in
 # `geometry.embed` and is not an EnergyBackend — it produces geometries, not comparable
-# energies.  DFT has no backend: there is no external code wired up, and inventing one
-# that silently ran xTB instead would be the exact failure ground rule 8 exists for.
+# energies.  DFT is GPU4PySCF (`energy.dft`).
 #
 # ML is deliberately absent from this table.  It has two backends and picking between
 # them is a DECLARED choice (`MOFSBU_ML_MODEL`, or `BuildSpec.ml_model`), not a lookup —
 # see `ml_backend_key` below.
-_BY_FIDELITY = {Fidelity.XTB: "xtb"}
+_BY_FIDELITY = {Fidelity.XTB: "xtb", Fidelity.DFT: "dft"}
 
 
 def ml_backend_key(ml_model: str | None = None) -> str:
@@ -671,9 +783,7 @@ def backend_for(fidelity: Fidelity, *, ml_model: str | None = None,
 
         raise NotBuiltYet(
             f"no energy backend serves {fidelity.name}. "
-            + ("DFT needs an external code wired up (M7 leaves the slot open on purpose)."
-               if fidelity is Fidelity.DFT else
-               f"{fidelity.name} geometries come from the constructor, not from a backend."))
+            f"{fidelity.name} geometries come from the constructor, not from a backend.")
     return get_backend(_BY_FIDELITY[fidelity], **kwargs)
 
 
