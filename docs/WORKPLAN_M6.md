@@ -492,22 +492,103 @@ arrangement to choose, so those builds are byte-identical to a `placement 2` one
 
 **The guard is already gone** — it came out with S1, because that is the slice whose
 measurement proved it was refusing a determined placement. What is left here is the second
-half: with both routes running, the model says which works:
+half: with both routes running, the model says which works.
 
-| route | result |
+**Both routes build.** The refusal recorded here on 2026-09-16 (`Cu(HCOO)₂ + Cu` "bottoms out
+at 1.464 Å") is withdrawn; its history is in `archive/DESIGN_history.md`. Route B works only if
+both formates on Cu1 point their free oxygens at the same place for the second Cu, and whether
+they do is decided by two construction choices, not by the chemistry. Measured on the placer,
+two formates on cis vertices of square-planar Cu, implied second-Cu site 1.98 Å out along the
+free oxygen's lone pair:
+
+| formates bound | closest the two second-Cu sites get | at Cu···Cu |
+|---|---|---|
+| *anti* (lone pair 0, Cu–O–C–O ≈ 135°) — the only binding before S1 | 1.462 Å | 5.4 Å, not a dimer |
+| *anti*, compact dimers only (< 3.5 Å) | 6.76 Å | — |
+| *syn* (lone pair 1, Cu–O–C–O 0–45°), compact | 0.07 Å | 3.16 Å |
+| *syn*, upright, same face (the placer, both at azimuth +86.4°) | 0.44 Å | 2.673 Å |
+| *syn*, upright, opposite faces (`join(torsion_well=0)` on cis vertices, [B27](BUGS.md#b27)) | 5.33 Å | 2.673 Å |
+
+So the 1.464 Å was the *anti* binding, and the 2026-10-07 in-memory re-test that seemed to
+confirm it put the two syn formates on opposite faces.
+
+**Every construction choice, enumerated for both routes (2026-10-08,
+`data/reference/spec_m6_s5_enumerate.json`, construct only).** Each route varies the formate
+binding lobe (anti/syn), face (torsion well), pose (flat/upright) and which free-O lobe the
+second Cu binds (toward/away from Cu1) — 16 variants each, all from the ground up with water
+release; `scripts/route_report.py --built` reads it back:
+
+| | Route A | Route B |
+|---|---|---|
+| anti-bound formate (any pose, any face) | refused at step 2: the bridge cannot span the open pair (2.1–3.6 Å short) | builds a singly bridged dimer only, Cu···Cu 5.1–5.5 Å; second O 5.3–9.1 Å from Cu2 |
+| syn, second Cu on the *away* lobe | refused at step 2 (2.1–2.8 Å short) | singly bridged, Cu···Cu 5.15 Å |
+| syn, flat, toward | builds, **QC clash** (Cu2 lands on Cu1's ligand) | same face: second O 2.58 Å, **QC clash**; opposite faces: rejected at placement (formates collide) |
+| syn, upright, toward, opposite faces | — (mirror of the row below) | second O 5.33 Å from Cu2 (B27) |
+| **syn, upright, toward, same face** | **QC-clean bis-bridged product** (both mirror faces) | **QC-clean; second O 2.10 Å from Cu2's freed vertex — the same node as Route A's product** |
+
+Both routes succeed under exactly one physical choice and fail under the rest, so with the
+choices enumerated the comparison is symmetric. The 2026-09-16 measurement compared Route A
+under syn binding with Route B under anti binding, which fails Route A too.
+
+**Re-tested from the ground up, with explicit water loss (2026-10-07).** Both routes are spec
+v9 `routes` in `data/reference/spec_m6_s5_{omol,polar_s,polar_m,polar_l}.json` (identical
+but for `ml_model`), run and read back with:
+
+```
+python scripts/run_spec.py data/reference/spec_m6_s5_omol.json --db data/test/m6_s5_ground_up/registry.db --store data/test/m6_s5_ground_up/store
+python scripts/route_report.py --db data/test/m6_s5_ground_up/registry.db
+```
+
+Nothing is built in memory between steps. The reagents are placed and stored by the `place`
+and `ligand` tasks' own code — R1 [Cu(κO-HCOO)(H₂O)₃]⁺, R2 [Cu(H₂O)₄]²⁺, R3
+[Cu(κO-HCOO)₂(H₂O)₂], square-planar Cu(II), triplet, formate bound **syn** (`lone_pair` 1) and
+**upright** (azimuth +86.4°, the grid's closest to 90°) — and every step `load`s its operands
+back from the registry. Every vertex a formate takes is first freed by `release`-ing the water
+on it, and the water is stored on the edge as `leaving`:
+
+| step | edge (balanced, checked) |
 |---|---|
-| `Cu₂(µ-HCOO) + HCOO` | closes at **2.673 Å**, 0.05 Å from literature |
-| `Cu(HCOO)₂ + Cu` | bottoms out at **1.464 Å** — refused |
+| 1 | R1 + R2 → [Cu₂(µ-HCOO)(H₂O)₆]³⁺ + H₂O |
+| 2 | proto-dimer + HCOO⁻ → [Cu₂(µ-HCOO)₂(H₂O)₄]²⁺ + 2 H₂O (the water on Cu1 cis to the bridge, and the one on Cu2 eclipsing it) |
+| B | R3 + R2 → [Cu₂(HCOO)₂(H₂O)₄]²⁺ + 2 H₂O (Cu2's water nearest R3's free O released) |
 
-The second is a genuinely failed route, and the measurement says why: pinning both formates to
-one Cu *before* the second exists forces their free oxygens to agree about a metal they were
-never placed for. Best over a continuous scan of both rolls **and** the out-of-plane swing —
-1.819 Å roll-only, 1.464 Å with the swing, on square-planar and octahedral alike; 3.273 Å
-tetrahedral, which is right, since 109° vertices splay the formates further than a 90° pair.
-Irreducible in a rigid model.
+All three products are QC-clean as built (Cu···Cu 2.673 Å). Each is relaxed (`relax_fmax`
+0.05, `relax_steps` 2000) as built and from `perturb` starts with the incoming piece pulled
+back 1.0 and 1.5 Å. "Reaches" is graph isomorphism of the relaxed contact graph with a built
+species.
 
-*Exit:* the failed route is refused **with its number**, through `BranchTree.refusals`, not
-silently absent.
+| | OMOL-0 | POLAR-S | POLAR-M | POLAR-L |
+|---|---|---|---|---|
+| proto-dimer holds; Cu···Cu | yes, 4.24 Å | yes, 5.94 Å | yes, 5.92 Å | yes, 5.92 Å |
+| step 1 from 1.0 Å | closes, +0.01 eV | closes, +0.15 eV | closes, +0.29 eV | closes, +0.27 eV |
+| step 1 from 1.5 Å | fragments; waters leave | closes, +0.14 eV | relax out of GPU memory | closes, +0.27 eV |
+| product holds; Cu···Cu | yes, 4.02 Å | yes, 4.45 Å | yes, 4.02 Å | yes, 4.05 Å |
+| step 2 from 1.0 / 1.5 Å | no closure; +1.11 / +1.11 eV | no closure; +0.94 / +1.01 eV | no closure; +0.78 / +0.81 eV | no closure; +1.05 / +0.92 eV |
+| **route B reaches the product** | **yes**, dangling O → 1.90 Å; ΔE +0.01 eV | **yes**, 1.92 Å; +0.05 eV | **yes**, 1.89 Å; +0.04 eV | **yes**, 1.90 Å; −0.00 eV |
+| water audit | benign, but the 1.5 Å step-1 start loses two waters as it fragments | benign | one water gains an H-bond to a formate O in the step-2 pull-backs | benign |
+
+ΔE for a pulled-back start is against the relaxed built product of its step; for route B,
+against route A's relaxed product.
+
+- **Route B is not refused when it is built from the ground up.** With formate bound syn and
+  upright and the water on Cu2's closure vertex released, R3's second free oxygen starts 2.10 Å
+  from that vertex, and every model closes it onto the same node route A reaches, within
+  0.05 eV — consistent with the construction table above.
+- **Step 1 closes downhill.** Pulled back 1.0 Å, the second Cu returns to the bridge under every
+  model, and from 1.5 Å under POLAR-S and -L. That is what the in-memory test could not show:
+  there, unsaturated fragments only repelled.
+- **Step 2 does not.** From 3.0–3.5 Å the second formate binds one Cu and stops 0.8–1.1 eV
+  above the product, as before; the closure is not barrierless on these surfaces.
+- **The proto-dimer opens in the gas phase.** As a 3+ ion it holds its bridge, but Cu···Cu
+  goes to 4.2 Å (OMOL-0) or 5.9 Å (POLAR); a continuum is still the open question.
+- The earlier in-memory study built its product without QC; checked afterwards, it carried a
+  water H···H contact at 1.15 Å. Route `store` steps now record the clash QC on every geometry.
+
+*Exit:* **withdrawn 2026-10-08, pending a call.** It required `Cu(HCOO)₂ + Cu` to be refused
+with its number; both routes build (above). What replaces it is the user's decision; the
+proposal on record is that both routes reach one node with two provenance edges (gate 1), every
+construction choice (binding lobe, face) is enumerated for both routes rather than pinned, and
+the routes are compared by screening-tier energy with a continuum — not by a geometric refusal.
 
 ### S6 — `qc.check_intercentre` · **S**
 
@@ -530,7 +611,7 @@ motif:
 | 3 | every battery row builds QC-clean, or is refused with a stated number |
 | 4 | each cluster's M···M is within literature range — reported as a measurement, not asserted |
 | 5 | an xTB relax keeps each node intact: re-extract afterwards, same L1 (skipped without tblite, as `scripts/regress_m7.py` does) |
-| 6 | `Cu(HCOO)₂ + Cu` is refused and says 1.46 Å |
+| 6 | ~~`Cu(HCOO)₂ + Cu` is refused and says 1.46 Å~~ — withdrawn 2026-10-08, pending a call: both routes build (§S5) |
 
 Gate 1 is the strong one. It is M5's "one node, two routes" generalised to polynuclear, and it
 is M8's Path A vs Path B made buildable at M6.
@@ -539,6 +620,14 @@ is M8's Path A vs Path B made buildable at M6.
 
 `assembly.persist.store_construction` for polynuclear nodes, proved **after** a round trip
 through SQLite rather than in memory, the way `tests/test_m5_exit_gates.py` does.
+
+**The read half is built:** `persist.load_block` turns a stored polynuclear node back into a
+joinable block, and joining onto the loaded proto-dimer reproduces the in-memory product
+exactly (`tests/test_load_block.py`); the S5 route specs join only on loaded blocks. Each
+geometry stored with its state now carries its own frames (`site_state.frame_json`), so two
+poses of one node both load. **Still open:** a *relaxed* geometry has no state rows, so its
+frames must be re-derived from its coordinates — re-perception, which for a polynuclear node
+needs S7's multi-metal `to_rdkit`; `load_block` refuses it with `NotBuiltYet` until then.
 
 ---
 

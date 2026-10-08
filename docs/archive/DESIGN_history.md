@@ -10,6 +10,29 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
+- *(2026-10-08)* **M6/S5 — the `Cu(HCOO)₂ + Cu` refusal withdrawn.** WORKPLAN_M6 §S5 recorded
+  (2026-09-16): "`Cu(HCOO)₂ + Cu` bottoms out at 1.464 Å — refused … pinning both formates to
+  one Cu before the second exists forces their free oxygens to agree about a metal they were
+  never placed for. Best over a continuous scan of both rolls and the out-of-plane swing —
+  1.819 Å roll-only, 1.464 Å with the swing, on square-planar and octahedral alike; 3.273 Å
+  tetrahedral … Irreducible in a rigid model." M6 exit gate 6 required that refusal.
+
+  * **Reconstructed on today's placer** (2 wells × 24 azimuths × 7 tilts per formate, both
+    free-O lobes, cis vertices): with both formates bound through lone pair 0 — the *anti* mode
+    (Cu–O–C–O ≈ 135°), the only binding before S1 — the two implied second-Cu sites agree at best
+    to **1.462 Å**, and only with Cu···Cu 5.4 Å; restricted to compact dimers (< 3.5 Å) they
+    never come within 6.76 Å. Bound through lone pair 1 — *syn* — they agree to **0.07 Å** at
+    3.16 Å. Route A had been measured from frames that knew both lobes, so the two routes were
+    measured under different bindings.
+  * **A second, independent cause** made the 2026-10-07 in-memory re-test agree with the old
+    refusal: `join(torsion_well=0)` put the two syn formates on opposite faces, because the
+    vacancy reference direction flips sign between cis vertices ([B27](../BUGS.md#b27)); their
+    implied sites were 5.33 Å apart.
+  * **Built from the ground up** (placer-made reagents, both formates syn and on one face, water
+    released before each formate), the route builds QC-clean and relaxes onto Route A's product
+    under OMOL-0 and POLAR-1-S/M/L, within 0.05 eV. The refusal measured a construction choice,
+    not the chemistry. The replacement gate is open.
+
 - *(2026-09-28)* **D29 — C15 resolved: a `place` edge cites nothing.** All three options on
   record were prototyped in a throwaway worktree (never committed) and run against the suite.
 

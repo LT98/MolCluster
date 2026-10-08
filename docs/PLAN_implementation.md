@@ -527,8 +527,10 @@ narrowing one against the CSD is a prerequisite for any quantitative claim it ba
 incoming provenance edges. That is M5's "one node, two routes" generalised to polynuclear, and
 it is M8's Path A vs Path B made buildable here. Plus: the battery builds QC-clean or is refused
 with a stated number; each cluster's M···M is within literature range; a relaxation does not
-tear a node apart — judged by E1's `connectivity_changed`, not by eye; and the failed route `Cu(HCOO)₂ + Cu` is **refused with its measurement**
-(1.46 Å), not silently absent.
+tear a node apart — judged by E1's `connectivity_changed`, not by eye. *Withdrawn 2026-10-08,
+pending a call:* "the failed route `Cu(HCOO)₂ + Cu` is refused with its measurement (1.46 Å)".
+Built from the ground up both routes reach the product; the 1.46 Å was the *anti* binding the
+code was limited to before S1 (WORKPLAN_M6 §S5, [B27](BUGS.md#b27)).
 
 **Plan B, declared in advance (see §4):** `geometry/templates.py` — place from a stored
 reference node geometry and graft ligands onto it (`ebu_tools_v2.PaddlewheelBuilder` is the
