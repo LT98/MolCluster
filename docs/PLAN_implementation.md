@@ -527,10 +527,14 @@ narrowing one against the CSD is a prerequisite for any quantitative claim it ba
 incoming provenance edges. That is M5's "one node, two routes" generalised to polynuclear, and
 it is M8's Path A vs Path B made buildable here. Plus: the battery builds QC-clean or is refused
 with a stated number; each cluster's M···M is within literature range; a relaxation does not
-tear a node apart — judged by E1's `connectivity_changed`, not by eye. *Withdrawn 2026-10-08,
-pending a call:* "the failed route `Cu(HCOO)₂ + Cu` is refused with its measurement (1.46 Å)".
-Built from the ground up both routes reach the product; the 1.46 Å was the *anti* binding the
-code was limited to before S1 (WORKPLAN_M6 §S5, [B27](BUGS.md#b27)).
+tear a node apart — judged by E1's `connectivity_changed`, not by eye; and S5's two routes to
+the bis-formate dimer (sequential, two-on-one) are enumerated over every construction choice,
+each reaching the node in at least one QC-clean variant, with every other variant reported with
+its number. *Called 2026-10-08,* replacing "the failed route `Cu(HCOO)₂ + Cu` is refused with
+its measurement (1.46 Å)": built from the ground up both routes reach the product, and the
+1.46 Å was the *anti* binding the code was limited to before S1 (WORKPLAN_M6 §S5,
+[B27](BUGS.md#b27)). M6 says which routes *can* reach a node; which is favoured is an energy
+question for M7/M8.
 
 **Plan B, declared in advance (see §4):** `geometry/templates.py` — place from a stored
 reference node geometry and graft ligands onto it (`ebu_tools_v2.PaddlewheelBuilder` is the
@@ -633,7 +637,9 @@ is never a barrier, and is shown for reference only.
 **Exit gate — the first real result, in two tiers** (ground rule 11):
 - *Screening (needs M6 + M7):* the Cu paddlewheel **Path A (nucleus-first) vs. Path B
   (sequential)** ordering, and whether it is stable under the cheap proxies — this is what
-  decides C6.
+  decides C6. M6/S5's sequential vs. two-on-one routes to the bis-formate dimer are ranked the
+  same way — every construction variant that builds, relaxed in a continuum, E1-clean — since
+  M6 only says that both reach the node (WORKPLAN_M6 §S5).
 - *Reported (needs M7R):* the same comparison at the refine recipe, with per-step numbers,
   intermediates as first-class registry nodes, calibrated error bars, and a written report in
   `reports/`. Secondary: sink detection reproduces the EDTA sequestration finding from
@@ -703,7 +709,7 @@ resolved only in your head is how the two documents drift apart.
 | After | You can… |
 |---|---|
 | *(today)* | store, dedupe, query and **see** every structure built; ask a stored structure what sites it has, which are open, and which are worth spending QM on; build a mononuclear structure from stored blocks and rebuild it exactly from its provenance (M5) |
-| M6 | build real SBUs — paddlewheels, µ₃-oxo trimers, Zn₄O — not just mononuclear nodes, and be told which formation route cannot reach one |
+| M6 | build real SBUs — paddlewheels, µ₃-oxo trimers, Zn₄O — not just mononuclear nodes, and see, for every construction choice of a formation route, whether it reaches the node or is refused with its number |
 | M7 | ask what a whole **route** costs at the screening tier, in a stated medium and with an error bar — with the decision points for spending QM selectively in place, and every one of them still answering "compute it" |
 | M7R | report a route's energy as a result: DFT//MACE + SMD + qRRHO, calibrated against pKa and log β, with the calibration scatter as its error bar |
 | M8 | compare two synthesis routes to the same product and say which is more viable, and why — and at a stated pH and concentration, what fraction of the metal is in each form |
