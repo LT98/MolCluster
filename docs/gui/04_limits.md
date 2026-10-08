@@ -34,6 +34,15 @@ builder page:
   open. That is the S4 capability reaching the GUI **as behaviour rather than as a
   control**, and it is why co-ligand ladder runs stopped producing `chelate_cannot_span`.
 
+## Construction routes are spec-file only
+
+A v9 spec can carry `routes` — explicit join-by-join constructions, which is how a
+polynuclear node is built from a spec (`assembly/route_steps.py`; the M6/S5 specs in
+`data/reference/spec_m6_s5_*.json` are the worked example). The builder page has no
+control for them and posts `spec_version: 1`, so a spec it submits never has routes, and a
+route spec loaded into the page and resubmitted from it **loses its routes**. Run a route
+spec with `scripts/run_spec.py`. The runs page lists a route task by its name.
+
 ## A spec you submit is never cut; a large one is flagged
 
 A spec you submit — from the builder page or `scripts/run_spec.py` — is planned **in full**,

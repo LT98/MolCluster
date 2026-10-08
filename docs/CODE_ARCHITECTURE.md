@@ -32,7 +32,7 @@ charge, spin — travels with it in a `methods` row.
 | Path | Purpose | State |
 |---|---|---|
 | `_types.py` | `Fidelity` ladder, `MethodSpec`, exception hierarchy | ✅ |
-| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v8). Counts accept ranges (`"1~3"`), expanded at construction | ✅ |
+| `spec.py` | `BuildSpec` — a run is DATA. Versioned + migrated (v9). Counts accept ranges (`"1~3"`), expanded at construction. `routes` (`RouteSpec`) are explicit label-addressed construction routes, one `route` task per variant of the route's `vary` (construction choices enumerated, not pinned); `relax_fmax` / `relax_steps` set relax convergence (None = relax defaults) | ✅ |
 | `runner.py` | `enumerate_plan` enumerates, `plan` writes tasks, `work` executes them. The two never assume one process | ✅ |
 | ↳ `execute_run` | the only place the worker pool is built — CLI and page share it. `plan_workers` divides the declared workers between the build queue and the relax queue (spawn, never fork: CUDA) | ✅ |
 | ↳ `estimate` | the same enumeration with no registry — what the builder page shows before you submit | ✅ |
@@ -59,7 +59,7 @@ charge, spin — travels with it in a `methods` row.
 | `descriptors/ease.py` | Activation-ease floor (**D18**). Components ▸ scalar | ✅ |
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
-| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot. Takes `reserve=` (which vertices stay open), because a caller that can only say *how many* gets its two vacancies trans | ✅ |
+| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot. Takes `reserve=` (which vertices stay open), because a caller that can only say *how many* gets its two vacancies trans. `LigandPlacement.lone_pair` picks which lobe of a monodentate sp2 donor binds (a carboxylate syn or anti to its free O); `torsion_well` / `azimuth_step` / `oop_step` pin the pose instead of searching it — all four reachable from a `place` payload component | ✅ |
 | ↳ `cis_vertices` | the mutually-cis vertex set to reserve, **measured** off the polyhedron rather than read from an index convention. `runner._execute_place` reserves one whenever a rung leaves ≥2 vertices open, which is what makes the pathway ladder's co-ligand series connect | ✅ |
 | ↳ `bridging_metal_positions` | mechanism B: a bridging ATOM is a centre whose vertices are metal positions. Reads the bonding, not a frame — a lone-pair lobe is the wrong bisector for a bridge | ✅ |
 | ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
@@ -81,7 +81,9 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `bridge_compatible` / `join_bridge` | one ligand across vertices of **different** metals in one move. Verdict is a **distance** (no common origin to subtend an angle at) and is necessary-not-sufficient — where the mismatch lands depends on the vertex axes, so `qc` is the arbiter | ✅ |
 | `assembly/choice.py` | `ChoiceVector`, canonical form, version-prefixed digest, JSON round trip | ✅ |
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
-| `assembly/persist.py` | Stores an assembled block: L2 from its geometry, sites by inheritance, provenance. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
+| `assembly/route_steps.py` | Executes a `RouteSpec`. Ground-up steps: `sphere` / `free_ligand` build and store through the `place` / `ligand` tasks' own paths, `load` reads a stored structure back, so a join acts only on registry entries. Then `join` (`lone_pair` and `torsion` may be stated geometrically — `{toward: label}`, `{bring, toward}` — because a well index is not a face, B27), `release`, `reserve`, `bridge`, `store` (`from` = reagents, `leaving` = released species), `perturb`; in-memory `metal`, `ligand`, `cap` remain. Labels are carried through every join's and release's atom maps; every stored geometry carries its clash QC; a `perturb` start is a RAW geometry with its displacement in the choice vector, never a construct. `scripts/route_report.py` reads the results back | ✅ |
+| `assembly/release.py` | `release` — the water-loss step, `join` backwards: one bound ligand fragment leaves, its vertex opens pointing where its donor was, the fragment comes back as its own block. A chelate or bridge is refused (`ReleaseRefused`). Stored as an edge with the ligand `leaving`, so complex → complex′ + L balances | ✅ |
+| `assembly/persist.py` | `store_block` stores an assembled block: L2 from its geometry, sites by inheritance, provenance (`reagent_ids`, `leaving_ids`). `load_block` reads one back as a joinable block — graph, coordinates, catalog sites, recomputed state checked against the stored rows; frames from the geometry's own state rows (`site_state.frame_json`), else the catalog's if this is the geometry they describe or a rigid copy; a relaxed geometry (no state rows) is `NotBuiltYet` until S7. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
 | **registry/** | | |
 | `registry/api.py` | **The only write surface** (ground rule 1) | ✅ |
 | `registry/db.py` | Connection + additive migration (schema file is not a migration) | ✅ |

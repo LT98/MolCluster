@@ -374,6 +374,14 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
         skip("no metal centres in the spec",
              "molecular-only construction: activation states and sites are produced; "
              "joining molecule to molecule is M5")
+    # One task per explicit route (`spec.routes`): the route is executed whole, in order,
+    # because its later steps address atoms its earlier ones placed.
+    for ix, route in enumerate(spec.routes):
+        for values in route.variants():
+            payload = {"route": ix, "name": route.resolved(values).name}
+            if values:
+                payload["vary"] = values
+            tasks.append(PlannedTask("route", payload, priority=5))
     return PlannedRun(tuple(tasks), tuple(skipped.values()), len(kinds))
 
 
@@ -623,7 +631,8 @@ def relax_method_spec(reg: Registry, structure_id: int, target: Fidelity,
 
 def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity,
                         structure_id: int, solvent: str | None = None,
-                        ml_model: str | None = None) -> int | None:
+                        ml_model: str | None = None, *,
+                        fmax: float | None = None) -> int | None:
     """The geometry this exact relaxation already produced, or None.
 
     Keyed on (source geometry, method row).  Deliberately NOT on the structure alone:
@@ -654,11 +663,25 @@ def existing_relaxation(reg: Registry, source_geometry_id: int, target: Fidelity
     # OMOL-0 relaxation of the same construct are both fidelity=ML and are different
     # method rows, so this correctly reports "not done yet" for the second — a re-run
     # that switches model recomputes instead of handing back the other model's answer.
-    row = reg.conn.execute(
+    rows = reg.conn.execute(
         "SELECT id FROM geometries WHERE relaxed_from=? AND method_id=? AND "
-        "structure_id=? AND fidelity=? AND energy IS NOT NULL LIMIT 1",
-        (source_geometry_id, mid, structure_id, int(target))).fetchone()
-    return None if row is None else int(row["id"])
+        "structure_id=? AND fidelity=? AND energy IS NOT NULL ORDER BY id",
+        (source_geometry_id, mid, structure_id, int(target))).fetchall()
+    for row in rows:
+        # A convergence threshold is not part of the method row, so a request for a
+        # tighter one is met only by a relaxation whose recorded final force reaches it.
+        if fmax is None or _relaxed_to(reg, int(row["id"])) <= fmax:
+            return int(row["id"])
+    return None
+
+
+def _relaxed_to(reg: Registry, geometry_id: int) -> float:
+    """Final max force the relax task recorded for this geometry; inf if none did."""
+    row = reg.conn.execute(
+        "SELECT json_extract(detail_json, '$.relax.fmax') AS f FROM tasks "
+        "WHERE kind='relax' AND geometry_id=? AND status='done' ORDER BY id LIMIT 1",
+        (geometry_id,)).fetchone()
+    return float("inf") if row is None or row["f"] is None else float(row["f"])
 
 
 def read_xyz(text: str) -> tuple[list[str], list[list[float]]]:
@@ -717,7 +740,7 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     # existed; None then resolves to the declared default, as it always did.
     ml_model = payload.get("ml_model", spec.ml_model)
     already = existing_relaxation(reg, source_gid, target, structure_id,
-                                  payload.get("solvent"), ml_model)
+                                  payload.get("solvent"), ml_model, fmax=payload.get("fmax"))
     if already is not None:
         return Outcome(structure_id, already, None, False,
                        {"relax": {"skipped": "already relaxed at this level of theory",
@@ -725,9 +748,11 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
                                   "target": target.name}})
 
     symbols, coords = read_xyz(geometry_xyz(reg, source_gid))
+    conv = {k: v for k, v in (("fmax", payload.get("fmax")),
+                              ("max_steps", payload.get("steps"))) if v is not None}
     result = relax_geometry(coords, symbols, charge=int(graph.charge),
                             multiplicity=int(graph.multiplicity), target=target,
-                            solvent=payload.get("solvent"), ml_model=ml_model)
+                            solvent=payload.get("solvent"), ml_model=ml_model, **conv)
 
     # A relaxation MOVES ATOMS, so whatever QC said about the construct is a statement
     # about coordinates that no longer exist.  Storing the result unchecked is how a
@@ -818,7 +843,9 @@ def _record_sites(reg: Registry, structure_id: int, geometry_id: int,
     perceived, sites, states = perceived_sites
     drift = catalog_drift(reg, structure_id, perceived)
     put_sites(reg, structure_id, sites)
-    n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity)
+    n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity,
+                              frames={(s.atom_idx, getattr(s, "slot", 0)): s.frame
+                                      for s in sites if s.frame})
     report: dict[str, Any] = {
         "n_sites": len(sites),
         "n_vacancies": sum(1 for s in sites if s.is_vacancy),
@@ -899,7 +926,11 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
         ligands += [LigandPlacement(
             mol=cmol, donor_idxs=cdonors,
             donor_types=tuple(by_idx[i].donor_type for i in cdonors),
-            mode=BindingMode(comp["mode"]), name=cname)
+            mode=BindingMode(comp["mode"]), name=cname,
+            lone_pair=int(comp.get("lone_pair", 0)),
+            # The placer's own pose coordinates (its choice vector); absent = search.
+            torsion_well=int(comp.get("torsion_well", 0)),
+            azimuth_step=comp.get("azimuth_step"), oop_step=comp.get("oop_step"))
             for _ in range(int(comp["count"]))]
     name = "+".join(parts)
     molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
@@ -927,6 +958,14 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
     # the one trans pair left.
     reserve = (reserve_for(payload["geometry"], int(cn_asked), n_vacant, ligands)
                if n_vacant >= 2 else None)
+    if payload.get("reserve") is not None:
+        # Named by the caller (a route `sphere` step's `empty`): which vertices stay open,
+        # in the placer's own vertex indices — the S4 `reserve` coordinate, stated.
+        reserve = tuple(int(v) for v in payload["reserve"])
+        if len(reserve) != n_vacant:
+            raise _Rejected(f"{len(reserve)} vertices named empty, but this sphere leaves "
+                            f"{n_vacant} empty", code="reserve_count_mismatch",
+                            detail={"reserve": list(reserve), "n_vacant": n_vacant})
     try:
         # `cn` is passed explicitly so an unsaturated centre keeps the polyhedron it
         # was asked for and reports its empty vertices, instead of being silently
@@ -1317,6 +1356,172 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                    stored.geometry_created, detail)
 
 
+def _store_ligand(reg: Registry, spec: BuildSpec, payload: dict[str, Any]) -> Outcome:
+    """A free ligand (one protomer), embedded, perceived and stored — the `ligand` task."""
+    mol, molecule, embed_report = _protomer_mol(spec, payload)
+    detail: dict[str, Any] = {"embed": embed_report}
+    name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
+    g = from_rdkit(mol, charge=payload["charge"], multiplicity=molecule.multiplicity,
+                   name=name)
+    perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
+    put = put_structure(reg, g, tags=[molecule.name, "ligand"])
+    geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
+    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
+    for frag in decompose(g):
+        alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
+    return Outcome(put.id, geom.id, put.created, geom.created, detail)
+
+
+def _store_place(reg: Registry, spec: BuildSpec, payload: dict[str, Any]) -> Outcome:
+    """One coordination sphere placed and stored, empty vertices and all — the `place` task."""
+    built = _build_sphere(spec, payload)
+    detail = built.detail
+    # The placer's empty vertices travel with the complex: metal at index 0, which is
+    # how `to_rdkit` lays the centre out.  Perceived before the first write.
+    perceived = _perceive_sites(built.mol, built.graph, Fidelity.RAW,
+                                vacancies=built.result.vacancies,
+                                metal_idx=built.result.metal_idx)
+    put = put_structure(reg, built.graph,
+                        tags=[*built.molecule_names, "complex", built.metal.symbol],
+                        provenance=Provenance(kind="assembly", depth=1,
+                                              note=payload["geometry"]))
+    geom = put_geometry(reg, put.id, built.result.to_xyz(built.name),
+                        fidelity=Fidelity.RAW, method=BUILD,
+                        choice_vector=built.result.choice_vector,
+                        seed=spec.seed, qc=built.result.report.to_dict())
+    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.RAW)
+    detail["qc"] = built.result.report.to_dict()
+    return Outcome(put.id, geom.id, put.created, geom.created, detail)
+
+
+def _route_sphere(reg: Registry, spec: BuildSpec, s: dict[str, Any]) -> Outcome:
+    """A route's `sphere` step as a `place` payload, stored by the `place` task's own path.
+
+    The sphere's metal and co-ligand are the step's, so the spec carries no `metals` (which
+    would also plan the enumerating `place` tasks); everything else is `_build_sphere`.
+    """
+    from mofsbu.spec import MetalSpec
+
+    m = s["metal"]
+    metal = MetalSpec(symbol=m["symbol"], oxidation_state=int(m.get("oxidation_state", 2)),
+                      spin_class=m.get("spin_class", "hs"))
+    local = replace(spec, metals=(metal,), co_ligand=s.get("co_ligand", spec.co_ligand))
+    names = [mol.name for mol in spec.molecules]
+    components = []
+    for lig in s.get("ligands", ()):
+        ix = names.index(lig["molecule"])
+        mol, _, _ = _protomer_mol(local, {"molecule": ix, "selection": []})
+        donors = sorted(perceive(mol), key=lambda d: d.atom_idx)
+        k = int(lig.get("donor", 0))
+        if k >= len(donors):
+            raise _Rejected(f"{lig['molecule']} has {len(donors)} donor(s); the step asks "
+                            f"for donor {k}", code="route_donor_missing")
+        components.append({
+            "molecule": ix, "selection": [], "label": "",
+            "charge": sum(a.GetFormalCharge() for a in mol.GetAtoms()),
+            "donors": [donors[k].atom_idx], "mode": BindingMode.MONODENTATE.value,
+            "denticity": 1, "count": int(lig.get("count", 1)),
+            **{k: int(lig[k]) for k in ("lone_pair", "torsion_well", "azimuth_step",
+                                        "oop_step") if lig.get(k) is not None}})
+    n_co = int(s.get("co_ligands", 0))
+    used = sum(c["count"] for c in components) + n_co
+    payload = {"metal": 0, "components": components, "cn": int(s["cn"]),
+               "geometry": s["geometry"], "n_co": n_co, "n_vacant": int(s["cn"]) - used,
+               **({"reserve": [int(v) for v in s["empty"]]} if "empty" in s else {})}
+    out = _store_place(reg, local, payload)
+    out.detail["payload"] = payload
+    return out
+
+
+def _route_free_ligand(reg: Registry, spec: BuildSpec, s: dict[str, Any]) -> Outcome:
+    """A route's `free_ligand` step: the molecule as written, stored by the `ligand` path."""
+    names = [mol.name for mol in spec.molecules]
+    ix = names.index(s["molecule"])
+    mol, _, _ = _protomer_mol(spec, {"molecule": ix, "selection": []})
+    return _store_ligand(reg, spec, {"molecule": ix, "selection": [], "label": "",
+                                     "charge": sum(a.GetFormalCharge()
+                                                   for a in mol.GetAtoms())})
+
+
+def _execute_route(reg: Registry, task, spec: BuildSpec) -> Outcome:
+    """Build one `spec.routes` entry step by step and store what it declares.
+
+    Each `store` step persists a block (`assembly.persist.store_block`, choice vector =
+    the route and every join's own vector); each `perturb` step adds a start geometry to a
+    stored structure.  Under a relaxing run mode every stored geometry gets its own relax
+    task.  The detail records, per species, the xyz row of every label, so a report can
+    read the right atoms back from any geometry of that structure this route wrote.
+    """
+    from mofsbu.assembly.persist import load_block, store_block, to_xyz as block_xyz
+    from mofsbu.assembly.route_steps import (
+        StoredSpecies, execute_route, labels_for, perturbed_coords)
+
+    def ws_rows(block, labels: dict[str, list[int]]) -> dict[str, list[int]]:
+        order = {n: k for k, n in enumerate(block.graph.nodes())}
+        return {lab: [order[a] for a in atoms] for lab, atoms in labels.items()}
+
+    route = spec.routes[int(task.payload["route"])].resolved(task.payload.get("vary") or {})
+    queued: list[int] = []
+
+    def stored_cb(ws, step: int, s: dict[str, Any], bid: int | None) -> StoredSpecies:
+        cv_base = {"route": route.name, "step": step, "joins": list(ws.cv)}
+        if s["op"] in ("sphere", "free_ligand"):
+            out = (_route_sphere if s["op"] == "sphere" else _route_free_ligand)(reg, spec, s)
+            # Read straight back, so the labels are the ones a later `load` will see.
+            block = load_block(reg, out.structure_id, out.geometry_id)
+            sp = StoredSpecies(s["as"], out.structure_id, out.geometry_id, "built",
+                               ws_rows(block, labels_for(reg, out.structure_id, block,
+                                                         s["as"])),
+                               watch=dict(s.get("watch", {})),
+                               created=bool(out.structure_created))
+        elif s["op"] == "store":
+            block = ws.blocks[bid]
+            reagents = [ws.stored[n].structure_id if n in ws.stored else ws.loaded[n]
+                        for n in s.get("from", ())]
+            leaving = [ws.stored[n].structure_id for n in s.get("leaving", ())]
+            # QC travels with the geometry: a construct stored without its report reads
+            # exactly like one that passed.
+            symbols = [block.graph.label(n).element for n in block.graph.nodes()]
+            report = _clash_qc(block.graph, symbols, block.geometry).to_dict()
+            st = store_block(reg, block, choice_vector=cv_base, reagent_ids=reagents,
+                             leaving_ids=leaving, qc=report,
+                             depth=len(ws.cv), note=f"{route.name}/{s['as']}",
+                             tags=["route", route.name, s["as"], *s.get("tags", ())],
+                             seed=spec.seed)
+            sp = StoredSpecies(s["as"], st.structure_id, st.geometry_id, "built",
+                               ws.rows(bid), watch=dict(s.get("watch", {})),
+                               reserved={k: [list(x) for x in v]
+                                         for k, v in ws.reserved.items()},
+                               created=bool(st.structure_created))
+        else:
+            block, rows = ws.blocks_of_stored[s["of"]]
+            base = ws.stored[s["of"]]
+            xyz = perturbed_coords(block, rows, s, route.name, step)
+            pert = {k: s[k] for k in ("move", "from", "to", "by")}
+            symbols = [block.graph.label(n).element for n in block.graph.nodes()]
+            geom = put_geometry(reg, base.structure_id,
+                                block_xyz(block.graph, xyz, f"{route.name}/{s['as']}"),
+                                fidelity=Fidelity.RAW, method=BUILD,
+                                choice_vector={**cv_base, "perturb": pert},
+                                seed=spec.seed,
+                                qc=_clash_qc(block.graph, symbols, xyz).to_dict())
+            sp = StoredSpecies(s["as"], base.structure_id, geom.id, "perturbed", rows,
+                               watch=base.watch, reserved=base.reserved,
+                               perturbation={"of": s["of"], **pert})
+        if spec.run_mode != "construct":
+            tid = _queue_relax_geometry(reg, spec, task.run_id, sp.structure_id,
+                                        sp.geometry_id, {})
+            if tid is not None:
+                queued.append(tid)
+        return sp
+
+    result = execute_route(spec, route, stored_cb, reg)
+    last = result.stored[-1]
+    return Outcome(last.structure_id, last.geometry_id, None, None,
+                   {"route": route.name, "species": [sp.to_dict() for sp in result.stored],
+                    "relax_tasks": queued})
+
+
 def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """Run one task.  Returns what it produced AND what it took to produce it."""
     payload = task.payload
@@ -1326,18 +1531,7 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         return _execute_relax(reg, task, spec)
 
     if task.kind == "ligand":
-        mol, molecule, embed_report = _protomer_mol(spec, payload)
-        detail: dict[str, Any] = {"embed": embed_report}
-        name = f"{molecule.name}{payload['label'] if payload['selection'] else ''}"
-        g = from_rdkit(mol, charge=payload["charge"], multiplicity=molecule.multiplicity,
-                       name=name)
-        perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
-        put = put_structure(reg, g, tags=[molecule.name, "ligand"])
-        geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
-        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
-        for frag in decompose(g):
-            alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
-        return Outcome(put.id, geom.id, put.created, geom.created, detail)
+        return _store_ligand(reg, spec, payload)
 
     if task.kind == "co_ligand":
         # The free co-ligand, stored and relaxed like a ligand: it is the reagent a
@@ -1353,27 +1547,13 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":
-        built = _build_sphere(spec, payload)
-        detail = built.detail
-        # The placer's empty vertices travel with the complex: metal at index 0, which is
-        # how `to_rdkit` lays the centre out.  Perceived before the first write.
-        perceived = _perceive_sites(built.mol, built.graph, Fidelity.RAW,
-                                    vacancies=built.result.vacancies,
-                                    metal_idx=built.result.metal_idx)
-        put = put_structure(reg, built.graph,
-                            tags=[*built.molecule_names, "complex", built.metal.symbol],
-                            provenance=Provenance(kind="assembly", depth=1,
-                                                  note=payload["geometry"]))
-        geom = put_geometry(reg, put.id, built.result.to_xyz(built.name),
-                            fidelity=Fidelity.RAW, method=BUILD,
-                            choice_vector=built.result.choice_vector,
-                            seed=spec.seed, qc=built.result.report.to_dict())
-        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.RAW)
-        detail["qc"] = built.result.report.to_dict()
-        return Outcome(put.id, geom.id, put.created, geom.created, detail)
+        return _store_place(reg, spec, payload)
 
     if task.kind == "grow":
         return _execute_grow(reg, task, spec)
+
+    if task.kind == "route":
+        return _execute_route(reg, task, spec)
 
     raise MofsbuError(f"no executor for task kind {task.kind!r}")
 
@@ -1406,28 +1586,41 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     unrelaxed free ligand could never appear in the same equation — which would leave the
     reference scheme with nothing to say.
     """
-    from mofsbu.energy.relax import MODE_FIDELITY
-
-    if spec.run_mode == "construct" or task.kind == "relax":
-        return None
+    if spec.run_mode == "construct" or task.kind in ("relax", "route"):
+        return None                       # a route queues one relax per species itself
     if out.structure_id is None or out.geometry_id is None:
         return None
+    return _queue_relax_geometry(reg, spec, task.run_id, out.structure_id,
+                                 out.geometry_id, out.detail)
+
+
+def _queue_relax_geometry(reg: Registry, spec: BuildSpec, run_id: int, structure_id: int,
+                          geometry_id: int, detail: dict[str, Any]) -> int | None:
+    """The relax task for one stored geometry, unless this exact relaxation exists."""
+    from mofsbu.energy.relax import MODE_FIDELITY
+
+    if spec.run_mode == "construct":
+        return None                       # MODE_FIDELITY maps it to RAW, not to None
     target = MODE_FIDELITY.get(spec.run_mode)
     if target is None:
         return None
-    reused = existing_relaxation(reg, out.geometry_id, target, out.structure_id,
-                                 None, spec.ml_model)
+    reused = existing_relaxation(reg, geometry_id, target, structure_id,
+                                 None, spec.ml_model, fmax=spec.relax_fmax)
     if reused is not None:
         # Recorded on the build task, so a run can say how much it did not recompute.
-        out.detail["relax_reused"] = reused
+        detail["relax_reused"] = reused
         # Re-running an unchanged spec rebuilds the same constructs, recognises them by
         # identity (D2), and hands back the geometry ids it already had.  Without this,
         # every one of them was queued for relaxation again -- the same starting
         # geometry, the same level of theory, the same answer, at full price.
         return None
-    return add_task(reg, task.run_id, "relax", {
-        "structure_id": out.structure_id, "geometry_id": out.geometry_id,
+    return add_task(reg, run_id, "relax", {
+        "structure_id": structure_id, "geometry_id": geometry_id,
         "target": int(target), "solvent": None,
+        # Convergence travels in the payload like the model, and only when the spec sets
+        # it, so a pre-v9 spec queues exactly the payload it always did.
+        **{k: v for k, v in (("fmax", spec.relax_fmax), ("steps", spec.relax_steps))
+           if v is not None},
         # Resolved at QUEUE time and carried in the payload, so the theory is fixed by
         # the run rather than by whichever machine happens to claim the task.
         "ml_model": resolve_ml_model(spec) if target is Fidelity.ML else None,
@@ -1438,7 +1631,7 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
 #: in `BUILD_KINDS` is CPU work — embed, perceive, place, hash — and scales with cores.
 #: `relax` is the optimiser, which on a declared accelerator is one device's worth of work
 #: however many processes ask for it.
-BUILD_KINDS = ("ligand", "co_ligand", "place", "grow")
+BUILD_KINDS = ("ligand", "co_ligand", "place", "grow", "route")
 RELAX_KINDS = ("relax",)
 
 

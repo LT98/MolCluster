@@ -87,6 +87,25 @@ def test_a_stale_best_geometry_pointer_is_caught(reg):
     assert "best_geometry" in checks(verify(reg))
 
 
+def test_two_models_on_one_structure_are_not_ranked_by_energy(reg):
+    """The pointer never compares energy across method rows, and verify must agree.
+
+    Two charge-aware ML models' absolute energies are on different scales, so the newer
+    model's lower number says nothing about its geometry; the older method row wins.
+    """
+    a = MethodSpec(code="mace", code_version="1", method="model-A")
+    b = MethodSpec(code="mace", code_version="1", method="model-B")
+    g = fx.water()
+    sid = put_structure(reg, g).id
+    first = put_geometry(reg, sid, xyz_for(g, 0.1), fidelity=Fidelity.ML, method=a,
+                         energy=-10.0, converged=True)
+    put_geometry(reg, sid, xyz_for(g, 0.2), fidelity=Fidelity.ML, method=b,
+                 energy=-500.0, converged=True)
+    assert reg.conn.execute("SELECT best_geometry_id FROM structures WHERE id=?",
+                            (sid,)).fetchone()[0] == first.id
+    assert "best_geometry" not in checks(verify(reg))
+
+
 def test_a_geometry_from_another_molecule_is_caught(reg):
     """put_geometry refuses this, so it can only arrive by writing around the API."""
     reg.conn.execute("UPDATE geometries SET n_atoms = n_atoms + 1 WHERE id=1")

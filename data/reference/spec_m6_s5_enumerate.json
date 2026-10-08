@@ -1,0 +1,67 @@
+{
+  "spec_version": 9,
+  "note": "M6/S5 fair comparison: both routes built from the ground up with every construction choice that decided the old answer enumerated instead of pinned. Per formate on Cu1: binding lobe ($lp, 0 = anti, 1 = syn), face ($face / $face2, torsion well), pose ($az, 0 = flat, 23 = upright +86.4 deg); for the second Cu: which free-O lobe it binds ($j, toward or away from Cu1). Construct only: the question is which choices build the bis-bridged product QC-clean, and which are refused and why. Report: scripts/route_report.py --built.",
+  "molecules": [
+    {"name": "formate", "smiles": "[O-]C=O"}
+  ],
+  "metals": [],
+  "co_ligand": "O",
+  "run_mode": "construct",
+  "seed": 0,
+  "routes": [
+    {
+      "name": "A",
+      "note": "Route A, sequential: R1 + R2 -> proto-dimer + H2O; proto-dimer + HCOO -> product + 2 H2O.",
+      "vary": {"lp": [0, 1], "face": [0, 1], "az": [0, 23],
+               "j": [{"toward": "r1.m0"}, {"away": "r1.m0"}]},
+      "steps": [
+        {"op": "sphere", "as": "R1", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 3,
+         "ligands": [{"molecule": "formate", "count": 1, "lone_pair": "$lp", "torsion_well": "$face", "azimuth_step": "$az", "oop_step": 0}]},
+        {"op": "sphere", "as": "R2", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 4},
+        {"op": "free_ligand", "as": "formate", "molecule": "formate"},
+        {"op": "load", "as": "r1", "species": "R1"},
+        {"op": "load", "as": "r2", "species": "R2"},
+        {"op": "release", "ligand": "r2.L0", "as": "w1"},
+        {"op": "store", "as": "water_1", "block": "w1"},
+        {"op": "join", "donor": "r1.d0", "onto": "r2.m0", "lone_pair": "$j"},
+        {"op": "store", "as": "proto_dimer", "block": "r1", "from": ["r1", "r2"], "leaving": ["water_1"],
+         "watch": {"cu_cu": ["r1.m0", "r2.m0"]}},
+        {"op": "load", "as": "p", "species": "proto_dimer"},
+        {"op": "load", "as": "f", "species": "formate"},
+        {"op": "release", "ligand": {"on": "p.m0", "nearest": "p.CHO2", "formula": "H2O"}, "as": "w2"},
+        {"op": "release", "ligand": {"on": "p.m1", "nearest": "w2", "formula": "H2O"}, "as": "w3"},
+        {"op": "store", "as": "water_2", "block": "w2"},
+        {"op": "store", "as": "water_3", "block": "w3"},
+        {"op": "reserve", "as": "pair", "for": "f", "metals": ["p.m0", "p.m1"]},
+        {"op": "bridge", "ligand": "f", "vacancies": "pair", "lone_pairs": [0, 0]},
+        {"op": "store", "as": "product", "block": "p", "from": ["p", "f"], "leaving": ["water_2", "water_3"],
+         "watch": {"cu_cu": ["p.m0", "p.m1"], "f_cu_a": ["f.d0", "p.m0"], "f_cu_b": ["f.d1", "p.m1"]}}
+      ]
+    },
+    {
+      "name": "B",
+      "note": "Route B, two-on-one: R3 + R2 -> Cu2(HCOO)2(H2O)4 + 2 H2O; the second formate's free O must reach Cu2's freed vertex.",
+      "vary": {"lp": [0, 1], "face2": [0, 1], "az": [0, 23],
+               "j": [{"toward": "r3.m0"}, {"away": "r3.m0"}]},
+      "steps": [
+        {"op": "sphere", "as": "R3", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 2,
+         "ligands": [{"molecule": "formate", "count": 1, "lone_pair": "$lp", "torsion_well": 0, "azimuth_step": "$az", "oop_step": 0},
+                     {"molecule": "formate", "count": 1, "lone_pair": "$lp", "torsion_well": "$face2", "azimuth_step": "$az", "oop_step": 0}]},
+        {"op": "sphere", "as": "R2", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 4},
+        {"op": "load", "as": "r3", "species": "R3"},
+        {"op": "load", "as": "r2", "species": "R2"},
+        {"op": "release", "ligand": "r2.L0", "as": "w1"},
+        {"op": "store", "as": "water_1", "block": "w1"},
+        {"op": "join", "donor": "r3.d0", "onto": "r2.m0", "lone_pair": "$j"},
+        {"op": "release", "ligand": {"on": "r2.m0", "nearest": "r3.d1", "formula": "H2O"}, "as": "w2"},
+        {"op": "store", "as": "water_2", "block": "w2"},
+        {"op": "store", "as": "two_on_one", "block": "r3", "from": ["r3", "r2"], "leaving": ["water_1", "water_2"],
+         "watch": {"cu_cu": ["r3.m0", "r2.m0"], "dangling_cu2": ["r3.d1", "r2.m0"]}}
+      ]
+    }
+  ]
+}

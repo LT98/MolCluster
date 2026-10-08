@@ -320,3 +320,33 @@ def test_reserving_empty_vertices_leaves_every_chelate_a_cis_pair(n_chelates, n_
     reserve = reserve_for("octahedral", 6, n_empty, chelates)
     result = place_mononuclear("Zn", chelates, geometry="octahedral", cn=6, reserve=reserve)
     assert len(result.vacancies) == n_empty
+
+
+# ── which lone pair of a monodentate sp2 donor binds (M6/S1, now in the placer) ──
+
+def _formate_sphere(**kw):
+    mol = embed_molecule(mol_from_smiles("[O-]C=O"), seed=7)
+    o = min(s.atom_idx for s in perceive(mol))
+    lig = LigandPlacement(mol=mol, donor_idxs=(o,), donor_types=("carboxylate_O",),
+                          name="formate", torsion_well=0, azimuth_step=0, oop_step=0, **kw)
+    return place_mononuclear("Cu", [lig], geometry="square_planar", cn=4), o
+
+
+def test_lobe_zero_is_the_placement_it_always_was():
+    default, _ = _formate_sphere()
+    explicit, _ = _formate_sphere(lone_pair=0)
+    assert np.array_equal(default.coords, explicit.coords)
+    assert "lone_pair" not in default.choice_vector["ligands"][0]
+
+
+def test_the_other_lobe_puts_the_metal_syn_to_the_free_oxygen():
+    """Lobe choice is the syn/anti question a carboxylate bridge depends on."""
+    def cu_to_free_o(result, bound):
+        free = next(i for i, s in enumerate(result.symbols)
+                    if s == "O" and i != result.atom_offsets[0] + bound)
+        return float(np.linalg.norm(result.coords[free] - result.coords[result.metal_idx]))
+
+    anti, bound = _formate_sphere(lone_pair=0)
+    syn, _ = _formate_sphere(lone_pair=1)
+    assert syn.choice_vector["ligands"][0]["lone_pair"] == 1
+    assert cu_to_free_o(syn, bound) < 3.2 < cu_to_free_o(anti, bound)

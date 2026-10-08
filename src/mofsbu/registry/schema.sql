@@ -235,6 +235,9 @@ CREATE TABLE IF NOT EXISTS site_state (
     provisional          INTEGER DEFAULT 0,    -- in-pocket donor: promote to xTB (C5)
     fidelity             INTEGER,
     method_id            INTEGER REFERENCES methods(id),
+    -- This geometry's frame for the site (absolute origin/axis/ref/lobes).  A frame is a
+    -- fact about coordinates, so it lives with the geometry's state, not in the catalog.
+    frame_json           TEXT,
     UNIQUE (site_id, geometry_id)
 );
 

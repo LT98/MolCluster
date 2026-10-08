@@ -49,6 +49,9 @@ class Provenance:
     #: to say TWO waters: the reagent table's key is (reaction, structure, role), so a
     #: repeated bare id collapses to one row and the equation loses an atom count.
     reagent_ids: tuple[int | tuple[int, int], ...] = ()
+    #: What the step released, on the product side of the arrow (`role = 'leaving'`):
+    #: the water a release step displaces.  Same id / `(id, n)` forms as `reagent_ids`.
+    leaving_ids: tuple[int | tuple[int, int], ...] = ()
     note: str = ""
     atom_map: dict[int, int] | None = None
     choice_vector_digest: str | None = None
@@ -291,6 +294,10 @@ def put_reaction(reg: Registry, product_id: int, prov: Provenance) -> int:
             "INSERT INTO reaction_reagents (reaction_id, structure_id, stoich) VALUES (?,?,?)",
             (rid, sid, stoich),
         )
+    for sid, stoich in _reagent_counts(prov.leaving_ids).items():
+        reg.conn.execute(
+            "INSERT INTO reaction_reagents (reaction_id, structure_id, stoich, role) "
+            "VALUES (?,?,?,'leaving')", (rid, sid, stoich))
     return rid
 
 
@@ -766,7 +773,8 @@ def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
 
 
 def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: list,
-                   *, fidelity: Fidelity = Fidelity.RAW) -> int:
+                   *, fidelity: Fidelity = Fidelity.RAW,
+                   frames: dict[tuple[int, int], dict] | None = None) -> int:
     """Write per-geometry site state.  The second tier of D5.
 
     Keyed `(site_id, geometry_id)`: one structure's sites have as many state rows as it
@@ -777,7 +785,12 @@ def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: l
     `structures.n_open_sites` is refreshed from the BEST geometry's states only.  Summing
     across geometries would count one site once per relaxation, and a structure relaxed
     twice would look twice as reactive as the same structure relaxed once.
+
+    `frames`, keyed `(atom_idx, slot)` like the states, are this geometry's own site frames.
+    The catalog keeps one identity's first frames (D5); these are the ones `load_block` needs
+    to join onto THIS geometry.
     """
+    frames = frames or {}
     cmap = canonical_map(reg, structure_id)
     # Keyed by (canonical_idx, slot), not by atom alone: a metal carries one catalog row
     # per vacant vertex, all on its own atom, so an atom-keyed lookup would collapse every
@@ -803,22 +816,25 @@ def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: l
         reg.conn.execute(
             "INSERT INTO site_state (site_id, geometry_id, status, pka, fukui, "
             " buried_vol, marginal_de, ease_scalar, ease_components_json, confidence, "
-            " provisional, fidelity, method_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            " provisional, fidelity, method_id, frame_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(site_id, geometry_id) DO UPDATE SET "
             " status=excluded.status, pka=excluded.pka, fukui=excluded.fukui, "
             " buried_vol=excluded.buried_vol, marginal_de=excluded.marginal_de, "
             " ease_scalar=excluded.ease_scalar, "
             " ease_components_json=excluded.ease_components_json, "
             " confidence=excluded.confidence, provisional=excluded.provisional, "
-            " fidelity=excluded.fidelity, method_id=excluded.method_id",
+            " fidelity=excluded.fidelity, method_id=excluded.method_id, "
+            " frame_json=COALESCE(excluded.frame_json, site_state.frame_json)",
             (site_id, geometry_id, state.status.value, state.pka, state.fukui,
              state.buried_vol, state.marginal_de,
              ease.scalar if ease else None,
              json.dumps(ease.components) if ease else None,
              ease.confidence if ease else None,
              int(ease.provisional) if ease else 0,
-             int(fidelity), method_id(reg, spec)))
+             int(fidelity), method_id(reg, spec),
+             json.dumps(f) if (f := frames.get((state.atom_idx, getattr(state, "slot", 0))))
+             else None))
         n += 1
     _refresh_open_sites(reg, structure_id)
     return n

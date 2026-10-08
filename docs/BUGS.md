@@ -29,6 +29,31 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
+| [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
+
+---
+
+## B27
+
+**`torsion_well` is not comparable across vertices: cis ligands joined at "well 0" land on
+opposite faces.** `correctness` · `sites/model.vacancy_sites`, `assembly/join.join`
+
+`vacancy_sites` builds each vertex's reference direction as `axis × trial`, with
+`trial = (1,0,0)` unless the axis is nearly along x, then `(0,1,0)`. On a square-planar centre
+that gives **+z** for the +x vertex and **−z** for the +y vertex. `join(..., torsion_well=0)`
+rolls the incoming ligand relative to that reference, so two formates joined syn and upright on
+cis vertices point their free oxygens at opposite faces of the CuO₄ plane — their implied
+second-metal sites 5.33 Å apart instead of together. That is what made this session's in-memory
+`Cu(HCOO)₂ + Cu` look like a failed route (WORKPLAN_M6 §S5). The placer's own azimuth grid does
+not have the flip, so the same request through `place_mononuclear` lands both on one face.
+
+**Fix direction** — not the convention itself: a deterministic reference that is consistent
+across a polyhedron moves every stored construct with ≥ 2 joined vertices, which is a
+`placement` version bump and a re-derivation (ground rule 6, D19). Routes state the side they
+mean instead: a route `join` takes `torsion: {"bring": label, "toward": label}`, resolved over
+the donor's wells and recorded in the choice vector. The entry stays open until a construct can
+no longer reach a face it did not ask for — i.e. until the enumerator either uses a consistent
+reference or branches over faces explicitly.
 
 ---
 

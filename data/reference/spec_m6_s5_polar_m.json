@@ -1,0 +1,72 @@
+{
+  "spec_version": 9,
+  "note": "M6/S5 route test, built from the ground up with explicit water loss. Reagents are placed and stored by the pipeline's own place/ligand paths: R1 [Cu(kO-HCOO)(H2O)3]+, R2 [Cu(H2O)4]2+, R3 [Cu(kO-HCOO)2(H2O)2] (square planar, formate bound syn and upright), free formate. Every step loads its operands back from the registry; every vertex a formate takes is first freed by releasing the water on it, stored as a leaving species on the edge. Route A: step 1 R1 + R2 -> Cu2(mu-HCOO)(H2O)6 + H2O; step 2 + HCOO -> Cu2(mu-HCOO)2(H2O)4 + 2 H2O. Route B: R3 + R2 -> Cu2(HCOO)2(H2O)4 + 2 H2O with Cu2's closure vertex freed. Each step's product is relaxed as built and from starts with the incoming piece pulled back 1.0 and 1.5 A. Report: scripts/route_report.py.",
+  "molecules": [
+    {"name": "formate", "smiles": "[O-]C=O"}
+  ],
+  "metals": [],
+  "co_ligand": "O",
+  "run_mode": "ml_go",
+  "ml_model": "mace-polar-1-m",
+  "relax_fmax": 0.05,
+  "relax_steps": 2000,
+  "seed": 0,
+  "routes": [
+    {
+      "name": "A_sequential",
+      "note": "Step 1: R2 loses a water; R1's free formate O takes the freed vertex through its lobe syn to R1's Cu. Step 2: the proto-dimer loses the water on Cu1 cis to the bridge and the water on Cu2 eclipsing it; formate bridges the two freed vertices.",
+      "steps": [
+        {"op": "sphere", "as": "R1", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 3,
+         "ligands": [{"molecule": "formate", "count": 1, "lone_pair": 1, "torsion_well": 0, "azimuth_step": 23, "oop_step": 0}]},
+        {"op": "sphere", "as": "R2", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 4},
+        {"op": "free_ligand", "as": "formate", "molecule": "formate"},
+
+        {"op": "load", "as": "r1", "species": "R1"},
+        {"op": "load", "as": "r2", "species": "R2"},
+        {"op": "release", "ligand": "r2.L0", "as": "w1"},
+        {"op": "store", "as": "water_1", "block": "w1"},
+        {"op": "join", "donor": "r1.d0", "onto": "r2.m0", "lone_pair": {"toward": "r1.m0"}},
+        {"op": "store", "as": "proto_dimer", "block": "r1", "from": ["r1", "r2"], "leaving": ["water_1"],
+         "watch": {"cu_cu": ["r1.m0", "r2.m0"], "bridge_cu2": ["r1.d0", "r2.m0"]}},
+        {"op": "perturb", "as": "proto_dimer_pull_1.0", "of": "proto_dimer", "move": ["r2"], "from": "r1.d0", "to": "r2.m0", "by": 1.0},
+        {"op": "perturb", "as": "proto_dimer_pull_1.5", "of": "proto_dimer", "move": ["r2"], "from": "r1.d0", "to": "r2.m0", "by": 1.5},
+
+        {"op": "load", "as": "p", "species": "proto_dimer"},
+        {"op": "load", "as": "f", "species": "formate"},
+        {"op": "release", "ligand": {"on": "p.m0", "nearest": "p.CHO2", "formula": "H2O"}, "as": "w2"},
+        {"op": "release", "ligand": {"on": "p.m1", "nearest": "w2", "formula": "H2O"}, "as": "w3"},
+        {"op": "store", "as": "water_2", "block": "w2"},
+        {"op": "store", "as": "water_3", "block": "w3"},
+        {"op": "reserve", "as": "pair", "for": "f", "metals": ["p.m0", "p.m1"]},
+        {"op": "bridge", "ligand": "f", "vacancies": "pair", "lone_pairs": [0, 0]},
+        {"op": "store", "as": "product", "block": "p", "from": ["p", "f"], "leaving": ["water_2", "water_3"],
+         "watch": {"cu_cu": ["p.m0", "p.m1"], "f_cu_a": ["f.d0", "p.m0"], "f_cu_b": ["f.d1", "p.m1"]}},
+        {"op": "perturb", "as": "product_pull_1.0", "of": "product", "move": ["f"], "from": ["p.m0", "p.m1"], "to": ["f"], "by": 1.0},
+        {"op": "perturb", "as": "product_pull_1.5", "of": "product", "move": ["f"], "from": ["p.m0", "p.m1"], "to": ["f"], "by": 1.5}
+      ]
+    },
+    {
+      "name": "B_two_on_one",
+      "note": "R2 loses a water; R3's first free formate O takes the freed vertex (syn lobe); Cu2 then loses the water nearest R3's other free formate O, so the vertex that O would need is open. Whether it closes is the test.",
+      "steps": [
+        {"op": "sphere", "as": "R3", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 2,
+         "ligands": [{"molecule": "formate", "count": 2, "lone_pair": 1, "torsion_well": 0, "azimuth_step": 23, "oop_step": 0}]},
+        {"op": "sphere", "as": "R2", "metal": {"symbol": "Cu", "oxidation_state": 2, "spin_class": "hs"},
+         "cn": 4, "geometry": "square_planar", "co_ligands": 4},
+
+        {"op": "load", "as": "r3", "species": "R3"},
+        {"op": "load", "as": "r2", "species": "R2"},
+        {"op": "release", "ligand": "r2.L0", "as": "w1"},
+        {"op": "store", "as": "water_1", "block": "w1"},
+        {"op": "join", "donor": "r3.d0", "onto": "r2.m0", "lone_pair": {"toward": "r3.m0"}},
+        {"op": "release", "ligand": {"on": "r2.m0", "nearest": "r3.d1", "formula": "H2O"}, "as": "w2"},
+        {"op": "store", "as": "water_2", "block": "w2"},
+        {"op": "store", "as": "two_on_one", "block": "r3", "from": ["r3", "r2"], "leaving": ["water_1", "water_2"],
+         "watch": {"cu_cu": ["r3.m0", "r2.m0"], "dangling_cu2": ["r3.d1", "r2.m0"]}}
+      ]
+    }
+  ]
+}
