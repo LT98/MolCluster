@@ -84,8 +84,8 @@ def ladder(planned):
 
 # ── old specs replay ─────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("version", range(1, SPEC_VERSION))
-def test_every_older_version_reads_as_fill(version):
+@pytest.mark.parametrize("version", range(1, 8))      # v8 introduced `range`
+def test_every_pre_v8_version_reads_as_fill(version):
     spec = BuildSpec.from_dict({**OLD_V7, "spec_version": version})
     assert spec.co_ligand_counts == "fill"
 
