@@ -510,6 +510,8 @@ function attempted(t){
     case 'relax':
       return `relax structure #${p.structure_id} <span class="muted">from geometry #${p.geometry_id}`
         + `${p.ml_model ? ' · ' + esc(p.ml_model) : ''}${p.solvent ? ' · ' + esc(p.solvent) : ''}</span>`;
+    case 'route':
+      return `route ${esc(p.name || '#' + p.route)} <span class="muted">(spec routes)</span>`;
     case 'grow':
       return `add ${piece(p.component || {})} onto task #${p.parent_task}`
         + ` <span class="muted">→ task #${p.child_task} · CN ${p.cn} ${esc(p.geometry || '')}</span>`;

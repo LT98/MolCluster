@@ -136,11 +136,16 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
                                 f"stored {stored_fragments} != graph {expected_fragments}",
                                 structure_id=sid))
 
-    # 6. the best-geometry cache must match the geometries it caches
+    # 6. the best-geometry cache must match the geometries it caches — by the writer's own
+    #    rule (`api._refresh_best_geometry`): energy is never compared across method rows
     best = reg.conn.execute(
-        "SELECT id, fidelity FROM geometries WHERE structure_id=? "
-        "ORDER BY fidelity DESC, (converged IS 1) DESC, "
-        "         CASE WHEN energy IS NULL THEN 1 ELSE 0 END, energy ASC, id ASC LIMIT 1",
+        "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
+        "LEFT JOIN methods m ON m.id = g.method_id WHERE g.structure_id=? "
+        "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
+        "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
+        "         COALESCE(m.id, 0) ASC, "
+        "         CASE WHEN g.energy IS NULL THEN 1 ELSE 0 END, g.energy ASC, g.id ASC "
+        "LIMIT 1",
         (sid,)).fetchone()
     expect_id = best["id"] if best else None
     expect_fid = best["fidelity"] if best else None

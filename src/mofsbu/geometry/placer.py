@@ -453,6 +453,10 @@ class LigandPlacement:
     azimuth_step: int | None = None
     oop_step: int | None = None
     name: str = ""
+    #: Which in-plane lone pair of a monodentate sp2 donor binds (`site_frame(well=)`),
+    #: the choice `join(lone_pair=)` makes (M6/S1).  For a carboxylate it decides whether
+    #: the metal sits syn or anti to the free oxygen.  0 is the stored frame, as before.
+    lone_pair: int = 0
 
     @property
     def denticity(self) -> int:
@@ -673,7 +677,8 @@ def place_mononuclear(
         offsets.append(base)
         mol, conf = lig.mol, lig.mol.GetConformer()
         xyz = coordinates(mol)
-        frames = [site_frame(mol, idx, dtype, conf)
+        well = lig.lone_pair if lig.denticity == 1 else 0
+        frames = [site_frame(mol, idx, dtype, conf, well=well)
                   for idx, dtype in zip(lig.donor_idxs, lig.donor_types)]
         if lig.denticity == 1:
             frame = frames[0]
@@ -699,6 +704,9 @@ def place_mononuclear(
                       "azimuth_deg": round(well_deg + az_grid[ai], 3),
                       "oop_deg": round(oop_grid[oi], 3),
                       "distances": [x.to_dict() for x in dists]}
+            if lig.lone_pair:
+                # Recorded only when chosen, so every lobe-0 build keeps its vector.
+                choice["lone_pair"] = lig.lone_pair
             choices.append(choice)
             refinable.append(_Monodentate(
                 base=base, n_atoms=mol.GetNumAtoms(), xyz=xyz, origin=origin, axis=axis,

@@ -29,7 +29,7 @@ gate, and this module gets it for free by not trying to be clever about it.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -80,6 +80,7 @@ def to_xyz(graph: Any, coords: Any, comment: str = "") -> str:
 def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector | None = None,
                 reagent_ids: Iterable[int] = (), depth: int | None = None,
                 note: str = "", tags: Sequence[str] = (), seed: int | None = None,
+                leaving_ids: Iterable[int] = (),
                 fidelity: Fidelity = Fidelity.RAW, method: MethodSpec = CONSTRUCT,
                 energy: float | None = None, qc: dict | None = None,
                 l2: str | None = None) -> Stored:
@@ -107,6 +108,7 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
                                      else "")
 
     prov = Provenance(kind="assembly", reagent_ids=tuple(reagent_ids), note=note,
+                      leaving_ids=tuple(leaving_ids),
                       choice_vector_digest=cv.digest if cv else None, depth=depth)
 
     # Site state is computed BEFORE the first write: SQLite has one write lock, and holding
@@ -136,7 +138,9 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
                         seed=seed if seed is not None else (cv.seed if cv else None))
 
     n_sites = put_sites(reg, put.id, sites, algo=f"inherited/{ALGO_VERSIONS['graph_schema']}")
-    n_states = put_site_state(reg, put.id, geom.id, list(states.values()), fidelity=fidelity)
+    n_states = put_site_state(reg, put.id, geom.id, list(states.values()), fidelity=fidelity,
+                              frames={(s.atom_idx, getattr(s, "slot", 0)): s.frame
+                                      for s in sites if s.frame})
 
     reaction_id = _edge_for(reg, put.id, prov)
     reg.conn.commit()
@@ -180,3 +184,118 @@ def canonical_sites(reg: Registry, structure_id: int, sites: Sequence[Any]) -> d
     """
     cmap = canonical_map(reg, structure_id)
     return {cmap[s.atom_idx]: s for s in sites}
+
+
+#: How far a stored frame's origin may sit from its atom, or a rigid fit from the stored
+#: frame anchors, before a geometry is judged not to be the one the catalog describes (Å).
+FRAME_TOL = 1e-3
+
+
+def load_block(reg: Registry, structure_id: int, geometry_id: int | None = None) -> Any:
+    """The stored structure as a joinable `BuildingBlock` — `store_block` in reverse.
+
+    Graph, coordinates, sites and state all come from the registry: the typed graph,
+    one geometry's coordinates (default: the structure's first, which is the one its
+    catalog was written against), the site catalog mapped back through the canonical order,
+    and state recomputed from those coordinates and checked against the stored rows.
+
+    Frames are absolute vectors, so they belong to one geometry.  A geometry stored with its
+    state carries its own (`site_state.frame_json`) and loads exactly.  Otherwise the
+    catalog's frames — the first geometry's (D5) — are used only if every origin sits on its
+    atom, or if they fit onto this geometry by one rigid move, which carries them with it.
+    Anything else — a relaxed geometry, which has no state rows — needs frames re-derived
+    from its coordinates, which for a polynuclear node needs multi-metal `to_rdkit` (M6/S7),
+    and raises.
+    """
+    import json
+
+    from mofsbu._types import NotBuiltYet
+    from mofsbu.assembly.join import BuildingBlock, _transform_frame
+    from mofsbu.geometry._linalg import kabsch
+    from mofsbu.registry.api import RegistryError, geometry_xyz, get_graph, get_site_state
+    from mofsbu.sites.model import Site
+
+    graph = get_graph(reg, structure_id)
+    nodes = list(graph.nodes())
+    if geometry_id is None:
+        row = reg.conn.execute("SELECT id FROM geometries WHERE structure_id=? ORDER BY id "
+                               "LIMIT 1", (structure_id,)).fetchone()
+        if row is None:
+            raise RegistryError(f"structure {structure_id} has no geometry to load")
+        geometry_id = int(row["id"])
+    grow = reg.conn.execute("SELECT structure_id, fidelity FROM geometries WHERE id=?",
+                            (geometry_id,)).fetchone()
+    if grow is None or int(grow["structure_id"]) != structure_id:
+        raise RegistryError(f"geometry {geometry_id} is not a geometry of structure "
+                            f"{structure_id}")
+    lines = geometry_xyz(reg, geometry_id).splitlines()
+    n = int(lines[0])
+    symbols = [ln.split()[0] for ln in lines[2:2 + n]]
+    coords = np.array([[float(v) for v in ln.split()[1:4]] for ln in lines[2:2 + n]])
+    if symbols != [graph.label(i).element for i in nodes]:
+        raise NotBuiltYet(
+            f"geometry {geometry_id} lists its atoms in a different order from structure "
+            f"{structure_id}'s graph (another route to this node, D22). Mapping it onto the "
+            f"graph needs an isomorphism, which load_block does not do yet")
+    row_of = {node: k for k, node in enumerate(nodes)}
+
+    inv = {c: a for a, c in canonical_map(reg, structure_id).items()}
+    catalog = reg.conn.execute("SELECT * FROM site_catalog WHERE structure_id=? "
+                               "ORDER BY canonical_idx, slot", (structure_id,)).fetchall()
+    sites, anchors = [], []
+    for r in catalog:
+        atom = inv[int(r["canonical_idx"])]
+        frame = json.loads(r["frame_json"]) if r["frame_json"] else None
+        modes = tuple(m for m in (r["binding_modes"] or "").split(",") if m)
+        sites.append(Site(atom_idx=atom, donor_type=r["donor_type"], labile=bool(r["labile"]),
+                          charge_after=r["charge_after"], live_dof=r["live_dof"],
+                          binding_modes=modes, frame=frame, role=r["role"],
+                          slot=int(r["slot"])))
+        if frame and "origin" in frame:
+            anchors.append((atom, np.asarray(frame["origin"], dtype=float)))
+
+    # This geometry's own frames, where its state rows carry them: exact, no fitting.
+    own = {(inv[int(r["canonical_idx"])], int(r["slot"])): json.loads(r["frame_json"])
+           for r in reg.conn.execute(
+               "SELECT sc.canonical_idx, sc.slot, ss.frame_json FROM site_state ss "
+               "JOIN site_catalog sc ON sc.id = ss.site_id "
+               "WHERE sc.structure_id=? AND ss.geometry_id=? AND ss.frame_json IS NOT NULL",
+               (structure_id, geometry_id))}
+    if anchors and all((s.atom_idx, s.slot) in own for s in sites if s.frame):
+        sites = [replace(s, frame=own[(s.atom_idx, s.slot)]) if s.frame else s
+                 for s in sites]
+        anchors = []
+    if anchors:
+        stored = np.array([o for _, o in anchors])
+        here = np.array([coords[row_of[a]] for a, _ in anchors])
+        if float(np.abs(stored - here).max()) > FRAME_TOL:
+            uniq = {a: o for a, o in anchors}
+            p = np.array(list(uniq.values()))
+            q = np.array([coords[row_of[a]] for a in uniq])
+            rot, trans = kabsch(p, q) if len(uniq) >= 3 else (None, None)
+            resid = (float(np.abs((p @ rot.T + trans) - q).max())
+                     if rot is not None else float("inf"))
+            if resid > FRAME_TOL:
+                raise NotBuiltYet(
+                    f"geometry {geometry_id} is not the geometry structure {structure_id}'s "
+                    f"site frames were written in, nor a rigid copy of it (residual "
+                    f"{resid:.3g} Å). Re-deriving frames from new coordinates needs "
+                    f"re-perception, and for a polynuclear node that needs multi-metal "
+                    f"to_rdkit (M6/S7)")
+            sites = [replace(s, frame=_transform_frame(s.frame, rot, np.zeros(3), trans))
+                     for s in sites]
+
+    fidelity = Fidelity(int(grow["fidelity"]))
+    states = refresh_state(sites, coords, graph=graph, symbols=symbols, fidelity=fidelity)
+    state = {(s.atom_idx, getattr(s, "slot", 0)): s for s in states}
+    stored_status = {(inv[int(r["canonical_idx"])], int(r["slot"])): r["status"]
+                     for r in get_site_state(reg, structure_id, geometry_id)}
+    differ = {k: (v, getattr(state[k].status, "value", state[k].status))
+              for k, v in stored_status.items()
+              if k in state and v != getattr(state[k].status, "value", state[k].status)}
+    if differ:
+        raise RegistryError(
+            f"structure {structure_id} geometry {geometry_id}: site state recomputed on "
+            f"load disagrees with the stored rows {differ} (stored, recomputed)")
+    return BuildingBlock(graph=graph, sites=tuple(sites), geometry=coords, state=state,
+                         structure_id=structure_id)

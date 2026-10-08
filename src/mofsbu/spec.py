@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 8
+SPEC_VERSION = 9
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -169,6 +169,98 @@ class PocketPredicate:
         return {k: v for k, v in asdict(self).items() if v is not None}
 
 
+#: How many variants one route's `vary` may expand to.  A guard rail, like MAX_RANGE_SPAN:
+#: it refuses rather than truncating.
+MAX_ROUTE_VARIANTS = 256
+
+#: Route step operations and the keys each REQUIRES; `assembly.route_steps` executes them.
+#: Checked at load, so a typo in a spec file fails before anything is queued.
+ROUTE_OPS: dict[str, tuple[str, ...]] = {
+    "sphere": ("as", "metal", "cn", "geometry"),
+    "free_ligand": ("as", "molecule"),
+    "load": ("as",),
+    "release": ("ligand", "as"),
+    "metal": ("as", "symbol", "cn"),
+    "ligand": ("as", "molecule"),
+    "join": ("donor", "onto"),
+    "reserve": ("as",),
+    "cap": ("block", "molecule"),
+    "bridge": ("ligand", "vacancies"),
+    "store": ("as", "block"),
+    "perturb": ("as", "of", "move", "from", "to", "by"),
+}
+
+
+@dataclass(frozen=True)
+class RouteSpec:
+    """One explicit construction route: a named sequence of assembly steps.
+
+    The enumerating fields of `BuildSpec` say which mononuclear spheres to build; a route
+    says HOW one structure is put together, join by join, which is what a polynuclear node
+    needs (D20: it is what a sequence of joins produces).  Steps name the atoms they act on
+    by label (`cu1`, `f1.d0`, `cu2.cap`), never by index, so the file survives renumbering.
+    """
+
+    name: str
+    steps: tuple[dict[str, Any], ...]
+    note: str = ""
+    #: Construction choices to enumerate: `{"lp": [0, 1]}` makes every step value written
+    #: exactly `"$lp"` take each listed value, and the route is planned once per combination
+    #: (named `name[lp=0]` …).  A choice that decides an outcome is varied, not pinned.
+    vary: dict[str, list[Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "steps", tuple(dict(s) for s in self.steps))
+        object.__setattr__(self, "vary", {str(k): list(v) for k, v in self.vary.items()})
+        if not self.steps:
+            raise ValueError(f"route {self.name!r} has no steps")
+        for key, values in self.vary.items():
+            if not values:
+                raise ValueError(f"route {self.name!r}: vary {key!r} lists no values")
+            if f'"${key}"' not in json.dumps(self.steps):
+                raise ValueError(f"route {self.name!r}: vary {key!r} is used by no step "
+                                 f"(write the value as \"${key}\")")
+        if len(self.variants()) > MAX_ROUTE_VARIANTS:
+            raise ValueError(f"route {self.name!r}: {len(self.variants())} variants, above "
+                             f"{MAX_ROUTE_VARIANTS}; narrow `vary`")
+        for i, step in enumerate(self.steps):
+            op = step.get("op")
+            if op not in ROUTE_OPS:
+                raise ValueError(f"route {self.name!r} step {i}: unknown op {op!r}; "
+                                 f"have {sorted(ROUTE_OPS)}")
+            missing = [k for k in ROUTE_OPS[op] if k not in step]
+            if missing:
+                raise ValueError(f"route {self.name!r} step {i} ({op}): missing {missing}")
+        if not any(s["op"] in ("store", "sphere", "free_ligand") for s in self.steps):
+            raise ValueError(f"route {self.name!r} stores nothing; add a 'store' step")
+
+    def variants(self) -> list[dict[str, Any]]:
+        """Every combination of `vary`, in a fixed order; `[{}]` when nothing varies."""
+        import itertools
+
+        keys = sorted(self.vary)
+        return [dict(zip(keys, combo))
+                for combo in itertools.product(*(self.vary[k] for k in keys))]
+
+    def resolved(self, values: dict[str, Any]) -> RouteSpec:
+        """This route with every `"$key"` replaced by `values[key]`, named by the choice."""
+        def sub(x: Any) -> Any:
+            if isinstance(x, str) and x.startswith("$") and x[1:] in values:
+                return values[x[1:]]
+            if isinstance(x, dict):
+                return {k: sub(v) for k, v in x.items()}
+            if isinstance(x, list):
+                return [sub(v) for v in x]
+            return x
+
+        if not values:
+            return self
+        tag = ",".join(f"{k}={json.dumps(values[k], sort_keys=True, separators=(',', ':'))}"
+                       for k in sorted(values))
+        return RouteSpec(name=f"{self.name}[{tag}]", note=self.note,
+                         steps=tuple(sub(dict(s)) for s in self.steps))
+
+
 @dataclass(frozen=True)
 class BuildSpec:
     """Everything a run needs.  Serialise it, store it, execute it elsewhere."""
@@ -228,6 +320,13 @@ class BuildSpec:
     run_mode: str = "construct"          # construct | ml_go | xtb_go | dft_go (no body)
     # Which ML potential `ml_go` means.  None = the machine's declared default.
     ml_model: str | None = None          # mace-mp-0 | mace-omol-0 | mace-mh-1 | None
+    # Explicit construction routes (`RouteSpec`), each planned as one `route` task beside
+    # whatever the enumerating fields plan.
+    routes: tuple[RouteSpec, ...] = ()
+    # Relaxation convergence: max force (eV/Å) and step cap.  None = the relax defaults
+    # (`energy.relax.relax_geometry`), which is what every spec before v9 ran.
+    relax_fmax: float | None = None
+    relax_steps: int | None = None
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -260,6 +359,31 @@ class BuildSpec:
             raise ValueError("coordination is empty; a metal run needs at least one CN")
         if not self.ligands_per_metal:
             raise ValueError("ligands_per_metal is empty; say how many copies to place")
+        object.__setattr__(self, "routes", tuple(
+            r if isinstance(r, RouteSpec) else RouteSpec(**r) for r in self.routes))
+        names = [r.name for r in self.routes]
+        if len(set(names)) != len(names):
+            raise ValueError(f"route names must be unique, got {names}")
+        known = {m.name for m in self.molecules}
+        for r in self.routes:
+            for s in r.steps:
+                wanted = ([s["molecule"]] if s["op"] in ("ligand", "cap", "free_ligand")
+                          else [x["molecule"] for x in s.get("ligands", ())]
+                          if s["op"] == "sphere" else [])
+                for name in wanted:
+                    if name not in known:
+                        raise ValueError(f"route {r.name!r}: molecule {name!r} is not in "
+                                         f"this spec's molecules {sorted(known)}")
+                if s["op"] == "load" and ("species" in s) == ("block_id" in s):
+                    raise ValueError(f"route {r.name!r}: a load step names exactly one of "
+                                     f"'species' (stored earlier in this run) or 'block_id'")
+        if self.relax_fmax is not None and not self.relax_fmax > 0:
+            raise ValueError(f"relax_fmax must be > 0 eV/Å, got {self.relax_fmax!r}")
+        if self.relax_steps is not None and (
+                isinstance(self.relax_steps, bool) or not isinstance(self.relax_steps, int)
+                or self.relax_steps < 1):
+            raise ValueError(f"relax_steps must be a whole number >= 1, got "
+                             f"{self.relax_steps!r}")
         if self.ml_model is not None:
             from mofsbu.config import resolve_ml_backend
 
@@ -310,6 +434,12 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 8:
+            # v8 -> v9 adds `routes`, `relax_fmax` and `relax_steps`.  No routes and the
+            # relax defaults are what every earlier spec ran.
+            d.setdefault("routes", ())
+            d.setdefault("relax_fmax", None)
+            d.setdefault("relax_steps", None)
         if version <= 7:
             # v7 -> v8 adds `co_ligand_counts` (D26).  `fill` is what every earlier spec
             # planned, so an old spec re-run queues the same tasks; the new default,
@@ -360,6 +490,7 @@ class BuildSpec:
             geometries=tuple(g) if (g := d.pop("geometries", None)) else None,
             ligands_per_metal=d.pop("ligands_per_metal", (1,)),
             binding=tuple(d.pop("binding", ("chelate", "mono"))),
+            routes=tuple(RouteSpec(**r) for r in d.pop("routes", ())),
             **d,
         )
 
