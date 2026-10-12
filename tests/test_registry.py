@@ -220,8 +220,9 @@ def test_export_is_a_view_not_a_record(reg, tmp_path):
 def populated(reg):
     for build in fx.ALL.values():
         g = build()
-        sid = put_structure(reg, g).id
-        put_geometry(reg, sid, xyz_for(g), fidelity=Fidelity.RAW, method=RAW)
+        put = put_structure(reg, g)
+        put_geometry(reg, put.id, xyz_for(g), fidelity=Fidelity.RAW, method=RAW,
+                     canonical_order=put.canonical_order)
     return reg
 
 

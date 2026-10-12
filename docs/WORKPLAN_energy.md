@@ -130,15 +130,13 @@ Construction, identity, clash QC, choice vectors (`runner`, `assembly/`, `geomet
   an equation left without an energy says so. `registry.backfill_connectivity` gives rows
   written before E1 their verdict. Still missing: the D11 `derived_from` record filing a
   changed geometry under the species it became.
-- **E1 only judges what it can read — [B28](BUGS.md#b28).** A geometry that reached an existing
-  structure may be numbered differently from the stored graph, and a verdict read under the
-  wrong numbering would exclude a good energy. So a verdict is recorded only when the
-  geometry's root (itself, or the first geometry up its `relaxed_from` chain) realises the
-  graph in its atom order; otherwise it is left NULL with the reason. On copies of the main
-  registries that leaves most later-build relaxations unchecked until B28 is fixed. Measured
-  once with the numbering repaired (2026-10-08, OMOL-0): about half of ML geometries change
-  connectivity for real — a donor O closing onto the metal (median 2.01 Å), a water or axial
-  O leaving (~3.0 Å), a proton crossing, and in `THQ_run` some ligands coming apart.
+- **E1 reads each geometry through its own link (D30).** A geometry is judged against the
+  structure's graph renumbered like its rows, whichever build wrote them. One stored before the
+  link existed is left NULL with the reason until `scripts/recover_atom_links.py` has linked it
+  ([B28](BUGS.md#b28)). Measured with the numbering accounted for (2026-10-08, OMOL-0): about
+  half of ML geometries change connectivity for real — a donor O closing onto the metal (median
+  2.01 Å), a water or axial O leaving (~3.0 Å), a proton crossing, and in `THQ_run` some ligands
+  coming apart.
 - **Missing — pruning within identity.** Keep conformers within 0.25 eV (~10 kT; proposal) of the
   identity minimum. The rest are kept, below the escalation line. This settles C2 for ranking.
 
@@ -501,7 +499,7 @@ first term); corrections never borrowed across geometries (C17); absent ≠ zero
 | # | Slice | Size | Unblocks | Milestone |
 |---|---|---|---|---|
 | E0 | this plan; the Q2 reframing recorded with the salt-study results | S | — | — |
-| E1 | connectivity check after relaxation + `connectivity_changed` — **built** (2026-10-08); verdicts limited to geometries in their graph's atom order until [B28](BUGS.md#b28) | S–M | every reported number; E-MH metric (a) | M7 |
+| E1 | connectivity check after relaxation + `connectivity_changed` — **built** (2026-10-08); judged through each geometry's link (D30); registries written before need `scripts/recover_atom_links.py` | S–M | every reported number; E-MH metric (a) | M7 |
 | E-MH | MACE-MH and MACE-POLAR-1 backends + the §3a comparisons with MACE-OMOL-0 — **done** (2026-10-05); the relaxer call is open | S–M | the stage-2 relaxer | M7 |
 | F0–F6 | the partial-relaxation funnel (§3a, "A smarter funnel") | M | the stage-2 relaxer at screening scale | M7 |
 | E2 | screening tier labelled; ALPB+GBSA spread; `hydration_change`; pH and water reference beside the proton sink (C21); the solvation §3a pricing rules | S | honest screening | M7 |

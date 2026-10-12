@@ -49,8 +49,9 @@ SEED = 7
 def register_molecule(reg, mol, *, name, charge, multiplicity, tags, provenance=None):
     g = from_rdkit(mol, charge=charge, multiplicity=multiplicity, name=name)
     put = put_structure(reg, g, tags=tags, provenance=provenance)
-    put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
-    put_sites(reg, put.id, perceive(mol))
+    put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF,
+                 canonical_order=put.canonical_order)
+    put_sites(reg, put.id, perceive(mol), canonical_order=put.canonical_order)
     return put.id
 
 
@@ -169,8 +170,8 @@ def build(db_path: Path, store_root: Path, out_dir: Path) -> None:
                                                       reagent_ids=tuple(reagents), note=note))
             put_geometry(reg, put.id, result.to_xyz(label), fidelity=Fidelity.RAW,
                          method=BUILD, choice_vector=result.choice_vector, seed=0,
-                         qc=result.report.to_dict())
-            put_sites(reg, put.id, perceive(mol))
+                         qc=result.report.to_dict(), canonical_order=put.canonical_order)
+            put_sites(reg, put.id, perceive(mol), canonical_order=put.canonical_order)
             if charge < 0:                       # the counterion carries the balance
                 from mofsbu.registry import put_reaction
                 put_reaction(reg, put.id, Provenance(

@@ -169,6 +169,12 @@ CREATE TABLE IF NOT EXISTS geometries (
     -- formed.  A 1 is never selected for an energy or as best geometry.
     connectivity_changed INTEGER DEFAULT NULL,
     connectivity_json    TEXT    DEFAULT NULL,          -- broken/formed pairs, or why unchecked
+    -- D30: this geometry's rows linked to the structure's graph by canonical position —
+    -- entry c is the row holding the atom at canonical position c (the same form as
+    -- structures.canonical_order_json).  Coordinates stay as built; readers translate through
+    -- this (`registry.geometry_graph`).  NULL = stored before the link existed (B28):
+    -- `scripts/recover_atom_links.py`.
+    canonical_order_json TEXT    DEFAULT NULL,
     created_at           TEXT    NOT NULL,
     UNIQUE (structure_id, coords_hash, method_id)
 );

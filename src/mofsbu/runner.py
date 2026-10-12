@@ -714,7 +714,7 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     with a `derived_from` edge (D11, §6.2), is not built yet.
     """
     from mofsbu.energy.relax import relax_geometry
-    from mofsbu.registry import geometry_xyz, get_graph
+    from mofsbu.registry import RegistryError, geometry_graph, geometry_xyz, get_graph
 
     payload = task.payload
     structure_id = int(payload["structure_id"])
@@ -757,11 +757,19 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     # geometry built despite a marginal clash would end up in the registry looking exactly
     # like one that never had a problem — and after `MARGINAL_OVERLAP` this is no longer
     # hypothetical, it is the intended path for hundreds of structures.
-    after = _clash_qc(graph, result.symbols, result.positions)
+    # Bonded pairs are excluded by row, so the graph must be numbered like these rows: the
+    # relaxed rows are the source geometry's (D30).  A source with no link (B28) gets no
+    # clash verdict rather than one read against another build's atoms.
+    try:
+        rows_graph = geometry_graph(reg, source_gid)
+    except RegistryError:
+        rows_graph = None
+    after = (_clash_qc(rows_graph, result.symbols, result.positions) if rows_graph is not None
+             else None)
     geom = put_geometry(
         reg, structure_id, result.to_xyz(graph.name or ""), fidelity=result.fidelity,
         method=result.method, energy=result.energy, converged=result.converged,
-        relaxed_from=source_gid, qc=after.to_dict())
+        relaxed_from=source_gid, qc=None if after is None else after.to_dict())
     detail = {"relax": {"from_geometry": source_gid, "target": target.name,
                         "converged": result.converged, "steps": result.n_steps,
                         "fmax": round(result.fmax, 4), "energy": result.energy,
@@ -778,7 +786,10 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
             detail["connectivity_changed"] = verdict
         elif verdict and "unchecked" in verdict:
             detail["connectivity_unchecked"] = verdict["unchecked"]
-    if not after.ok:
+    if after is None:
+        detail["qc_unchecked"] = ("source geometry has no link to the structure's graph "
+                                  "(B28): run scripts/recover_atom_links.py")
+    elif not after.ok:
         # Stored, flagged, and NOT rejected.  The optimisation was paid for and its
         # result is a real answer — "these ligands still do not fit once relaxed" is a
         # finding about the chemistry, and rev 21's lesson was that discarding compute
@@ -846,14 +857,18 @@ def _perceive_sites(mol, graph: TypedGraph, fidelity: Fidelity,
 
 def _record_sites(reg: Registry, structure_id: int, geometry_id: int,
                   perceived_sites: tuple[list, list, list],
-                  fidelity: Fidelity) -> dict[str, Any]:
-    """Store what `_perceive_sites` computed: catalog, then state.  Writes only."""
+                  fidelity: Fidelity, canonical_order=None) -> dict[str, Any]:
+    """Store what `_perceive_sites` computed: catalog, then state.  Writes only.
+
+    `canonical_order` is `put_structure`'s: the perception is in this build's numbering (D30).
+    """
     perceived, sites, states = perceived_sites
-    drift = catalog_drift(reg, structure_id, perceived)
-    put_sites(reg, structure_id, sites)
+    drift = catalog_drift(reg, structure_id, perceived, canonical_order=canonical_order)
+    put_sites(reg, structure_id, sites, canonical_order=canonical_order)
     n_stored = put_site_state(reg, structure_id, geometry_id, states, fidelity=fidelity,
                               frames={(s.atom_idx, getattr(s, "slot", 0)): s.frame
-                                      for s in sites if s.frame})
+                                      for s in sites if s.frame},
+                              canonical_order=canonical_order)
     report: dict[str, Any] = {
         "n_sites": len(sites),
         "n_vacancies": sum(1 for s in sites if s.is_vacancy),
@@ -1373,8 +1388,10 @@ def _store_ligand(reg: Registry, spec: BuildSpec, payload: dict[str, Any]) -> Ou
                    name=name)
     perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
     put = put_structure(reg, g, tags=[molecule.name, "ligand"])
-    geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF)
-    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
+    geom = put_geometry(reg, put.id, to_xyz(mol, name), fidelity=Fidelity.FF, method=FF,
+                        canonical_order=put.canonical_order)
+    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF,
+                                    canonical_order=put.canonical_order)
     for frag in decompose(g):
         alias_fragment(reg, frag.l1, name.replace(" ", ""), source="runner")
     return Outcome(put.id, geom.id, put.created, geom.created, detail)
@@ -1396,8 +1413,10 @@ def _store_place(reg: Registry, spec: BuildSpec, payload: dict[str, Any]) -> Out
     geom = put_geometry(reg, put.id, built.result.to_xyz(built.name),
                         fidelity=Fidelity.RAW, method=BUILD,
                         choice_vector=built.result.choice_vector,
-                        seed=spec.seed, qc=built.result.report.to_dict())
-    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.RAW)
+                        seed=spec.seed, qc=built.result.report.to_dict(),
+                        canonical_order=put.canonical_order)
+    detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.RAW,
+                                    canonical_order=put.canonical_order)
     detail["qc"] = built.result.report.to_dict()
     return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
@@ -1470,6 +1489,9 @@ def _execute_route(reg: Registry, task, spec: BuildSpec) -> Outcome:
 
     route = spec.routes[int(task.payload["route"])].resolved(task.payload.get("vary") or {})
     queued: list[int] = []
+    # Stored species name -> its build's link to the stored graph (D30); a perturbed start
+    # is that block moved, in the same numbering.
+    links: dict[str, Any] = {}
 
     def stored_cb(ws, step: int, s: dict[str, Any], bid: int | None) -> StoredSpecies:
         cv_base = {"route": route.name, "step": step, "joins": list(ws.cv)}
@@ -1496,6 +1518,7 @@ def _execute_route(reg: Registry, task, spec: BuildSpec) -> Outcome:
                              depth=len(ws.cv), note=f"{route.name}/{s['as']}",
                              tags=["route", route.name, s["as"], *s.get("tags", ())],
                              seed=spec.seed)
+            links[s["as"]] = st.canonical_order
             sp = StoredSpecies(s["as"], st.structure_id, st.geometry_id, "built",
                                ws.rows(bid), watch=dict(s.get("watch", {})),
                                reserved={k: [list(x) for x in v]
@@ -1512,7 +1535,8 @@ def _execute_route(reg: Registry, task, spec: BuildSpec) -> Outcome:
                                 fidelity=Fidelity.RAW, method=BUILD,
                                 choice_vector={**cv_base, "perturb": pert},
                                 seed=spec.seed,
-                                qc=_clash_qc(block.graph, symbols, xyz).to_dict())
+                                qc=_clash_qc(block.graph, symbols, xyz).to_dict(),
+                                canonical_order=links.get(s["of"]), distorted=True)
             sp = StoredSpecies(s["as"], base.structure_id, geom.id, "perturbed", rows,
                                watch=base.watch, reserved=base.reserved,
                                perturbation={"of": s["of"], **pert})
@@ -1550,8 +1574,10 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
         perceived = _perceive_sites(mol, g, Fidelity.FF)          # before the first write
         put = put_structure(reg, g, tags=[payload["smiles"], "ligand", "co-ligand"])
         geom = put_geometry(reg, put.id, to_xyz(mol, payload["smiles"]),
-                            fidelity=Fidelity.FF, method=FF)
-        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF)
+                            fidelity=Fidelity.FF, method=FF,
+                            canonical_order=put.canonical_order)
+        detail["sites"] = _record_sites(reg, put.id, geom.id, perceived, Fidelity.FF,
+                                        canonical_order=put.canonical_order)
         return Outcome(put.id, geom.id, put.created, geom.created, detail)
 
     if task.kind == "place":

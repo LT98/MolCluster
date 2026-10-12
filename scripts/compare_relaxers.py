@@ -35,7 +35,8 @@ from mofsbu.energy.backends import get_backend                           # noqa:
 from mofsbu.geometry._linalg import kabsch                               # noqa: E402
 from mofsbu.geometry.connectivity import connectivity_check             # noqa: E402
 from mofsbu.graph._types import EdgeType                                 # noqa: E402
-from mofsbu.registry import BlobStore, get_graph, geometry_xyz           # noqa: E402
+from mofsbu.registry import (BlobStore, RegistryError, geometry_graph,  # noqa: E402
+                             geometry_xyz, get_graph)
 from mofsbu.registry.db import ReadOnlyRegistry                          # noqa: E402
 from mofsbu.runner import read_xyz                                       # noqa: E402
 
@@ -168,14 +169,17 @@ def main(argv: list[str] | None = None) -> int:
                             if (r["sid"], r["start_geometry"]) in done]
         print(f"resuming: {len(done)} starts already done", flush=True)
     for e in picked:
-        graph = get_graph(reg, e["sid"])
         for gid in e["starts"]:
             if (e["sid"], gid) in done:
                 continue
             symbols, coords = read_xyz(geometry_xyz(reg, gid))
-            # A structure reached by two routes keeps one graph (D22); a geometry from the
-            # other route may order its atoms differently, so per-atom metrics are skipped.
-            ordered = [graph.label(i).element for i in graph.nodes()] == list(symbols)
+            # Per-atom metrics need the graph numbered like this geometry's rows (D30); a
+            # geometry stored before its link was recorded (B28) is relaxed but not compared
+            # atom by atom.
+            try:
+                graph, ordered = geometry_graph(reg, gid), True
+            except (RegistryError, sqlite3.OperationalError):
+                graph, ordered = get_graph(reg, e["sid"]), False
             x0 = np.asarray(coords, dtype=float)
             rr = relax(ref, symbols, x0, graph, a.fmax, a.steps)
             for key, cand in cands.items():

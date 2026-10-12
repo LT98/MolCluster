@@ -10,6 +10,26 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
+- *(2026-10-12)* **D30 — link a geometry to its graph; do not renumber it ([B28](../BUGS.md#b28)).**
+  E1's first run on copies of the main registries flagged ~80 % of MACE geometries. The first
+  construct of every structure realised its graph (1113/1113, 1079/1079, 4230/4233); later
+  builds mostly did not, and 555 of 558 sampled failures were the stored graph renumbered: a
+  later build's rows and site states had been read through the first build's numbering.
+
+  * **Renumbering was prototyped and set aside** (local branch `wip-b28-d30`): permute every
+    geometry into the stored graph's order and keep the build order beside it. It worked on
+    copies of all four registries, but it made the first build's arbitrary numbering a shared
+    reference every writer, merge and repair must keep in step with.
+  * **Orbit naming was examined and not needed for the fix.** Over 360 random renumberings of
+    the fixtures an atom's canonical index changed in 298 and its orbit (smallest canonical
+    position among symmetry-equivalent atoms) in none; but where the canonical index is
+    ambiguous the atoms are interchangeable, so sites keyed by canonical index (D5) are right
+    as long as each build's own map is used. Orbit keys would matter only for cross-build
+    "exactly this atom" questions and for L2's centre key of equivalent metals.
+  * **Chosen:** keep coordinates as built and record the link; key sites through the build's own
+    map; read only through the link. Canonicalisation is computed on every insert anyway, so
+    the link costs nothing.
+
 - *(2026-10-08)* **M6/S5 — the `Cu(HCOO)₂ + Cu` refusal withdrawn.** WORKPLAN_M6 §S5 recorded
   (2026-09-16): "`Cu(HCOO)₂ + Cu` bottoms out at 1.464 Å — refused … pinning both formates to
   one Cu before the second exists forces their free oxygens to agree about a metal they were
