@@ -10,7 +10,7 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
-- *(2026-10-12)* **D30 — link a geometry to its graph; do not renumber it ([B28](../BUGS.md#b28)).**
+- *(2026-10-12)* **D30 — link a geometry to its graph; do not renumber it ([B28](BUGS_resolved.md)).**
   E1's first run on copies of the main registries flagged ~80 % of MACE geometries. The first
   construct of every structure realised its graph (1113/1113, 1079/1079, 4230/4233); later
   builds mostly did not, and 555 of 558 sampled failures were the stored graph renumbered: a

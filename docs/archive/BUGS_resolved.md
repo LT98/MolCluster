@@ -12,6 +12,45 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B28 — a later build's rows read through the first build's numbering ✅
+
+**A geometry is stored in the atom order of whatever built it, not the order of the graph it is
+filed under.** `correctness` · `registry/api.put_structure`, `put_geometry`, `put_site_state`
+
+`put_structure` deduplicates on identity and returns the existing id; the caller then stores its
+coordinates and site states in its OWN graph's atom order. The stored graph is the first
+build's, and `put_geometry` checks only the atom count. Two builds that reach one species by
+different paths (two SMILES spellings, a join versus a placement, two join orders) number its
+atoms differently, so every geometry after the first can disagree with the graph index by
+index — and `put_site_state` maps the new build's atom indices through the STORED structure's
+canonical map, so its states land on the wrong catalog rows.
+
+Measured on copies of the main registries (2026-10-08): the first RAW construct of a structure
+realises its graph in 1113/1113 (`salt_study_k1`), 1079/1079 (`registry`) and 4230/4233
+(`THQ_run`) cases; constructs that reach an existing structure do in 1757/11250, 464/3421 and
+1480/14326. Of those that do not, 4767 and 219 differ even in element order; of a sample of 558
+whose elements line up, 555 were the stored graph up to atom renumbering. Energies are
+unaffected; anything that reads coordinates or site states by index was: E1 (which, before the
+fix, left such geometries unchecked), site states and `n_open_sites`, `persist.load_block`
+(which refuses only an element-order mismatch), and `compare_relaxers`' metrics.
+
+**Resolved (2026-10-12).** PR #63, ledger D30: coordinates are stored as built and each geometry
+records its rows' link to canonical positions (`geometries.canonical_order_json`); site writers
+key through the build's own canonical map; every reader goes through `registry.geometry_graph`,
+and a geometry without a link is refused. Tests: `tests/test_atom_links.py`.
+
+**Data.** `scripts/recover_atom_links.py --apply --connectivity` was run on every `data/*.db`
+(`registry`, `salt_study_k1`, `THQ_run`, `mvp_ni_thq_cl`, `proof_ni_thq_cl`): no geometry
+unmatched or left without a link, every geometry above RAW judged by E1, coordinates untouched.
+Site states that had been keyed through the wrong numbering were dropped (absent beats stale).
+
+**What it turned up.** With the numbering accounted for, about half of OMOL-0 relaxations really
+change connectivity (5892/10946 on `salt_study_k1`, 4511/8781 on `THQ_run`) — the subject of D11
+`derived_from` next. And a canonical index names an atom only up to symmetry, which is harmless
+for site rows but not for L2's centre key ([B29](../BUGS.md#b29)).
+
+---
+
 ## B26 — `database is locked` with many build workers ✅
 
 **`correctness` · `runner.py`, `assembly/persist.py`, `registry/jobs.py` · reported from a

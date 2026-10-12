@@ -21,7 +21,7 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
 | | |
 |---|---|
 | **Done** | M0 rails · M1 descriptors · M2 graph + identity · M3 registry · M3.5 viewer · M4 sites · **M5 assembly** |
-| **Partly done** | **M7** screening tier — backends, `MethodSpec`, the reference scheme, the relax runner, the `alpb:water` medium (solvation S1–S3) and `price_path` all shipped; E1, route enumeration and the seams are open, and the regression has a harness with no recorded result |
+| **Partly done** | **M7** screening tier — backends, `MethodSpec`, the reference scheme, the relax runner, the `alpb:water` medium (solvation S1–S3) `price_path` and E1 (with D30's atom links) all shipped; route enumeration and the seams are open, and the regression has a harness with no recorded result |
 | **In progress** | **M6** polynuclear nodes — the first milestone that builds a real SBU. S0 closed (D20/D24/D25 called, [B12](archive/BUGS_resolved.md) fixed); the bridge and metal–metal joins are built; `WORKPLAN_M6.md` carries the slice-level detail |
 | **Then** | **M7R** refine tier (the first reportable number) · M8 pathways (the actual contribution) · M9 folded in opportunistically |
 
@@ -751,10 +751,15 @@ that would fail if the claim stopped being true.**
 
 ## 7. What to do next, concretely
 
-1. **E1 — the connectivity check after relaxation** (S–M). It gates every reported number, M6's
-   "does not tear a node apart", and E-MH's first metric.
+1. **D11 `derived_from` — file a connectivity-changed geometry under the species it became.**
+   E1 landed (2026-10-08) and D30 fixed the atom numbering it exposed (B28, 2026-10-12); with every
+   geometry judged, about half of OMOL-0 relaxations form or break a bond, and 310 of 1123
+   `salt_study_k1` structures and 890 of 2086 `THQ_run` structures with energies have none left to
+   select. A donor O closing onto the metal is likely the minimum the builder missed; recording it
+   as its own node, with an edge from the species it was built as, turns those losses into data.
 2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). One trajectory-capture
-   run, then every pruning, dedup and staging policy is evaluated offline; F3 waits on E1.
+   run, then every pruning, dedup and staging policy is evaluated offline; F3 (stop a relaxation
+   when its connectivity changes) now has E1 to stand on.
 3. **Stage 5a on POLAR-L before the relaxer call** — DFT re-optimisation at def2-TZVPD on ~10
    species, including #132, and the memory measurement for a ~40-atom Ni complex that §3a still
    lacks. Runs on the GPU exclusively, in parallel with 1–2.
@@ -765,6 +770,9 @@ that would fail if the claim stopped being true.**
    reconciliation (`place_multicentre`) and `check_intercentre`, both stubs, plus widening
    `to_rdkit` past one metal. They serve M6's oxo-centred clusters (Fe₃O, Zn₄O); the paddlewheel
    M7 needs builds without them (D20). The plan-B trigger is **2026-10-14** (§4).
+7. **L2 (B2), as one piece:** a numbering-stable centre key ([B29](BUGS.md#b29)), an
+   arrangement-changed-after-relax check (L2's analogue of E1), and the call on the existing
+   all-`''` registries (rebuild, or accept untagged and tagged rows side by side under D19).
 
 ### Less critical — triaged 2026-10-02
 
