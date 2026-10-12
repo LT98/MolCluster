@@ -30,7 +30,7 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
 | [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
-| [B28](#b28) | correctness | `registry/api.py` | A geometry that reaches an existing structure is stored in its own build's atom order, not the stored graph's — and so are its site states |
+| [B28](#b28) | correctness | registry data | Geometries stored before D30 have no link from their rows to the graph, and their site states were keyed through another build's numbering. **Fixed in code; open until the main registries are recovered** (`scripts/recover_atom_links.py`) |
 
 ---
 
@@ -56,11 +56,13 @@ unaffected; anything that reads coordinates or site states by index is: E1 (whic
 such geometries unchecked), site states and `n_open_sites`, `persist.load_block`
 (which refuses only an element-order mismatch), and `compare_relaxers`' metrics.
 
-**Fix direction — being designed.** A renumber-into-the-stored-order fix with a per-geometry
-build order was prototyped (local branch `wip-b28-d30`) and set aside in favour of a design in
-which numbering never leaves a geometry: each geometry carries its own graph, sites are
-addressed by graph position (orbit / rooted certificate) rather than index, and
-correspondence between geometries is computed when asked, never stored.
+**Fixed in code (D30, 2026-10-12).** Coordinates are stored as built; each geometry records
+its rows' link to canonical positions (`geometries.canonical_order_json`); site writers key
+through the build's own canonical map; every reader goes through `registry.geometry_graph`.
+The entry stays open for the data: geometries written before have no link, readers refuse
+them, and `scripts/recover_atom_links.py --apply --connectivity` links them (coordinates
+untouched; site states keyed through the wrong map are dropped; dry run by default). Close it
+when `data/registry.db`, `salt_study_k1.db`, `mvp_ni_thq_cl.db` and `THQ_run.db` are recovered.
 
 ---
 

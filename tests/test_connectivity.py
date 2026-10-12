@@ -15,7 +15,8 @@ from mofsbu._types import Fidelity, MofsbuError, ReferenceSchemeError
 from mofsbu.energy.reference import Term, _energy_row, energy_for_terms
 from mofsbu.geometry.connectivity import BROKEN, FORMED, connectivity_check
 from mofsbu.graph import EdgeType, TypedGraph
-from mofsbu.registry import (MethodSpec, Registry, backfill_connectivity, best_geometry,
+from mofsbu.registry import (MethodSpec, Registry, RegistryError, backfill_connectivity,
+                             best_geometry,
                              get_structure, put_geometry, put_structure)
 from mofsbu.registry.verify import verify
 
@@ -203,15 +204,36 @@ def test_backfill_flags_rows_written_before_e1_and_moves_the_pointer(reg):
     assert backfill_connectivity(reg)["checked"] == 0
 
 
-def test_a_relaxation_of_a_build_in_another_numbering_is_unchecked_not_excluded(reg):
-    """Until B28 is fixed, a verdict read under the wrong numbering would exclude a good energy."""
+def test_a_later_build_in_another_numbering_is_judged_through_its_link(reg):
+    """A second build numbers the atoms its own way; its link makes the verdict real (D30)."""
+    g, sid, _raw = _stored_hexaaqua(reg)
+    o1, o2 = 1, 4                         # swap two water oxygens' numbers: not a symmetry
+    perm = list(range(len(g)))
+    perm[o1], perm[o2] = o2, o1
+    other = TypedGraph(charge=g.charge, multiplicity=g.multiplicity, name=g.name)
+    old_of = {n: o for o, n in enumerate(perm)}
+    for n in range(len(g)):
+        lab = g.label(old_of[n])
+        other.add_atom(lab.element, formal_charge=lab.formal_charge,
+                       oxidation_state=lab.oxidation_state, spin_class=lab.spin_class)
+    for u, v, et in g.edges():
+        other.add_bond(perm[u], perm[v], et)
+    put = put_structure(reg, other)
+    assert put.id == sid and not put.created
+    xyz = hexaaqua_coords()
+    xyz[[o1, o2]] = xyz[[o2, o1]]                 # the same molecule, in `other`'s numbering
+    raw2 = put_geometry(reg, sid, to_xyz(other, xyz), fidelity=Fidelity.RAW, method=RAW,
+                        canonical_order=put.canonical_order)
+    relaxed = put_geometry(reg, sid, to_xyz(other, xyz + 0.01), fidelity=Fidelity.ML,
+                           method=OMOL, energy=-10.0, converged=True, relaxed_from=raw2.id)
+    changed, detail = _verdict(reg, relaxed.id)
+    assert changed == 0 and not detail["broken"]
+    assert _energy_row(reg, sid, fidelity=Fidelity.ML, solvent=None)["id"] == relaxed.id
+
+
+def test_coordinates_in_another_numbering_without_their_link_are_refused(reg):
     g, sid, _raw = _stored_hexaaqua(reg)
     xyz = hexaaqua_coords()
-    o1, o2 = 1, 4                                  # two water oxygens: same elements, other numbering
-    xyz[[o1, o2]] = xyz[[o2, o1]]
-    raw2 = put_geometry(reg, sid, to_xyz(g, xyz), fidelity=Fidelity.RAW, method=RAW)
-    relaxed = put_geometry(reg, sid, to_xyz(g, xyz + 0.01), fidelity=Fidelity.ML, method=OMOL,
-                           energy=-10.0, converged=True, relaxed_from=raw2.id)
-    changed, detail = _verdict(reg, relaxed.id)
-    assert changed is None and "B28" in detail["unchecked"]
-    assert _energy_row(reg, sid, fidelity=Fidelity.ML, solvent=None)["id"] == relaxed.id
+    xyz[[1, 4]] = xyz[[4, 1]]
+    with pytest.raises(RegistryError, match="numbered differently"):
+        put_geometry(reg, sid, to_xyz(g, xyz), fidelity=Fidelity.RAW, method=RAW)

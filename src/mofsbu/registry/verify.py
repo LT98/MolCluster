@@ -156,11 +156,29 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
             f"row=({row['best_geometry_id']}, {row['best_fidelity']}) "
             f"geometries say ({expect_id}, {expect_fid})", structure_id=sid))
 
-    # 7. geometries must describe this structure and their coordinates must exist
+    # 7. geometries must describe this structure and their coordinates must exist; each
+    #    geometry's link (D30) must put the graph's elements on its rows
+    stored_order = [int(a) for a in json.loads(row["canonical_order_json"])]
+    unlinked = 0
     for geom in reg.conn.execute(
-            "SELECT id, coords_hash, n_atoms, method_id FROM geometries WHERE structure_id=?",
-            (sid,)):
+            "SELECT id, coords_hash, n_atoms, method_id, canonical_order_json FROM geometries "
+            "WHERE structure_id=?", (sid,)):
         gid = int(geom["id"])
+        if geom["canonical_order_json"] is None:
+            unlinked += 1
+        elif reg.store.has(geom["coords_hash"]):
+            link = [int(r) for r in json.loads(geom["canonical_order_json"])]
+            lines = reg.store.get(geom["coords_hash"]).decode().strip().splitlines()
+            rows = [ln.split()[0] for ln in lines[2:2 + int(lines[0])]]
+            if sorted(link) != list(range(len(rows))) or len(link) != len(stored_order):
+                problems.append(Problem("error", "geometry_link",
+                                        "link is not a permutation of the geometry's rows",
+                                        structure_id=sid, geometry_id=gid))
+            elif any(rows[link[c]] != g.label(stored_order[c]).element
+                     for c in range(len(link))):
+                problems.append(Problem("error", "geometry_link",
+                                        "link puts the wrong element on a row",
+                                        structure_id=sid, geometry_id=gid))
         if geom["n_atoms"] != derived["n_atoms"]:
             problems.append(Problem("error", "geometry_atom_count",
                                     f"{geom['n_atoms']} atoms vs structure's "
@@ -173,6 +191,11 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
             problems.append(Problem("error", "coords_blob_missing",
                                     f"{geom['coords_hash'][:16]}… not in the store",
                                     structure_id=sid, geometry_id=gid))
+    if unlinked:
+        problems.append(Problem("stale", "geometry_link",
+                                f"{unlinked} geometr{'y' if unlinked == 1 else 'ies'} stored "
+                                f"before rows were linked to the graph (B28): run "
+                                f"scripts/recover_atom_links.py", structure_id=sid))
     return problems
 
 

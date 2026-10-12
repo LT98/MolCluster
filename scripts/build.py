@@ -176,8 +176,9 @@ def main(argv: list[str] | None = None) -> int:
             g = from_rdkit(mol, charge=proto.charge, multiplicity=multiplicity,
                            name=f"{a.name}{proto.label if proto.n_deprotonated else ''}")
             put = put_structure(reg, g, tags=[a.name, "ligand"])
-            put_geometry(reg, put.id, to_xyz(mol, a.name), fidelity=Fidelity.FF, method=FF)
-            put_sites(reg, put.id, perceive(mol))
+            put_geometry(reg, put.id, to_xyz(mol, a.name), fidelity=Fidelity.FF, method=FF,
+                         canonical_order=put.canonical_order)
+            put_sites(reg, put.id, perceive(mol), canonical_order=put.canonical_order)
             ligand_ids[proto.l1] = put.id
             for frag in decompose(g):
                 alias_fragment(reg, frag.l1,
@@ -256,8 +257,10 @@ def main(argv: list[str] | None = None) -> int:
                             put_geometry(reg, cput.id, result.to_xyz(tag),
                                          fidelity=Fidelity.RAW, method=BUILD,
                                          choice_vector=result.choice_vector, seed=0,
-                                         qc=result.report.to_dict())
-                            put_sites(reg, cput.id, perceive(complex_mol))
+                                         qc=result.report.to_dict(),
+                                         canonical_order=cput.canonical_order)
+                            put_sites(reg, cput.id, perceive(complex_mol),
+                                      canonical_order=cput.canonical_order)
                             if cput.created:
                                 built += 1
                             else:

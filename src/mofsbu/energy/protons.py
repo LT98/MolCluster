@@ -51,10 +51,12 @@ def ensure_species(reg: Any, name: str, smiles: str, charge: int, *,
 
     mol = embed_molecule(mol_from_smiles(smiles), seed=7)
     graph = from_rdkit(mol, charge=charge, multiplicity=1, name=name)
-    sid = put_structure(reg, graph, tags=[name, "reference"]).id
+    put = put_structure(reg, graph, tags=[name, "reference"])
+    sid = put.id
     xyz_text = to_xyz(mol, name)
     put_geometry(reg, sid, xyz_text, fidelity=Fidelity.FF,
-                 method=MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF"))
+                 method=MethodSpec(code="rdkit", code_version="2026.03", method="ETKDGv3+MMFF"),
+                 canonical_order=put.canonical_order)
     if target <= Fidelity.FF:
         return sid
     if reg.conn.execute(
@@ -66,7 +68,8 @@ def ensure_species(reg: Any, name: str, smiles: str, charge: int, *,
                             [ln.split()[0] for ln in lines], charge=charge, multiplicity=1,
                             target=target, ml_model=ml_model)
     put_geometry(reg, sid, result.to_xyz(name), fidelity=result.fidelity,
-                 method=result.method, energy=result.energy, converged=result.converged)
+                 method=result.method, energy=result.energy, converged=result.converged,
+                 canonical_order=put.canonical_order)
     return sid
 
 

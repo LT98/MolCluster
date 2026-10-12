@@ -64,7 +64,7 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `bridging_metal_positions` | mechanism B: a bridging ATOM is a centre whose vertices are metal positions. Reads the bonding, not a frame — a lone-pair lobe is the wrong bisector for a bridge | ✅ |
 | ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
-| `geometry/connectivity.py` | **E1**: `connectivity_check` — graph edges broken past 1.30× their ideal length, non-edges formed inside 1.10× (`geometry.distances` lengths). `put_geometry` stores the verdict on every geometry above RAW (`geometries.connectivity_changed`); best-geometry and `energy.reference` never select a `1`. Left NULL with the reason when the geometry's root does not realise the stored graph in its atom order ([B28](BUGS.md#b28)) | ✅ |
+| `geometry/connectivity.py` | **E1**: `connectivity_check` — graph edges broken past 1.30× their ideal length, non-edges formed inside 1.10× (`geometry.distances` lengths). `put_geometry` stores the verdict on every geometry above RAW (`geometries.connectivity_changed`); best-geometry and `energy.reference` never select a `1`. Judged against the graph through the geometry's own link (D30); a geometry with no link is left NULL with the reason ([B28](BUGS.md#b28)) | ✅ |
 | ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
 | `geometry/distances.py` | M–L target distance as a property of the *pair*. `metal_metal_distance` is the M–M half and has **no table behind it**: a named motif is refused, because the element symbols do not carry the bond order | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
@@ -91,7 +91,8 @@ charge, spin — travels with it in a `methods` row.
 | `registry/store.py` | Content-addressed blob store for .xyz | ✅ |
 | `registry/jobs.py` | Runs/tasks queue, claim/complete/cancel/resume | ✅ |
 | ↳ `run_liveness` | is a process still behind this run? pid (proof, same host) + heartbeat (only when nothing is claimed). `sweep_interrupted` acts on it when a process takes the database over | ✅ |
-| `registry/verify.py` | Does every stored row still agree with its recipe? | ✅ |
+| `registry/verify.py` | Does every stored row still agree with its recipe? Includes each geometry's link (D30): a wrong one is an error, a missing one stale | ✅ |
+| `registry/recover.py` | B28: links geometries stored before D30 to their graph — match by bonds, relaxations inherit, pulled-back starts only in the stored numbering; coordinates untouched, mis-keyed site states dropped. Run by `scripts/recover_atom_links.py`, dry run by default | ✅ |
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
 | `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
 | `ui/static/chrome.{js,css}` | The four pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
@@ -183,6 +184,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D27** | A species is entered in the form it exists in the medium; its charge is read off that form, and nothing is protonated upward |
 | **D28** | A released proton goes to water unless the reader names another base (`proton_sink`); a query-time choice, never stored |
 | **D29** | A `place` edge cites nothing; "made of what" is the composed ladder, never the free ion. CN is a construction scaffold — "saturated" is not a node property |
+| **D30** | Coordinates are stored as built; each geometry records its rows' link to canonical positions; nothing reads rows by position across builds (`geometry_graph`) |
 
 **Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
 geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),

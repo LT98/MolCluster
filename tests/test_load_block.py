@@ -93,7 +93,7 @@ def test_a_second_geometry_of_one_identity_loads_with_its_own_frames(reg):
     second = replace(first, geometry=bent, state=None, sites=tuple(
         replace(s, frame=_transform_frame(s.frame, rot, np.zeros(3), np.zeros(3)))
         if s.atom_idx in moved else s for s in first.sites))
-    st = store_block(reg, second)
+    st = store_block(reg, second, distorted=True)     # the cut stretches one C-H
     loaded = load_block(reg, st.structure_id, st.geometry_id)
     want = {(s.atom_idx, s.slot): s.frame["axis"] for s in second.sites if s.frame}
     got = {(s.atom_idx, s.slot): s.frame["axis"] for s in loaded.sites if s.frame}

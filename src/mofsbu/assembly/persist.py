@@ -64,6 +64,9 @@ class Stored:
     choice_digest: str
     n_sites: int
     n_states: int
+    #: The block's link to the stored graph (`Put.canonical_order`, D30): entry c is the
+    #: block atom at canonical position c.
+    canonical_order: tuple[int, ...] = ()
 
 
 def to_xyz(graph: Any, coords: Any, comment: str = "") -> str:
@@ -83,7 +86,7 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
                 leaving_ids: Iterable[int] = (),
                 fidelity: Fidelity = Fidelity.RAW, method: MethodSpec = CONSTRUCT,
                 energy: float | None = None, qc: dict | None = None,
-                l2: str | None = None) -> Stored:
+                l2: str | None = None, distorted: bool = False) -> Stored:
     """Persist one assembled `BuildingBlock`: identity, geometry, sites, provenance.
 
     The order is not arbitrary.  The structure row has to exist before a geometry can hang
@@ -101,6 +104,8 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
 
     `qc` travels onto the geometry row.  A construct whose report is missing looks exactly
     like one that passed, which is the distinction ground rule 9 is about.
+
+    `distorted` is `put_geometry`'s: a construct pulled off its bond lengths on purpose.
     """
     graph, coords = block.graph, block.geometry
     cv = ChoiceVector.coerce(choice_vector)
@@ -135,17 +140,20 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
     geom = put_geometry(reg, put.id, to_xyz(graph, coords, note or graph.name),
                         fidelity=fidelity, method=method, energy=energy,
                         choice_vector=cv.data if cv else None, qc=qc,
-                        seed=seed if seed is not None else (cv.seed if cv else None))
+                        seed=seed if seed is not None else (cv.seed if cv else None),
+                        canonical_order=put.canonical_order, distorted=distorted)
 
-    n_sites = put_sites(reg, put.id, sites, algo=f"inherited/{ALGO_VERSIONS['graph_schema']}")
+    n_sites = put_sites(reg, put.id, sites, algo=f"inherited/{ALGO_VERSIONS['graph_schema']}",
+                        canonical_order=put.canonical_order)
     n_states = put_site_state(reg, put.id, geom.id, list(states.values()), fidelity=fidelity,
                               frames={(s.atom_idx, getattr(s, "slot", 0)): s.frame
-                                      for s in sites if s.frame})
+                                      for s in sites if s.frame},
+                              canonical_order=put.canonical_order)
 
     reaction_id = _edge_for(reg, put.id, prov)
     reg.conn.commit()
     return Stored(put.id, geom.id, reaction_id, put.created, geom.created, tag,
-                  cv.digest if cv else "", n_sites, n_states)
+                  cv.digest if cv else "", n_sites, n_states, tuple(put.canonical_order))
 
 
 def _edge_for(reg: Registry, structure_id: int, prov: Provenance) -> int | None:
@@ -212,11 +220,10 @@ def load_block(reg: Registry, structure_id: int, geometry_id: int | None = None)
     from mofsbu._types import NotBuiltYet
     from mofsbu.assembly.join import BuildingBlock, _transform_frame
     from mofsbu.geometry._linalg import kabsch
-    from mofsbu.registry.api import RegistryError, geometry_xyz, get_graph, get_site_state
+    from mofsbu.registry.api import (RegistryError, geometry_graph, geometry_link, geometry_xyz,
+                                     get_site_state)
     from mofsbu.sites.model import Site
 
-    graph = get_graph(reg, structure_id)
-    nodes = list(graph.nodes())
     if geometry_id is None:
         row = reg.conn.execute("SELECT id FROM geometries WHERE structure_id=? ORDER BY id "
                                "LIMIT 1", (structure_id,)).fetchone()
@@ -228,18 +235,17 @@ def load_block(reg: Registry, structure_id: int, geometry_id: int | None = None)
     if grow is None or int(grow["structure_id"]) != structure_id:
         raise RegistryError(f"geometry {geometry_id} is not a geometry of structure "
                             f"{structure_id}")
+    # The graph numbered like THIS geometry's rows, and canonical position -> row (D30): the
+    # geometry's coordinates are as its build wrote them, whichever build that was.
+    graph = geometry_graph(reg, geometry_id)
+    nodes = list(graph.nodes())
     lines = geometry_xyz(reg, geometry_id).splitlines()
     n = int(lines[0])
     symbols = [ln.split()[0] for ln in lines[2:2 + n]]
     coords = np.array([[float(v) for v in ln.split()[1:4]] for ln in lines[2:2 + n]])
-    if symbols != [graph.label(i).element for i in nodes]:
-        raise NotBuiltYet(
-            f"geometry {geometry_id} lists its atoms in a different order from structure "
-            f"{structure_id}'s graph (another route to this node, D22). Mapping it onto the "
-            f"graph needs an isomorphism, which load_block does not do yet")
     row_of = {node: k for k, node in enumerate(nodes)}
 
-    inv = {c: a for a, c in canonical_map(reg, structure_id).items()}
+    inv = dict(enumerate(geometry_link(reg, geometry_id)))
     catalog = reg.conn.execute("SELECT * FROM site_catalog WHERE structure_id=? "
                                "ORDER BY canonical_idx, slot", (structure_id,)).fetchall()
     sites, anchors = [], []

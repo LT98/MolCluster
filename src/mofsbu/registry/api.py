@@ -30,10 +30,17 @@ _BRIDGE_RANK = {BridgeClass.NONE: 0, BridgeClass.TERMINAL: 1, BridgeClass.MU2: 2
 
 
 class Put(NamedTuple):
-    """`created` distinguishes a fresh row from a recognised duplicate."""
+    """`created` distinguishes a fresh row from a recognised duplicate.
+
+    `canonical_order` (from `put_structure`) is the CALLER's graph in canonical order: entry
+    `c` is the caller's atom at canonical position `c`.  Pass it with anything the caller
+    indexed in its own numbering — coordinates, sites, states — so they are linked to the
+    stored structure by canonical position, not by an atom number (D30, B28).
+    """
 
     id: int
     created: bool
+    canonical_order: list[int] | None = None
 
 
 class RegistryError(MofsbuError):
@@ -226,7 +233,84 @@ def put_structure(
         )
     if provenance is not None:
         put_reaction(reg, sid, provenance)
-    return Put(sid, created)
+    if not created:
+        _check_canonicalisation(reg, sid)
+    return Put(sid, created, list(order))
+
+
+def _check_canonicalisation(reg: Registry, structure_id: int) -> None:
+    """Canonical positions only link two numberings made by the same recipe."""
+    row = reg.conn.execute("SELECT algo_canon FROM structures WHERE id=?",
+                           (structure_id,)).fetchone()
+    if row is not None and row["algo_canon"] != ALGO_VERSIONS["canonical_order"]:
+        raise RegistryError(
+            f"structure {structure_id} froze its canonical order under "
+            f"{row['algo_canon']!r}, this code computes {ALGO_VERSIONS['canonical_order']!r}; "
+            f"positions from two recipes do not name the same atoms")
+
+
+def _site_cmap(reg: Registry, structure_id: int,
+               canonical_order: list[int] | None) -> dict[int, int]:
+    """{caller atom -> canonical position}: the caller's own map, else the stored graph's."""
+    if canonical_order is None:
+        return canonical_map(reg, structure_id)
+    return {int(atom): c for c, atom in enumerate(canonical_order)}
+
+
+def _stored_order(reg: Registry, structure_id: int) -> list[int]:
+    row = reg.conn.execute("SELECT canonical_order_json FROM structures WHERE id=?",
+                           (structure_id,)).fetchone()
+    if row is None:
+        raise RegistryError(f"no structure {structure_id}")
+    return [int(a) for a in json.loads(row["canonical_order_json"])]
+
+
+def _graph_in_rows(reg: Registry, structure_id: int, link: list[int]) -> TypedGraph:
+    """The structure's graph renumbered so atom k describes geometry row k."""
+    graph = get_graph(reg, structure_id)
+    stored = _stored_order(reg, structure_id)
+    if [int(r) for r in link] == stored:
+        return graph
+    if sorted(int(r) for r in link) != list(range(len(graph))):
+        raise RegistryError(f"a geometry link of structure {structure_id} is not a "
+                            f"permutation of its {len(graph)} atoms")
+    row_of = {stored[c]: int(link[c]) for c in range(len(stored))}
+    d = graph.to_dict()
+    by_old = {a["i"]: a for a in d["atoms"]}
+    old_of = {r: s for s, r in row_of.items()}
+    d["atoms"] = [dict(by_old[old_of[k]], i=k) for k in range(len(stored))]
+    d["bonds"] = [dict(b, i=row_of[b["i"]], j=row_of[b["j"]]) for b in d["bonds"]]
+    return TypedGraph.from_dict(d)
+
+
+def geometry_link(reg: Registry, geometry_id: int) -> list[int]:
+    """Geometry `geometry_id`'s link: entry `c` is the row of the atom at canonical position c.
+
+    Refuses rather than guesses when the geometry predates the link (B28).
+    """
+    row = reg.conn.execute("SELECT canonical_order_json FROM geometries WHERE id=?",
+                           (geometry_id,)).fetchone()
+    if row is None:
+        raise RegistryError(f"no geometry {geometry_id}")
+    if row["canonical_order_json"] is None:
+        raise RegistryError(
+            f"geometry {geometry_id} was stored before rows were linked to the graph (B28); "
+            f"its rows cannot be read against the structure until "
+            f"scripts/recover_atom_links.py has recovered the link")
+    return [int(r) for r in json.loads(row["canonical_order_json"])]
+
+
+def geometry_graph(reg: Registry, geometry_id: int) -> TypedGraph:
+    """The structure's graph numbered like geometry `geometry_id`'s rows.
+
+    The only way to read a geometry's rows against its structure (D30): atom k of the
+    returned graph is row k of the geometry, whichever build numbered it.
+    """
+    row = reg.conn.execute("SELECT structure_id FROM geometries WHERE id=?",
+                           (geometry_id,)).fetchone()
+    if row is None:
+        raise RegistryError(f"no geometry {geometry_id}")
+    return _graph_in_rows(reg, int(row["structure_id"]), geometry_link(reg, geometry_id))
 
 
 def _put_structure_metals(reg: Registry, sid: int, g: TypedGraph) -> None:
@@ -419,8 +503,18 @@ def put_geometry(
     choice_vector: ChoiceVector | dict | None = None,
     seed: int | None = None,
     qc: dict | None = None,
+    canonical_order: list[int] | None = None,
+    distorted: bool = False,
 ) -> Put:
     """Store one geometry realisation.  `method` is required, not optional.
+
+    Coordinates are stored exactly as built, with their link to the structure's graph
+    (D30): `canonical_order` is the builder's (`Put.canonical_order`).  Without it, a
+    relaxation inherits its parent's (it keeps its input's rows), and anything else is
+    taken to be in the stored graph's numbering — accepted only if its elements line up
+    and, for a RAW construct, no graph bond is broken, since a construct places every bond
+    at its length and a broken one means another numbering.  `distorted` exempts a start
+    pulled apart on purpose (a route `perturb`).
 
     Fidelity is a property of the geometry, never of the structure (D4), so one
     identity can carry a raw construct, an xTB relaxation and a DFT relaxation at once.
@@ -457,6 +551,8 @@ def put_geometry(
             f"geometry has {n_atoms} atoms, structure {structure_id} has {struct['n_atoms']}"
         )
 
+    link = _link_for(reg, structure_id, xyz_text, fidelity, canonical_order, relaxed_from,
+                     distorted)
     mid = method_id(reg, method)
     coords_hash = reg.store.put_text(xyz_text)
     row = reg.conn.execute(
@@ -465,20 +561,20 @@ def put_geometry(
     ).fetchone()
     if row is not None:
         return Put(int(row["id"]), False)
-    changed, conn_json = _connectivity_verdict(reg, structure_id, xyz_text, fidelity,
-                                               relaxed_from)
+    changed, conn_json = _connectivity_verdict(reg, structure_id, xyz_text, fidelity, link)
 
     try:
         cur = reg.conn.execute(
             "INSERT INTO geometries (structure_id, coords_hash, n_atoms, fidelity, method_id, "
             " energy, converged, relaxed_from, choice_vector_digest, choice_vector_json, seed, "
-            " qc_json, connectivity_changed, connectivity_json, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " qc_json, connectivity_changed, connectivity_json, canonical_order_json, "
+            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
          cv.digest if cv is not None else None,
          cv.to_json() if cv is not None else None,
-             seed, json.dumps(qc) if qc else None, changed, conn_json, utcnow()),
+             seed, json.dumps(qc) if qc else None, changed, conn_json,
+             None if link is None else json.dumps(link), utcnow()),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
         existing = reg.conn.execute(
@@ -498,52 +594,71 @@ def _parse_xyz(xyz_text: str) -> tuple[list[str], list[list[float]]]:
     return [a[0] for a in atoms], [[float(x) for x in a[1:4]] for a in atoms]
 
 
+def _link_for(reg: Registry, structure_id: int, xyz_text: str, fidelity: Fidelity,
+              canonical_order: list[int] | None, relaxed_from: int | None,
+              distorted: bool) -> list[int] | None:
+    """The new geometry's rows-to-graph link, or a refusal (D30)."""
+    from mofsbu.geometry.connectivity import connectivity_check
+
+    n = int(xyz_text.strip().splitlines()[0])
+    if canonical_order is not None:
+        _check_canonicalisation(reg, structure_id)
+        link = [int(a) for a in canonical_order]
+        if sorted(link) != list(range(n)):
+            raise RegistryError(f"canonical_order is not a permutation of {n} atoms")
+    elif relaxed_from is not None:
+        row = reg.conn.execute("SELECT canonical_order_json FROM geometries WHERE id=?",
+                               (relaxed_from,)).fetchone()
+        if row is None:
+            raise RegistryError(f"relaxed_from geometry {relaxed_from} does not exist")
+        return None if row["canonical_order_json"] is None else \
+            [int(r) for r in json.loads(row["canonical_order_json"])]
+    else:
+        link = _stored_order(reg, structure_id)
+    symbols, coords = _parse_xyz(xyz_text)
+    graph = _graph_in_rows(reg, structure_id, link)
+    try:
+        report = connectivity_check(symbols, coords, graph)
+    except MofsbuError as exc:
+        raise RegistryError(
+            f"{exc}: these coordinates are not in the numbering they were linked to "
+            f"structure {structure_id} by — pass put_structure's canonical_order") from None
+    if fidelity <= Fidelity.RAW and not distorted and report.broken:
+        raise RegistryError(
+            f"this construct does not realise structure {structure_id}'s graph through its "
+            f"link ({report.describe()}); a construct places every bond at its length, so its "
+            f"atoms are numbered differently — pass put_structure's canonical_order, or "
+            f"distorted=True for a start pulled apart on purpose")
+    return link
+
+
+def _parse_xyz(xyz_text: str) -> tuple[list[str], list[list[float]]]:
+    lines = xyz_text.strip().splitlines()
+    atoms = [ln.split() for ln in lines[2:2 + int(lines[0])]]
+    return [a[0] for a in atoms], [[float(x) for x in a[1:4]] for a in atoms]
+
+
 def _connectivity_verdict(reg: Registry, structure_id: int, xyz_text: str,
-                          fidelity: Fidelity, relaxed_from: int | None,
+                          fidelity: Fidelity, link: list[int] | None,
                           ) -> tuple[int | None, str | None]:
     """E1: (connectivity_changed, connectivity_json) for a geometry about to be stored.
 
     Above RAW only: a construct is placed FROM the graph, so a contact it gets wrong is a
-    clash, which QC reports.  A verdict is only as good as the atom order it was taken in:
-    a geometry that reached an existing structure may be numbered differently from the
-    stored graph ([B28](docs/BUGS.md#b28)).  So the geometry's root — itself, or the first
-    geometry up its `relaxed_from` chain — must realise the graph with no bond broken;
-    otherwise the verdict is left NULL and the reason recorded, rather than flagging (and
-    excluding) a geometry whose bonds were merely read under the wrong numbering.
+    clash, which QC reports.  The geometry is judged against the graph read through its own
+    link (D30); a geometry with no link (stored before it, B28) is left NULL with the reason
+    rather than judged against atoms its rows may not be.
     """
     if fidelity <= Fidelity.RAW:
         return None, None
     from mofsbu.geometry.connectivity import connectivity_check
 
-    graph = get_graph(reg, structure_id)
     version = ALGO_VERSIONS["connectivity"]
-
-    def unchecked(why: str) -> tuple[None, str]:
-        return None, json.dumps({"unchecked": why, "version": version})
-
-    root, root_text = None, xyz_text
-    seen: set[int] = set()
-    parent = relaxed_from
-    while parent is not None and parent not in seen:
-        seen.add(parent)
-        row = reg.conn.execute("SELECT relaxed_from, coords_hash FROM geometries WHERE id=?",
-                               (parent,)).fetchone()
-        if row is None:
-            break
-        root, root_text = parent, reg.store.get(row["coords_hash"]).decode()
-        parent = row["relaxed_from"]
-    try:
-        if connectivity_check(*_parse_xyz(root_text), graph).broken:
-            return unchecked(f"{'root geometry ' + str(root) if root else 'this geometry'} "
-                             f"does not realise the structure's graph in this atom order "
-                             f"(B28)")
-        report = connectivity_check(*_parse_xyz(xyz_text), graph)
-    except MofsbuError as exc:
-        return unchecked(f"{str(exc).splitlines()[0]} (B28)")
-    detail = {**report.to_dict(), "version": version}
-    if root is not None:
-        detail["root"] = root
-    return int(report.changed), json.dumps(detail)
+    if link is None:
+        return None, json.dumps({"unchecked": "no link between this geometry's rows and the "
+                                              "structure's graph (B28)", "version": version})
+    report = connectivity_check(*_parse_xyz(xyz_text),
+                                _graph_in_rows(reg, structure_id, link))
+    return int(report.changed), json.dumps({**report.to_dict(), "version": version})
 
 
 #: Two runs of one correction method on one set of coordinates are one number.
@@ -719,16 +834,16 @@ def backfill_choice_digests(reg: Registry, *, dry_run: bool = False) -> int:
 def backfill_connectivity(reg: Registry, *, dry_run: bool = False) -> dict[str, Any]:
     """Give geometries stored before E1 their connectivity verdict.  Returns counts.
 
-    Touches only rows above RAW with no verdict yet (`connectivity_json IS NULL`).  The
-    verdict is `put_geometry`'s, so a geometry whose atom order cannot be trusted is
-    recorded `unchecked` with its reason (B28), not judged.  Moves the best-geometry
+    Touches rows above RAW with no verdict yet: never judged, or left `unchecked` for want
+    of a link (B28) — after `scripts/recover_atom_links.py` those have one.  The verdict is
+    `put_geometry`'s, read through each geometry's own link.  Moves the best-geometry
     pointer of every structure that gains a `1`.
 
     Not called by `migrate`, for the reason `backfill_choice_digests` is not.
     """
     rows = reg.conn.execute(
-        "SELECT id, structure_id, coords_hash, fidelity, relaxed_from FROM geometries "
-        "WHERE connectivity_json IS NULL AND fidelity > ? ORDER BY id",
+        "SELECT id, structure_id, coords_hash, fidelity, canonical_order_json FROM geometries "
+        "WHERE connectivity_changed IS NULL AND fidelity > ? ORDER BY id",
         (int(Fidelity.RAW),)).fetchall()
     out: dict[str, Any] = {"checked": 0, "changed": 0, "unchecked": 0, "refused": {}}
     touched: set[int] = set()
@@ -736,7 +851,9 @@ def backfill_connectivity(reg: Registry, *, dry_run: bool = False) -> dict[str, 
         try:
             changed, detail = _connectivity_verdict(
                 reg, int(row["structure_id"]), reg.store.get(row["coords_hash"]).decode(),
-                Fidelity(int(row["fidelity"])), row["relaxed_from"])
+                Fidelity(int(row["fidelity"])),
+                None if row["canonical_order_json"] is None
+                else [int(r) for r in json.loads(row["canonical_order_json"])])
         except (MofsbuError, OSError, ValueError) as exc:
             why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
             out["refused"][why] = out["refused"].get(why, 0) + 1
@@ -761,11 +878,12 @@ def backfill_connectivity(reg: Registry, *, dry_run: bool = False) -> dict[str, 
 # ── sites (M4) ───────────────────────────────────────────────────────────────
 
 def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None = None,
-              reperceive: bool = False) -> int:
+              reperceive: bool = False, canonical_order: list[int] | None = None) -> int:
     """Write the site catalog for a structure.  Perceive ONCE per structure (D5).
 
-    Sites are keyed by CANONICAL atom index, taken from the order frozen at insert, so
-    they survive recall and re-ordering.
+    Sites are keyed by CANONICAL atom index, so they survive recall and re-ordering.  The
+    index comes from the numbering the sites were perceived in: pass the builder's
+    `canonical_order` (`Put.canonical_order`) whenever that is not the stored graph's (B28).
 
     **A structure that already has a catalog keeps it, unless that catalog was written by
     a different version of perception.**  Keeping it is the D5 rule: `site_catalog` is
@@ -790,7 +908,7 @@ def put_sites(reg: Registry, structure_id: int, sites: list, *, algo: str | None
     to fix.  Pass `reperceive=True` to replace deliberately at any version.
     """
     algo = algo or f"perception/{ALGO_VERSIONS['perception']}"
-    cmap = canonical_map(reg, structure_id)
+    cmap = _site_cmap(reg, structure_id, canonical_order)
     existing = get_sites(reg, structure_id)
     # Stale means OLDER, which is a comparison within one recipe — `perception/1` against
     # `perception/2`.  A catalog from a different recipe entirely (`inherited/…`, written
@@ -837,7 +955,8 @@ def get_sites(reg: Registry, structure_id: int) -> list:
         (structure_id,)))
 
 
-def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
+def catalog_drift(reg: Registry, structure_id: int, sites: list, *,
+                  canonical_order: list[int] | None = None) -> list[str]:
     """Donor types where a fresh perception disagrees with the stored catalog.
 
     Expected to be empty, and now a guard rather than a known finding.  It was written
@@ -857,7 +976,7 @@ def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
     perception that becomes route-dependent again would silently tell the second route it
     was wrong about its own donors.  Reported, never swallowed.
     """
-    cmap = canonical_map(reg, structure_id)
+    cmap = _site_cmap(reg, structure_id, canonical_order)
     # Donors only.  Vacancies are a property of the GEOMETRY that was built — how many
     # vertices the placer left empty — not of the identity, so two routes to one structure
     # legitimately differ in them and comparing them here would report drift for a
@@ -874,7 +993,8 @@ def catalog_drift(reg: Registry, structure_id: int, sites: list) -> list[str]:
 
 def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: list,
                    *, fidelity: Fidelity = Fidelity.RAW,
-                   frames: dict[tuple[int, int], dict] | None = None) -> int:
+                   frames: dict[tuple[int, int], dict] | None = None,
+                   canonical_order: list[int] | None = None) -> int:
     """Write per-geometry site state.  The second tier of D5.
 
     Keyed `(site_id, geometry_id)`: one structure's sites have as many state rows as it
@@ -886,12 +1006,15 @@ def put_site_state(reg: Registry, structure_id: int, geometry_id: int, states: l
     across geometries would count one site once per relaxation, and a structure relaxed
     twice would look twice as reactive as the same structure relaxed once.
 
+    States and `frames` are in the numbering of the build that computed them; pass its
+    `canonical_order` when that is not the stored graph's (B28).
+
     `frames`, keyed `(atom_idx, slot)` like the states, are this geometry's own site frames.
     The catalog keeps one identity's first frames (D5); these are the ones `load_block` needs
     to join onto THIS geometry.
     """
     frames = frames or {}
-    cmap = canonical_map(reg, structure_id)
+    cmap = _site_cmap(reg, structure_id, canonical_order)
     # Keyed by (canonical_idx, slot), not by atom alone: a metal carries one catalog row
     # per vacant vertex, all on its own atom, so an atom-keyed lookup would collapse every
     # vacancy of a centre onto whichever row came back last and write four states onto one

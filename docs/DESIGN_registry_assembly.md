@@ -733,6 +733,28 @@ coordinates.
   (`test_the_co_ligand_ladder_is_built_and_connected`), `tests/test_path_energy.py`
   (`test_a_route_is_judged_on_its_net_equation_not_its_legs`).
 
+- **D30 (B28)** **A geometry's coordinates are stored as its build wrote them, with the link
+  from canonical positions to its rows; nothing reads a geometry's rows by position against a
+  graph numbered by another build.** A structure stores one graph, numbered by whichever build
+  created it; later builds of the same species number its atoms their own way (SMILES order,
+  component order, join argument order), and their rows used to be read through the first
+  build's numbering. The link — `geometries.canonical_order_json`, entry c = the row of the atom
+  at canonical position c — comes free: `put_structure` canonicalises every incoming graph and
+  returns that order (`Put.canonical_order`). Site rows were always meant to be keyed by
+  canonical index (D5); the writers now take it from the build's own map. Readers go through
+  `registry.geometry_graph` (the graph renumbered like the geometry's rows); a geometry with no
+  link is refused, never paired by position. A relaxation inherits its parent's link. Among
+  symmetry-equivalent atoms the link may pair either way, which is the same chemistry. A RAW
+  construct whose link leaves a bond broken is refused (it is in another numbering) unless it
+  is `distorted` on purpose. Coordinates are never renumbered, so there is no reconciliation
+  step between builds or between machines. Tests: `tests/test_atom_links.py`
+  (`test_a_second_spelling_is_stored_as_built_and_linked`,
+  `test_site_states_of_a_second_build_sit_on_its_own_rows`,
+  `test_e1_judges_a_second_build_and_a_relaxation_inherits_its_link`,
+  `test_load_block_of_a_second_build_puts_its_donor_sites_on_oxygen`,
+  `test_recovery_links_without_touching_coordinates_and_drops_miskeyed_states`),
+  `tests/test_connectivity.py::test_coordinates_in_another_numbering_without_their_link_are_refused`.
+
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in
 [`archive/DESIGN_history.md`](archive/DESIGN_history.md).

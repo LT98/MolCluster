@@ -195,12 +195,14 @@ def labels_for(reg: Any, structure_id: int, block: Any, prefix: str) -> dict[str
 
     ``p`` every atom; ``p.m0``… the metals; ``p.d0``… the OPEN donors; ``p.L0``… each ligand
     fragment; ``p.<formula>`` every ligand fragment of that formula (``p.H2O``: the waters).
+    Ordered by the block's own canonical map: `load_block` numbers the block like the
+    geometry it read (D30), so the stored structure's map would name other atoms.
     """
+    from mofsbu.graph.canon import canonical_index_map
     from mofsbu.identity.keys import hill_formula
-    from mofsbu.registry.api import canonical_map
 
-    cmap = canonical_map(reg, structure_id)
     g = block.graph
+    cmap = canonical_index_map(g)
     out: dict[str, list[int]] = {prefix: list(g.nodes())}
     for k, m in enumerate(sorted(g.metals(), key=cmap.get)):
         out[f"{prefix}.m{k}"] = [m]
