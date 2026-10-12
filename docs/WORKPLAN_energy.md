@@ -133,7 +133,7 @@ Construction, identity, clash QC, choice vectors (`runner`, `assembly/`, `geomet
 - **E1 reads each geometry through its own link (D30).** A geometry is judged against the
   structure's graph renumbered like its rows, whichever build wrote them. One stored before the
   link existed is left NULL with the reason until `scripts/recover_atom_links.py` has linked it
-  ([B28](BUGS.md#b28)). Measured with the numbering accounted for (2026-10-08, OMOL-0): about
+  ([B28](archive/BUGS_resolved.md)). Measured with the numbering accounted for (2026-10-08, OMOL-0): about
   half of ML geometries change connectivity for real — a donor O closing onto the metal (median
   2.01 Å), a water or axial O leaving (~3.0 Å), a proton crossing, and in `THQ_run` some ligands
   coming apart.
@@ -288,8 +288,10 @@ models from the same start, LBFGS at fmax 0.05 eV/Å (0.20 run also kept).
 The `spice_wB97M` head gives the same picture (median RMSD 0.40 Å, median (c) 0.39 eV, top-1
 11/29). Two findings outside the comparison:
 
-- **Metric (a) indicts today's relaxer as much as MH** — *these counts include same-element
-  atom-order mismatches ([B28](BUGS.md#b28)); re-measure once B28 is fixed.* 62 of 84 Ni relaxations (74 %) change
+- **Metric (a) indicts today's relaxer as much as MH** — *these counts included same-element
+  atom-order mismatches ([B28](archive/BUGS_resolved.md)); re-measured with every geometry read
+  through its link (2026-10-12): 5892 of 10946 ML geometries on `salt_study_k1` (54 %) and 4511 of
+  8781 on `THQ_run` (51 %) change connectivity — lower, and still the finding.* 62 of 84 Ni relaxations (74 %) change
   connectivity under OMOL-0 at fmax 0.05 (52, 62 %, at 0.20), and MH is no different: a carboxylate O moving onto Ni,
   a water leaving to 3–6 Å, a proton crossing an H-bond. E1 is the gate this needs.
 - Disagreement with OMOL-0 is not evidence against MH. Only DFT can say which minimum is

@@ -30,39 +30,28 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
 | [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
-| [B28](#b28) | correctness | registry data | Geometries stored before D30 have no link from their rows to the graph, and their site states were keyed through another build's numbering. **Fixed in code; open until the main registries are recovered** (`scripts/recover_atom_links.py`) |
+| [B29](#b29) | correctness | `identity/isomers.py` | `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) |
 
 ---
 
-## B28
+## B29
 
-**A geometry is stored in the atom order of whatever built it, not the order of the graph it is
-filed under.** `correctness` · `registry/api.put_structure`, `put_geometry`, `put_site_state`
+**The L2 tag keys each metal centre by its canonical index, and a canonical index names an atom
+only up to symmetry.** `correctness` (latent) · `identity/isomers.isomer_tag`
 
-`put_structure` deduplicates on identity and returns the existing id; the caller then stores its
-coordinates and site states in its OWN graph's atom order. The stored graph is the first
-build's, and `put_geometry` checks only the atom count. Two builds that reach one species by
-different paths (two SMILES spellings, a join versus a placement, two join orders) number its
-atoms differently, so every geometry after the first can disagree with the graph index by
-index — and `put_site_state` maps the new build's atom indices through the STORED structure's
-canonical map, so its states land on the wrong catalog rows.
+`isomer_tag` writes one `canonical_index:arrangement` part per centre. Among symmetry-equivalent
+atoms, which one gets which canonical index is a tie the canonicalisation breaks by input order:
+over 360 random renumberings of the fixture graphs (2026-10-08), an atom's canonical index
+changed in 298, while its orbit (the smallest canonical position among the atoms symmetry makes
+equivalent) changed in none. So a dimer whose two equivalent metals carry different arrangements
+could be tagged `0:cis;1:trans` by one build and `0:trans;1:cis` by another — one species under
+two L2 keys, i.e. two identity rows. Latent: L2 is not written yet (B2), and no stored structure
+is polynuclear (all five `data/` registries, 2026-10-12); M6 builds exactly these.
 
-Measured on copies of the main registries (2026-10-08): the first RAW construct of a structure
-realises its graph in 1113/1113 (`salt_study_k1`), 1079/1079 (`registry`) and 4230/4233
-(`THQ_run`) cases; constructs that reach an existing structure do in 1757/11250, 464/3421 and
-1480/14326. Of those that do not, 4767 and 219 differ even in element order; of a sample of 558
-whose elements line up, 555 were the stored graph up to atom renumbering. Energies are
-unaffected; anything that reads coordinates or site states by index is: E1 (which now leaves
-such geometries unchecked), site states and `n_open_sites`, `persist.load_block`
-(which refuses only an element-order mismatch), and `compare_relaxers`' metrics.
-
-**Fixed in code (D30, 2026-10-12).** Coordinates are stored as built; each geometry records
-its rows' link to canonical positions (`geometries.canonical_order_json`); site writers key
-through the build's own canonical map; every reader goes through `registry.geometry_graph`.
-The entry stays open for the data: geometries written before have no link, readers refuse
-them, and `scripts/recover_atom_links.py --apply --connectivity` links them (coordinates
-untouched; site states keyed through the wrong map are dropped; dry run by default). Close it
-when `data/registry.db`, `salt_study_k1.db`, `mvp_ni_thq_cl.db` and `THQ_run.db` are recovered.
+**Fix direction.** Key centres by orbit (orbits come free from the generators
+`graph/canon._canonicalise` already finds; checked equal to brute-force orbits on every
+fixture), and within one orbit report the arrangements as a sorted multiset. An
+`l2_isomer_tag` version bump. Must land before B2 is closed.
 
 ---
 
@@ -118,6 +107,14 @@ because it breaks D2 rather than merely blurring it.
 So what closes B2 is **wiring both paths together**, not filling in a stub. Accepted cost of
 D19 when that happens: the same species built before and after can occupy two rows,
 distinguishable by `structures.algo_l2`.
+
+**What wiring them needs (2026-10-12).** (1) [B29](#b29) first, or the tag itself depends on
+numbering. (2) A relaxation can change an arrangement the way it changes bonds under E1 (cis
+relaxing to trans): the tag is derived from the construct, so a relaxed geometry needs the same
+post-relax check E1 gives connectivity, or it is filed under an isomer it no longer is. (3) Every
+structure in all five `data/` registries carries `''` (4240, 1123, 1086, 83, 81); under D19,
+switching L2 on files new builds apart from those rows, splitting each species across an untagged
+and a tagged row unless the registries are rebuilt — that is a decision to make before wiring.
 
 ---
 
