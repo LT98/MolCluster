@@ -123,12 +123,22 @@ Construction, identity, clash QC, choice vectors (`runner`, `assembly/`, `geomet
 ### Stage 2 — Relax and triage *(mostly built)*
 - **Built:** `runner._execute_relax` → `energy/relax.relax_geometry`, reuse on (source geometry,
   method), fidelity per geometry.
-- **Missing — gate E1: check connectivity after relaxation.** `_execute_relax` states the gap: a
-  relaxation that forms or breaks a bond (a water drifting off, a proton moving) is filed under
-  the old identity. Derive bonding from the relaxed coordinates with the pair distances in
-  `geometry/distances.py`, compare with the stored graph, and on mismatch mark the geometry
-  `connectivity_changed` and exclude it from energy selection (a D11 `derived_from` record comes
-  later). **No number is reported before this lands.**
+- **Built — gate E1: check connectivity after relaxation** (`geometry/connectivity.py`).
+  `put_geometry` compares every geometry above RAW with its structure's graph (edges broken past
+  1.30×, non-edges formed inside 1.10× of the `geometry/distances.py` lengths) and stores
+  `connectivity_changed`; best-geometry and `energy/reference` never select a changed one, and
+  an equation left without an energy says so. `registry.backfill_connectivity` gives rows
+  written before E1 their verdict. Still missing: the D11 `derived_from` record filing a
+  changed geometry under the species it became.
+- **E1 only judges what it can read — [B28](BUGS.md#b28).** A geometry that reached an existing
+  structure may be numbered differently from the stored graph, and a verdict read under the
+  wrong numbering would exclude a good energy. So a verdict is recorded only when the
+  geometry's root (itself, or the first geometry up its `relaxed_from` chain) realises the
+  graph in its atom order; otherwise it is left NULL with the reason. On copies of the main
+  registries that leaves most later-build relaxations unchecked until B28 is fixed. Measured
+  once with the numbering repaired (2026-10-08, OMOL-0): about half of ML geometries change
+  connectivity for real — a donor O closing onto the metal (median 2.01 Å), a water or axial
+  O leaving (~3.0 Å), a proton crossing, and in `THQ_run` some ligands coming apart.
 - **Missing — pruning within identity.** Keep conformers within 0.25 eV (~10 kT; proposal) of the
   identity minimum. The rest are kept, below the escalation line. This settles C2 for ranking.
 
@@ -280,7 +290,8 @@ models from the same start, LBFGS at fmax 0.05 eV/Å (0.20 run also kept).
 The `spice_wB97M` head gives the same picture (median RMSD 0.40 Å, median (c) 0.39 eV, top-1
 11/29). Two findings outside the comparison:
 
-- **Metric (a) indicts today's relaxer as much as MH.** 62 of 84 Ni relaxations (74 %) change
+- **Metric (a) indicts today's relaxer as much as MH** — *these counts include same-element
+  atom-order mismatches ([B28](BUGS.md#b28)); re-measure once B28 is fixed.* 62 of 84 Ni relaxations (74 %) change
   connectivity under OMOL-0 at fmax 0.05 (52, 62 %, at 0.20), and MH is no different: a carboxylate O moving onto Ni,
   a water leaving to 3–6 Å, a proton crossing an H-bond. E1 is the gate this needs.
 - Disagreement with OMOL-0 is not evidence against MH. Only DFT can say which minimum is
@@ -490,7 +501,7 @@ first term); corrections never borrowed across geometries (C17); absent ≠ zero
 | # | Slice | Size | Unblocks | Milestone |
 |---|---|---|---|---|
 | E0 | this plan; the Q2 reframing recorded with the salt-study results | S | — | — |
-| E1 | connectivity check after relaxation + `connectivity_changed` | S–M | every reported number; E-MH metric (a) | M7 |
+| E1 | connectivity check after relaxation + `connectivity_changed` — **built** (2026-10-08); verdicts limited to geometries in their graph's atom order until [B28](BUGS.md#b28) | S–M | every reported number; E-MH metric (a) | M7 |
 | E-MH | MACE-MH and MACE-POLAR-1 backends + the §3a comparisons with MACE-OMOL-0 — **done** (2026-10-05); the relaxer call is open | S–M | the stage-2 relaxer | M7 |
 | F0–F6 | the partial-relaxation funnel (§3a, "A smarter funnel") | M | the stage-2 relaxer at screening scale | M7 |
 | E2 | screening tier labelled; ALPB+GBSA spread; `hydration_change`; pH and water reference beside the proton sink (C21); the solvation §3a pricing rules | S | honest screening | M7 |

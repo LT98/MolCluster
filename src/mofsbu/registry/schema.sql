@@ -163,6 +163,12 @@ CREATE TABLE IF NOT EXISTS geometries (
     seed                 INTEGER DEFAULT NULL,
 
     qc_json              TEXT    DEFAULT NULL,          -- RESERVED M6 (clash/bond/inter-centre)
+    -- E1: does this geometry still have its structure's graph?  NULL = no verdict (a RAW
+    -- construct defines the graph; `connectivity_json` says why for anything above RAW —
+    -- e.g. an atom order that cannot be trusted, B28), 0 = intact, 1 = a bond broke or
+    -- formed.  A 1 is never selected for an energy or as best geometry.
+    connectivity_changed INTEGER DEFAULT NULL,
+    connectivity_json    TEXT    DEFAULT NULL,          -- broken/formed pairs, or why unchecked
     created_at           TEXT    NOT NULL,
     UNIQUE (structure_id, coords_hash, method_id)
 );

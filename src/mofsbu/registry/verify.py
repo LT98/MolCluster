@@ -140,7 +140,8 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
     #    rule (`api._refresh_best_geometry`): energy is never compared across method rows
     best = reg.conn.execute(
         "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
-        "LEFT JOIN methods m ON m.id = g.method_id WHERE g.structure_id=? "
+        "LEFT JOIN methods m ON m.id = g.method_id "
+        "WHERE g.structure_id=? AND g.connectivity_changed IS NOT 1 "
         "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
         "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
         "         COALESCE(m.id, 0) ASC, "

@@ -30,6 +30,37 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
 | [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
+| [B28](#b28) | correctness | `registry/api.py` | A geometry that reaches an existing structure is stored in its own build's atom order, not the stored graph's — and so are its site states |
+
+---
+
+## B28
+
+**A geometry is stored in the atom order of whatever built it, not the order of the graph it is
+filed under.** `correctness` · `registry/api.put_structure`, `put_geometry`, `put_site_state`
+
+`put_structure` deduplicates on identity and returns the existing id; the caller then stores its
+coordinates and site states in its OWN graph's atom order. The stored graph is the first
+build's, and `put_geometry` checks only the atom count. Two builds that reach one species by
+different paths (two SMILES spellings, a join versus a placement, two join orders) number its
+atoms differently, so every geometry after the first can disagree with the graph index by
+index — and `put_site_state` maps the new build's atom indices through the STORED structure's
+canonical map, so its states land on the wrong catalog rows.
+
+Measured on copies of the main registries (2026-10-08): the first RAW construct of a structure
+realises its graph in 1113/1113 (`salt_study_k1`), 1079/1079 (`registry`) and 4230/4233
+(`THQ_run`) cases; constructs that reach an existing structure do in 1757/11250, 464/3421 and
+1480/14326. Of those that do not, 4767 and 219 differ even in element order; of a sample of 558
+whose elements line up, 555 were the stored graph up to atom renumbering. Energies are
+unaffected; anything that reads coordinates or site states by index is: E1 (which now leaves
+such geometries unchecked), site states and `n_open_sites`, `persist.load_block`
+(which refuses only an element-order mismatch), and `compare_relaxers`' metrics.
+
+**Fix direction — being designed.** A renumber-into-the-stored-order fix with a per-geometry
+build order was prototyped (local branch `wip-b28-d30`) and set aside in favour of a design in
+which numbering never leaves a geometry: each geometry carries its own graph, sites are
+addressed by graph position (orbit / rooted certificate) rather than index, and
+correspondence between geometries is computed when asked, never stored.
 
 ---
 

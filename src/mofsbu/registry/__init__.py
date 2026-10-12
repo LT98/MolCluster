@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from mofsbu.registry.api import (
     MethodSpec, Provenance, Put, RegistryError, alias_fragment, backfill_choice_digests,
-    best_geometry, canonical_map,
+    backfill_connectivity, best_geometry, canonical_map,
     catalog_drift,
     display_label,
     export_xyz, find, formula, geometries_from_choice, geometry_xyz, get_graph,
@@ -18,7 +18,8 @@ from mofsbu.registry.store import BlobStore
 __all__ = [
     "BlobStore", "MethodSpec", "Provenance", "Put", "ReadOnlyRegistry", "Registry",
     "RegistryError",
-    "backfill_choice_digests", "best_geometry", "canonical_map", "catalog_drift",
+    "backfill_choice_digests", "backfill_connectivity", "best_geometry", "canonical_map",
+    "catalog_drift",
     "display_label", "ensure_registry", "export_xyz", "find", "formula",
     "find_method_id", "geometries_from_choice", "geometry_xyz", "get_graph",
     "get_site_state", "get_sites",

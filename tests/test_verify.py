@@ -16,10 +16,7 @@ RAW = MethodSpec(code="construct", code_version="0", method="raw-construct")
 
 
 def xyz_for(g, jitter: float = 0.0) -> str:
-    lines = [str(len(g)), "test"]
-    for k, i in enumerate(g.nodes()):
-        lines.append(f"{g.label(i).element} {k + jitter:.4f} 0.0000 0.0000")
-    return "\n".join(lines) + "\n"
+    return fx.realised_xyz(g, jitter)
 
 
 @pytest.fixture()

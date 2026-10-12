@@ -465,17 +465,20 @@ def put_geometry(
     ).fetchone()
     if row is not None:
         return Put(int(row["id"]), False)
+    changed, conn_json = _connectivity_verdict(reg, structure_id, xyz_text, fidelity,
+                                               relaxed_from)
 
     try:
         cur = reg.conn.execute(
             "INSERT INTO geometries (structure_id, coords_hash, n_atoms, fidelity, method_id, "
             " energy, converged, relaxed_from, choice_vector_digest, choice_vector_json, seed, "
-            " qc_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " qc_json, connectivity_changed, connectivity_json, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
          cv.digest if cv is not None else None,
          cv.to_json() if cv is not None else None,
-             seed, json.dumps(qc) if qc else None, utcnow()),
+             seed, json.dumps(qc) if qc else None, changed, conn_json, utcnow()),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
         existing = reg.conn.execute(
@@ -487,6 +490,60 @@ def put_geometry(
     gid = int(cur.lastrowid)
     _refresh_best_geometry(reg, structure_id)
     return Put(gid, True)
+
+
+def _parse_xyz(xyz_text: str) -> tuple[list[str], list[list[float]]]:
+    lines = xyz_text.strip().splitlines()
+    atoms = [ln.split() for ln in lines[2:2 + int(lines[0])]]
+    return [a[0] for a in atoms], [[float(x) for x in a[1:4]] for a in atoms]
+
+
+def _connectivity_verdict(reg: Registry, structure_id: int, xyz_text: str,
+                          fidelity: Fidelity, relaxed_from: int | None,
+                          ) -> tuple[int | None, str | None]:
+    """E1: (connectivity_changed, connectivity_json) for a geometry about to be stored.
+
+    Above RAW only: a construct is placed FROM the graph, so a contact it gets wrong is a
+    clash, which QC reports.  A verdict is only as good as the atom order it was taken in:
+    a geometry that reached an existing structure may be numbered differently from the
+    stored graph ([B28](docs/BUGS.md#b28)).  So the geometry's root — itself, or the first
+    geometry up its `relaxed_from` chain — must realise the graph with no bond broken;
+    otherwise the verdict is left NULL and the reason recorded, rather than flagging (and
+    excluding) a geometry whose bonds were merely read under the wrong numbering.
+    """
+    if fidelity <= Fidelity.RAW:
+        return None, None
+    from mofsbu.geometry.connectivity import connectivity_check
+
+    graph = get_graph(reg, structure_id)
+    version = ALGO_VERSIONS["connectivity"]
+
+    def unchecked(why: str) -> tuple[None, str]:
+        return None, json.dumps({"unchecked": why, "version": version})
+
+    root, root_text = None, xyz_text
+    seen: set[int] = set()
+    parent = relaxed_from
+    while parent is not None and parent not in seen:
+        seen.add(parent)
+        row = reg.conn.execute("SELECT relaxed_from, coords_hash FROM geometries WHERE id=?",
+                               (parent,)).fetchone()
+        if row is None:
+            break
+        root, root_text = parent, reg.store.get(row["coords_hash"]).decode()
+        parent = row["relaxed_from"]
+    try:
+        if connectivity_check(*_parse_xyz(root_text), graph).broken:
+            return unchecked(f"{'root geometry ' + str(root) if root else 'this geometry'} "
+                             f"does not realise the structure's graph in this atom order "
+                             f"(B28)")
+        report = connectivity_check(*_parse_xyz(xyz_text), graph)
+    except MofsbuError as exc:
+        return unchecked(f"{str(exc).splitlines()[0]} (B28)")
+    detail = {**report.to_dict(), "version": version}
+    if root is not None:
+        detail["root"] = root
+    return int(report.changed), json.dumps(detail)
 
 
 #: Two runs of one correction method on one set of coordinates are one number.
@@ -579,7 +636,8 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
     """Maintain the best-available pointer.  The ONLY writer of these two columns.
 
     Highest fidelity wins; a converged geometry beats an unconverged one at the same
-    fidelity; and only then does energy break the tie.
+    fidelity; and only then does energy break the tie.  A geometry whose connectivity
+    changed (E1) is never best: it realises a different species than this structure.
 
     ENERGY IS NEVER COMPARED ACROSS METHOD ROWS.  One rung of the ladder can be served
     by two theories — ML is served by MACE-MP-0 and MACE-OMOL-0, whose absolute energies
@@ -593,7 +651,7 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
     row = reg.conn.execute(
         "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
         "LEFT JOIN methods m ON m.id = g.method_id "
-        "WHERE g.structure_id=? "
+        "WHERE g.structure_id=? AND g.connectivity_changed IS NOT 1 "
         "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
         "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
         "         COALESCE(m.id, 0) ASC, "
@@ -656,6 +714,48 @@ def backfill_choice_digests(reg: Registry, *, dry_run: bool = False) -> int:
     if not dry_run:
         reg.conn.commit()
     return n
+
+
+def backfill_connectivity(reg: Registry, *, dry_run: bool = False) -> dict[str, Any]:
+    """Give geometries stored before E1 their connectivity verdict.  Returns counts.
+
+    Touches only rows above RAW with no verdict yet (`connectivity_json IS NULL`).  The
+    verdict is `put_geometry`'s, so a geometry whose atom order cannot be trusted is
+    recorded `unchecked` with its reason (B28), not judged.  Moves the best-geometry
+    pointer of every structure that gains a `1`.
+
+    Not called by `migrate`, for the reason `backfill_choice_digests` is not.
+    """
+    rows = reg.conn.execute(
+        "SELECT id, structure_id, coords_hash, fidelity, relaxed_from FROM geometries "
+        "WHERE connectivity_json IS NULL AND fidelity > ? ORDER BY id",
+        (int(Fidelity.RAW),)).fetchall()
+    out: dict[str, Any] = {"checked": 0, "changed": 0, "unchecked": 0, "refused": {}}
+    touched: set[int] = set()
+    for row in rows:
+        try:
+            changed, detail = _connectivity_verdict(
+                reg, int(row["structure_id"]), reg.store.get(row["coords_hash"]).decode(),
+                Fidelity(int(row["fidelity"])), row["relaxed_from"])
+        except (MofsbuError, OSError, ValueError) as exc:
+            why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+            out["refused"][why] = out["refused"].get(why, 0) + 1
+            continue
+        if changed is None:
+            out["unchecked"] += 1
+        else:
+            out["checked"] += 1
+            out["changed"] += changed
+        if not dry_run:
+            reg.conn.execute("UPDATE geometries SET connectivity_changed=?, "
+                             "connectivity_json=? WHERE id=?", (changed, detail, row["id"]))
+            if changed:
+                touched.add(int(row["structure_id"]))
+    if not dry_run:
+        for sid in touched:
+            _refresh_best_geometry(reg, sid)
+        reg.conn.commit()
+    return out
 
 
 # ── sites (M4) ───────────────────────────────────────────────────────────────
@@ -914,7 +1014,8 @@ def best_geometry(reg: Registry, structure_id: int,
         return row
     return reg.conn.execute(
         "SELECT * FROM geometries WHERE structure_id=? AND fidelity>=? "
-        "ORDER BY fidelity DESC, energy ASC LIMIT 1", (structure_id, int(min_fidelity))
+        "AND connectivity_changed IS NOT 1 ORDER BY fidelity DESC, energy ASC LIMIT 1",
+        (structure_id, int(min_fidelity))
     ).fetchone()
 
 

@@ -81,6 +81,9 @@ ALGO_VERSIONS: dict[str, str] = {
     #    (D19), which is how the `2` bump behaved too.
     "perception":       "3",       # which atoms are donors, of what type, and their lobes
     "site_state":       "1",       # status rule + buried-volume convention (M4)
+    # E1: which distances count as a broken graph edge or a formed non-edge
+    # (`geometry.connectivity.BROKEN` / `FORMED`).  Stored in each verdict.
+    "connectivity":     "conn1",
     # 2: pinning a donor and its outward axis leaves two rotations undetermined — the
     #    ligand's spin about the M-L axis, and the metal's swing out of the donor's
     #    plane — and `1` left both wherever the alignment arithmetic dropped them.  They

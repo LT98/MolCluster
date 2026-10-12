@@ -708,12 +708,10 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
     fails costs nothing already built — the construct is still there and only this task
     is marked failed.
 
-    KNOWN GAP, stated rather than hidden: the relaxed coordinates are stored against the
-    SAME structure identity without re-deriving the typed graph from them.  A relaxation
-    that breaks or forms a bond should become a new L3 with a `derived_from` edge (D11,
-    §6.2), and detecting that needs a coordinates -> graph path this package does not
-    have yet.  Until it does, a relax that tears a node apart will be filed under the
-    identity of the node it destroyed.  `qc` on the stored row is the partial guard.
+    The relaxed coordinates are filed under the SAME identity.  A relax that breaks or
+    forms a bond is detected by `put_geometry` (gate E1) and stored `connectivity_changed`,
+    which keeps it out of energy selection; filing it under the species it actually is,
+    with a `derived_from` edge (D11, §6.2), is not built yet.
     """
     from mofsbu.energy.relax import relax_geometry
     from mofsbu.registry import geometry_xyz, get_graph
@@ -770,6 +768,16 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
                         "relaxation_energy": result.relaxation_energy,
                         "device": compute_device(),
                         "method": result.method.describe()}}
+    if geom.created:
+        conn = reg.conn.execute("SELECT connectivity_changed, connectivity_json "
+                                "FROM geometries WHERE id=?", (geom.id,)).fetchone()
+        verdict = json.loads(conn["connectivity_json"] or "null")
+        if conn["connectivity_changed"]:
+            # Stored and flagged, like a QC failure below: the energy is excluded from
+            # selection, the coordinates stay inspectable.
+            detail["connectivity_changed"] = verdict
+        elif verdict and "unchecked" in verdict:
+            detail["connectivity_unchecked"] = verdict["unchecked"]
     if not after.ok:
         # Stored, flagged, and NOT rejected.  The optimisation was paid for and its
         # result is a real answer — "these ligands still do not fit once relaxed" is a
