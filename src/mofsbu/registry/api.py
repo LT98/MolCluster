@@ -505,6 +505,7 @@ def put_geometry(
     qc: dict | None = None,
     canonical_order: list[int] | None = None,
     distorted: bool = False,
+    derived_from: int | None = None,
 ) -> Put:
     """Store one geometry realisation.  `method` is required, not optional.
 
@@ -515,6 +516,9 @@ def put_geometry(
     and, for a RAW construct, no graph bond is broken, since a construct places every bond
     at its length and a broken one means another numbering.  `distorted` exempts a start
     pulled apart on purpose (a route `perturb`).
+
+    `derived_from` names the connectivity-changed geometry this one files under the species
+    it became (D31, `assembly.derive`).
 
     Fidelity is a property of the geometry, never of the structure (D4), so one
     identity can carry a raw construct, an xTB relaxation and a DFT relaxation at once.
@@ -568,13 +572,13 @@ def put_geometry(
             "INSERT INTO geometries (structure_id, coords_hash, n_atoms, fidelity, method_id, "
             " energy, converged, relaxed_from, choice_vector_digest, choice_vector_json, seed, "
             " qc_json, connectivity_changed, connectivity_json, canonical_order_json, "
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " derived_from, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
          cv.digest if cv is not None else None,
          cv.to_json() if cv is not None else None,
              seed, json.dumps(qc) if qc else None, changed, conn_json,
-             None if link is None else json.dumps(link), utcnow()),
+             None if link is None else json.dumps(link), derived_from, utcnow()),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
         existing = reg.conn.execute(
