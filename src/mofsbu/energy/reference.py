@@ -348,7 +348,8 @@ def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
 
     Highest fidelity with an energy, or exactly the requested rung.  A species with no
     energy at all is named rather than skipped: dropping a term from a balanced equation
-    is how you get a number that is confidently wrong.
+    is how you get a number that is confidently wrong.  A geometry whose connectivity
+    changed (E1) is never a candidate: its energy belongs to another species.
 
     `method` pins the THEORY, and exists because a rung is not one.  Since MACE-OMOL-0
     joined MACE-MP-0 on the ML rung, "the best ML energy for this species" can mean two
@@ -361,7 +362,8 @@ def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
     """
     sql = ("SELECT g.id, g.energy, g.converged, g.fidelity, g.method_id "
            "FROM geometries g JOIN methods m ON m.id = g.method_id "
-           "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS ?")
+           "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS ? "
+           "AND g.connectivity_changed IS NOT 1")
     args: list[Any] = [structure_id, solvent]
     if fidelity is not None:
         sql += " AND g.fidelity=?"
@@ -396,7 +398,7 @@ def _corrected_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | Non
            "JOIN solvation_corrections sc ON sc.geometry_id = g.id "
            "JOIN methods cm ON cm.id = sc.method_id "
            "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS NULL "
-           "AND cm.solvent=?")
+           "AND cm.solvent=? AND g.connectivity_changed IS NOT 1")
     args: list[Any] = [structure_id, medium]
     if fidelity is not None:
         sql += " AND g.fidelity=?"
@@ -411,6 +413,18 @@ def _corrected_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | Non
             "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
             "         m.id ASC, cm.id ASC, g.energy ASC LIMIT 1")
     return reg.conn.execute(sql, args).fetchone()
+
+
+def _connectivity_note(reg: Registry, structure_id: int) -> str:
+    """Why a species may have no energy: geometries excluded as `connectivity_changed`."""
+    n = reg.conn.execute(
+        "SELECT COUNT(*) FROM geometries WHERE structure_id=? AND energy IS NOT NULL "
+        "AND connectivity_changed IS 1", (structure_id,)).fetchone()[0]
+    if not n:
+        return ""
+    return (f". {n} of its geometries {'is' if n == 1 else 'are'} excluded as "
+            f"connectivity_changed: the relaxation broke or formed a bond, so the energy "
+            f"belongs to a different species than structure {structure_id}")
 
 
 def _corrected_spec(base: MethodSpec, row: Any, medium: str) -> MethodSpec:
@@ -568,7 +582,8 @@ def energy_for_terms(
                    if method is not None else "")
                 + (" (gas-phase energy plus a stored correction on the same geometry, "
                    "pinned to the first term's correction method)"
-                   if route == "corrected" else ""))
+                   if route == "corrected" else "")
+                + _connectivity_note(reg, term.structure_id))
         spec = _method_of(reg, row["method_id"])
         if route == "corrected":
             spec = _corrected_spec(spec, row, str(solvent))

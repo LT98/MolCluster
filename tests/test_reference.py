@@ -13,6 +13,7 @@ from dataclasses import replace
 
 import pytest
 
+from fixtures import realised_xyz
 from mofsbu._types import Fidelity, MethodSpec, ReferenceSchemeError, split_medium
 from mofsbu.energy.backends import NullBackend
 from mofsbu.energy.reference import (
@@ -104,11 +105,8 @@ def hydroxo_complex() -> TypedGraph:
 
 def _store(reg, g, *, energy, method=XTB, fidelity=Fidelity.XTB, converged=True):
     put = put_structure(reg, g)
-    lines = [str(len(g)), g.name]
-    for k, i in enumerate(g.nodes()):
-        lines.append(f"{g.label(i).element} {k:.4f} 0.0000 0.0000")
-    put_geometry(reg, put.id, "\n".join(lines) + "\n", fidelity=fidelity, method=method,
-                 energy=energy, converged=converged)
+    put_geometry(reg, put.id, realised_xyz(g, comment=g.name), fidelity=fidelity,
+                 method=method, energy=energy, converged=converged)
     return put.id
 
 

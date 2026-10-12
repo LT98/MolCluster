@@ -488,11 +488,17 @@ across a trans pair to feasible at **0.094** across a cis one. Below two vacanci
 arrangement to choose, so those builds are byte-identical to a `placement 2` one —
 `tests/test_pathways.py::test_the_co_ligand_saturated_series_connects`.
 
-### S5 — ~~lift the `n_metals` guard~~, and discriminate the routes · **S**
+### S5 — ~~lift the `n_metals` guard~~, and enumerate the routes · **S**
 
 **The guard is already gone** — it came out with S1, because that is the slice whose
 measurement proved it was refusing a determined placement. What is left here is the second
-half: with both routes running, the model says which works.
+half: with both routes running, every construction choice of each is built and its outcome
+reported. Which route is *favoured* is not an S5 question (exit, below).
+
+**Naming.** S5's two routes are **sequential** (Route A: `Cu(HCOO) + Cu` → proto-dimer, then
+`+ HCOO`) and **two-on-one** (Route B: `Cu(HCOO)₂ + Cu`); the specs call them `A_sequential` and
+`B_two_on_one`. Neither is gate 1's *nucleus-first* route (a declared Cu₂, S4), and the letters
+are S5's own — in DESIGN §6.5, Path A is nucleus-first.
 
 **Both routes build.** The refusal recorded here on 2026-09-16 (`Cu(HCOO)₂ + Cu` "bottoms out
 at 1.464 Å") is withdrawn; its history is in `archive/DESIGN_history.md`. Route B works only if
@@ -584,11 +590,21 @@ against route A's relaxed product.
 - The earlier in-memory study built its product without QC; checked afterwards, it carried a
   water H···H contact at 1.15 Å. Route `store` steps now record the clash QC on every geometry.
 
-*Exit:* **withdrawn 2026-10-08, pending a call.** It required `Cu(HCOO)₂ + Cu` to be refused
-with its number; both routes build (above). What replaces it is the user's decision; the
-proposal on record is that both routes reach one node with two provenance edges (gate 1), every
-construction choice (binding lobe, face) is enumerated for both routes rather than pinned, and
-the routes are compared by screening-tier energy with a continuum — not by a geometric refusal.
+*Exit (called 2026-10-08, replacing "`Cu(HCOO)₂ + Cu` is refused with its number"):* both routes
+are **enumerated over every construction choice** — binding lobe, face, pose, and the free-O lobe
+the second Cu takes — from the ground up, and every variant's outcome is reported: built or
+refused with its number, QC verdict, and whether it reaches the bis-bridged node. The gate holds
+when the sequential and two-on-one routes each reach that node (same L1) in at least one QC-clean
+variant, and every other variant is refused or flagged with a stated number rather than silently
+dropped. `data/reference/spec_m6_s5_enumerate.json` (construct only) is the case; the test is
+gate 6 in `tests/test_m6_exit_gates.py` (S7) — **not written yet**. The enumeration table above
+already meets it by hand.
+
+A route that builds is never refused for being disfavoured. **Which route is favoured is an
+energy comparison** — screening tier, with a continuum, and judged on E1-clean relaxations — so
+it moves to M7 (`route_energies`) and is reported at M8 (PLAN §M8). The gas-phase numbers above
+(2+/3+ ions, a proto-dimer that opens to 4–6 Å, an unmeasured step-2 barrier) are not that
+comparison.
 
 ### S6 — `qc.check_intercentre` · **S**
 
@@ -611,7 +627,7 @@ motif:
 | 3 | every battery row builds QC-clean, or is refused with a stated number |
 | 4 | each cluster's M···M is within literature range — reported as a measurement, not asserted |
 | 5 | an xTB relax keeps each node intact: re-extract afterwards, same L1 (skipped without tblite, as `scripts/regress_m7.py` does) |
-| 6 | ~~`Cu(HCOO)₂ + Cu` is refused and says 1.46 Å~~ — withdrawn 2026-10-08, pending a call: both routes build (§S5) |
+| 6 | S5's sequential and two-on-one routes, enumerated over every construction choice, each reach the bis-bridged node in at least one QC-clean variant; every other variant is reported with its number (§S5; replaces "`Cu(HCOO)₂ + Cu` is refused and says 1.46 Å", 2026-10-08) |
 
 Gate 1 is the strong one. It is M5's "one node, two routes" generalised to polynuclear, and it
 is M8's Path A vs Path B made buildable at M6.
@@ -683,5 +699,5 @@ other route starts from. **Finishing S1 is the next slice**, with S5 available b
 it only needs both routes running.
 
 S1 and S2 are independently testable and can be done in either order; S3 needs both, because
-reconciliation is by definition what happens where they meet. S5 is small and can land as soon
-as S1 does — it is what makes the failed route *say so*, which is worth having early.
+reconciliation is by definition what happens where they meet. S5's enumeration is built and
+run; what remains is its gate test, which lands with S7's `tests/test_m6_exit_gates.py`.

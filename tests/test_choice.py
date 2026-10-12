@@ -159,9 +159,7 @@ def test_mutating_the_caller_dict_afterwards_does_not_move_the_key():
 
 def _xyz(jitter: float = 0.0) -> str:
     """Water, displaced — a different geometry of the SAME structure each time."""
-    rows = [("O", 0.0), ("H", 0.96), ("H", 1.92)]
-    return "3\nwater\n" + "".join(
-        f"{el} {x + jitter:.4f} 0.0000 0.0000\n" for el, x in rows)
+    return fx.realised_xyz(fx.water(), jitter, comment="water")
 
 
 def test_put_geometry_stores_a_digest(reg):

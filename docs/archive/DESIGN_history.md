@@ -31,7 +31,15 @@ you are about to reverse one and need to know what it cost last time.
   * **Built from the ground up** (placer-made reagents, both formates syn and on one face, water
     released before each formate), the route builds QC-clean and relaxes onto Route A's product
     under OMOL-0 and POLAR-1-S/M/L, within 0.05 eV. The refusal measured a construction choice,
-    not the chemistry. The replacement gate is open.
+    not the chemistry.
+  * **The replacement gate, called the same day:** both routes are enumerated over every
+    construction choice and each must reach the node in at least one QC-clean variant, every
+    other variant reported with its number (`spec_m6_s5_enumerate.json`: 16 variants a route,
+    exactly one physical choice — syn, upright, toward, same face — succeeds for each). Rejected:
+    an energy gate inside M6, which would need M7's continuum relaxes, E1 and `route_energies`
+    and still compare gas-phase 2+/3+ ions; and a geometric refusal on some other route, for
+    which no chemically justified case exists and which M6 gate 3 already covers. Ranking the
+    routes moved to M8's screening tier.
 
 - *(2026-09-28)* **D29 — C15 resolved: a `place` edge cites nothing.** All three options on
   record were prototyped in a throwaway worktree (never committed) and run against the suite.

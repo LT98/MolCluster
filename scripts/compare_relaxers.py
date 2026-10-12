@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from mofsbu.energy.backends import get_backend                           # noqa: E402
 from mofsbu.geometry._linalg import kabsch                               # noqa: E402
-from mofsbu.geometry.distances import COVALENT_RADII, DEFAULT_COVALENT, metal_donor_distance  # noqa: E402
+from mofsbu.geometry.connectivity import connectivity_check             # noqa: E402
 from mofsbu.graph._types import EdgeType                                 # noqa: E402
 from mofsbu.registry import BlobStore, get_graph, geometry_xyz           # noqa: E402
 from mofsbu.registry.db import ReadOnlyRegistry                          # noqa: E402
@@ -42,41 +42,11 @@ from mofsbu.runner import read_xyz                                       # noqa:
 #: Demo-route nodes (WORKPLAN_energy §3a step 2): always sampled when present.
 ROUTE_NODES = (132, 94, 28, 68, 328, 301)
 
-#: A bond is broken past this multiple of its ideal length, formed inside the second.
-BROKEN, FORMED = 1.30, 1.10
-
-
-def _rc(sym: str) -> float:
-    return COVALENT_RADII.get(sym, DEFAULT_COVALENT)
-
-
 def bond_changes(graph, symbols, xyz) -> dict:
-    """Graph edges whose length left the bonded range, and non-edges that entered it."""
-    n = len(symbols)
-    d = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=-1)
-    edges = {(u, v): et for u, v, et in graph.edges()}
-    metals = set(graph.metals())
-
-    def ideal(i, j, dative):
-        if dative:
-            m, x = (i, j) if i in metals else (j, i)
-            return metal_donor_distance(symbols[m], symbols[x]).value
-        return _rc(symbols[i]) + _rc(symbols[j])
-
-    broken, formed = [], []
-    for (u, v), et in edges.items():
-        if d[u, v] > BROKEN * ideal(u, v, et is EdgeType.DATIVE):
-            broken.append([u, v, round(float(d[u, v]), 3)])
-    for i in range(n):
-        for j in range(i + 1, n):
-            if (i, j) in edges or (i in metals and j in metals):
-                continue
-            dative = (i in metals) != (j in metals)
-            if dative and "H" in (symbols[i], symbols[j]):
-                continue
-            if d[i, j] < FORMED * ideal(i, j, dative):
-                formed.append([i, j, round(float(d[i, j]), 3)])
-    return {"broken": broken, "formed": formed}
+    """Metric (a): the E1 gate's verdict (`geometry.connectivity`), as [i, j, distance] lists."""
+    report = connectivity_check(symbols, xyz, graph)
+    return {"broken": [[c.i, c.j, round(c.distance, 3)] for c in report.broken],
+            "formed": [[c.i, c.j, round(c.distance, 3)] for c in report.formed]}
 
 
 def heavy_rmsd(symbols, a, b) -> float:
