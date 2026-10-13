@@ -38,9 +38,24 @@ problem from the outside:
   experimentally.
 
 ### Working hypotheses about the synthesis problem
-Three hypotheses shape what the project computes. Each is stated with what would test it.
+Four hypotheses shape what the project computes. Each is stated with what the project computes for
+it, what would test it, and where it stops. H0 is the premise the other three rest on.
 
-**H1 — Monomer metastability decides whether a regular framework can form.**
+**H0 — What forms in solution carries over into the framework, in some systems and not in others.**
+The whole approach assumes that the species favoured before the solid appears tell you about the node
+that ends up in it. That holds where the node, or a recognisable piece of it, already exists among the
+precursors. It need not hold where the node only assembles during nucleation or at the growing
+surface, and the solution species is just feedstock.
+- *What the project computes:* whether the target node, or a fragment of it with the same bridging
+  pattern, appears among the low-lying species for a given recipe.
+- *Test:* systems where the node is known to pre-exist should show it among the favoured species.
+  Copper(II) acetate, already a paddlewheel dimer, is the reference case. Systems where the framework
+  forms from quite different precursors should not, and the plan should then say its prediction does
+  not apply.
+- *Stated limit:* this is a condition of validity, not a result. Where it fails, H1–H3 say nothing
+  about the framework.
+
+**H1 — Monomer metastability decides whether a regular, crystalline framework can form.**
 The first metal–ligand species to assemble (the monomer, and the small clusters built from it) has
 to sit in a *metastable* window:
 - **Too stable**, and it is a sink. The metal stays locked in a discrete complex and never extends
@@ -48,24 +63,51 @@ to sit in a *metastable* window:
 - **Too unstable**, and the ligand never holds the metal long enough to build on. Alternatively,
   bonds form irreversibly as soon as they can, and the product is disordered.
 
-Regular, crystalline assembly needs intermediates that form readily and can still rearrange.
-- *What the project computes:* where each monomer and precursor sits relative to its ingredients and
-  to the next species up the assembly ladder, in every hydration and protonation state.
-- *Test:* across ligands and salts with known outcomes, crystalline products should come from
-  monomers inside the window. Sinks and missing intermediates should line up with failed or
-  amorphous syntheses.
+To be testable the window needs numbers fixed in advance. Two quantities define it:
+- **formation**: the free energy of forming the monomer from its ingredients, per new metal–ligand
+  bond;
+- **extension**: the free energy of the next step up, monomer to dimer or to the first bridged
+  species.
 
-**H2 — The synthesis recipe is the object to design, and a good recipe is a smooth energy path.**
+The hypothesis is that both are downhill, and neither by more than a bound. The bound is set on one
+half of a set of systems with known outcomes, and tested on the other half.
+- *What the project computes:* both quantities for every monomer, in every hydration and
+  protonation state.
+- *Test:* on the held-out half, crystalline products fall inside the window; discrete complexes sit
+  beyond the formation bound; amorphous or failed syntheses miss on extension. Mononuclear copper
+  intermediates have been observed during milling of a copper framework [77], so the species this
+  hypothesis is about are real and observable.
+- *Stated limit:* metastability and reversibility are kinetic properties, and these are
+  thermodynamic depths. Depth is used as a proxy for how readily bonds exchange. The proxy is
+  reasonable for labile metal ions and is not expected to hold for inert ones.
+
+**H2 — The synthesis recipe is the object to design. It sets the driving force, the height of the
+worst intermediate, and the competing sinks.**
 This is the project's main focus. A recipe — which salt, which base or modulator, which solvent, in
-what order — fixes the sequence of intermediate species and the energy level of each. The aim is to
-**regulate those levels so that each intermediate forms as smoothly as possible**: no large uphill
-step that stalls the assembly, and no deep well that traps it.
-- *What the project computes:* the energy-level diagram of a route under a stated recipe, so that
-  two recipes for the same target can be compared step by step. The first study is an instance:
-  moving the released proton from water to acetate removes the one large uphill step on the route.
-- *Test:* recipes ranked smoother should be the ones that work at the bench (§5.4).
-- *Stated limit:* these are levels, not barriers. A smooth thermodynamic path is necessary for an
-  easy synthesis, not sufficient.
+what order — fixes which species are present and the energy level of each. The aim is to **regulate
+those levels so that intermediate species form as smoothly as possible**. "Smooth" is made of three
+quantities, each of which the project can defend without computing a reaction barrier:
+
+| Quantity | What it says | Why it is legitimate |
+|---|---|---|
+| **driving force** | how far downhill the whole recipe is, ingredients to target | a difference between two states; independent of path |
+| **highest intermediate** | the highest point any route must pass through | a barrier cannot be lower than the intermediate it passes, so this is a *lower bound* on the kinetic cost |
+| **competing sinks** | species off the route that lie below the target | where the metal ends up at equilibrium if they exist |
+
+A smooth recipe is strongly downhill overall, has no high intermediate, and has no sink below the
+target.
+- *What the project computes:* all three for a route under a stated recipe, so that two recipes for
+  the same target can be compared. The first study is an instance of the first quantity: giving the
+  released proton to acetate instead of water changes the net reaction, and with it the driving
+  force. It does not smooth an otherwise unchanged path.
+- *Test:* recipes that score better on the three should be the ones that work at the bench (§5.4).
+  The salt is known to change the product for a copper framework [78], which gives cases to check.
+- *Stated limits:*
+  - Where the chemistry is fast and reversible, only the driving force and the sinks decide the
+    outcome; the height of an intermediate matters only where the reaction is slow.
+  - A lower bound on a barrier is not the barrier.
+  - The steps on a computed route are the order in which species were *built*. They form a valid
+    thermodynamic cycle, but they are not necessarily the sequence the chemistry follows.
 
 **H3 — Synthesis conditions can be approximated by the degree of solvation shell in the model.**
 How much solvent surrounds the reacting species is the main thing that separates one synthesis
@@ -73,26 +115,37 @@ method from another, and the model has a matching setting for each:
 
 | Model treatment | Synthesis method it approximates | What the species see |
 |---|---|---|
-| gas phase, no solvent | **dry high-energy ball milling** | each other only; charges are unscreened, so by-products leave as neutral molecules |
-| gas phase + one explicit solvent shell | **wet milling** (liquid-assisted grinding) | a few solvent molecules on the metal's open sites, and no bulk liquid |
+| gas phase, no solvent | **dry high-energy ball milling** of anhydrous reagents | each other only; nothing screens a charge |
+| gas phase + one explicit solvent shell | **wet milling** (liquid-assisted grinding), and dry milling of *hydrated* salts, which bring their own first-shell water | a few solvent molecules on the metal's open sites, and no bulk liquid |
 | explicit shell + continuum | **wet-phase (solution) synthesis** | a first shell plus the screening of the bulk solvent |
 
-So one enumeration of species can be priced three ways, and the same route compared across methods.
-A recipe (H2) that is rough in solution may be smooth in the mill, or the reverse. Mechanochemical
-routes to MOFs are established experimentally [74–76], which makes the comparison testable.
+So one enumeration of species can be priced three ways, and the same recipe compared across methods.
+A recipe (H2) that scores poorly in solution may score well in the mill, or the reverse.
+Mechanochemical routes to MOFs are established experimentally [74–76], and one copper framework has
+been made by dry milling, by wet milling and from solution, with the added liquid changing the
+pathway [77]. That makes the comparison testable.
 - *What the project computes:* every route under each treatment. The first study already holds all
-  three for the Ni–tetrahydroxyquinone system. One example: releasing a proton into water is strongly
-  uphill with no solvent and much less so in a continuum, while handing it to acetate is close to
-  level in both.
-- *Test:* for one target made by dry milling, wet milling and from solution, the treatment matched
-  to each method should rank the recipes the way the bench does. The calibration against measured
-  pKa and stability constants (§5.2) checks the solution end.
-- *Stated limit:* a mill is not a gas. Lattice energies of the solid reagents, local heating and
-  pressure are absent from the gas-phase picture, so the dry-milling treatment is the roughest of
-  the three.
+  three for the Ni–tetrahydroxyquinone system.
+- *Test:* for one target made by all three methods, the treatment matched to each method should rank
+  the recipes the way the bench does. The calibration against measured pKa and stability constants
+  (§5.2) checks the solution end.
+- *Stated limits:*
+  - **A mill is not a gas.** Reagents and products in a mill are solids, and ions in a solid are
+    stabilised by the lattice. The gas-phase treatment has no such term, so it over-penalises any step
+    that creates or separates ions. Until a solid-state reference for the reagents is added, the
+    no-solvent treatment is read only for steps whose by-product leaves as a neutral molecule (water,
+    a carboxylic acid).
+  - Local heating and pressure in the mill are also absent.
+  - The no-solvent row is the roughest of the three.
 
 pH, base, counterion and modulator enter in all three as species in the same enumeration.
 Temperature and concentration enter later, through free-energy and activity terms.
+
+**One system to test all four.** Copper(II) carboxylate frameworks are the natural validation case.
+The paddlewheel node pre-exists in copper acetate (H0). Mononuclear intermediates are observed (H1).
+The copper salt changes the product (H2). The same framework is reported from solution, wet milling
+and dry milling (H3). Copper(II) is also free of the oxidation-state ambiguity of the nickel
+system studied so far. It needs polynuclear nodes, which are in progress (§8).
 
 ### Hence: MolCluster
 MolCluster models the step **before** the topology — **the molecular chemistry of node formation in
@@ -663,9 +716,11 @@ remainder named; **In progress** = being built now; **Planned** = not started.
 | Item | Status | Note |
 |---|---|---|
 | Ni–tetrahydroxyquinone, chloride vs acetate salt | **Done at screening level** | re-pricing at the refinement level is planned |
-| H1 monomer metastability | **Planned** | needs systems with known crystalline and failed outcomes |
-| H2 recipe as a smooth energy path | **Partly** | one worked instance (the proton acceptor in the salt study) |
-| H3 solvation shell as synthesis method | **Partly** | all three treatments exist for the salt study; no systematic comparison with milling results yet |
+| H0 solution species carry over into the framework | **Planned** | needs systems where the node is known to pre-exist, and ones where it is not |
+| H1 monomer metastability | **Planned** | the window's bounds are not yet set; needs systems with known crystalline and failed outcomes |
+| H2 recipe sets driving force, highest intermediate and sinks | **Partly** | one worked instance of the driving force (the proton acceptor in the salt study); the other two quantities are not yet reported |
+| H3 solvation shell as synthesis method | **Partly** | all three treatments exist for the salt study; no solid-state reference, and no comparison with milling results yet |
+| copper carboxylate validation system (tests H0–H3) | **Planned** | needs polynuclear nodes |
 
 ### Learning layer and experiments
 | Item | Status |
@@ -774,3 +829,7 @@ checked for this document.
     added liquid.
 76. James et al., *Chem. Soc. Rev.* **41**, 413 (2012) — mechanochemistry: opportunities for new and
     cleaner synthesis.
+77. Stolar et al., *Inorg. Chem.* **56**, 6599 (2017) — in situ monitoring of the mechanosynthesis of
+    HKUST-1; the effect of liquid additives; mononuclear copper intermediates.
+78. "Insights into HKUST-1 metal–organic framework's morphology and physicochemical properties
+    induced by changing the copper(II) salt precursors" (2025), PMC11819983.
