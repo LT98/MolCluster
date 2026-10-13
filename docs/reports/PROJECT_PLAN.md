@@ -1,13 +1,5 @@
 # MolCluster — project plan
 
-*Presentation-oriented: what the project does, how each step compares with existing tools, and how
-each claim will be benchmarked. The code-level plans are `docs/PLAN_implementation.md` and
-`docs/WORKPLAN_energy.md`. Written 2026-09-28; demand figures are measured on `salt_study_k1.db`.
-The rationale ("Why this project"), the learning layer (§4) and experimental benchmarking (§5)
-were added the same day.*
-
----
-
 ## Why this project
 
 ### Where computational MOF research is strong
@@ -45,11 +37,52 @@ problem from the outside:
 - **In situ nucleation and growth studies** [73] reveal the mechanism case by case,
   experimentally.
 
+### Working hypotheses about the synthesis problem
+Three hypotheses shape what the project computes. Each is stated with what would test it.
+
+**H1 — Monomer metastability decides whether a regular framework can form.**
+The first metal–ligand species to assemble (the monomer, and the small clusters built from it) has
+to sit in a *metastable* window:
+- **Too stable**, and it is a sink. The metal stays locked in a discrete complex and never extends
+  into a framework.
+- **Too unstable**, and the ligand never holds the metal long enough to build on. Alternatively,
+  bonds form irreversibly as soon as they can, and the product is disordered.
+
+Regular, crystalline assembly needs intermediates that form readily and can still rearrange.
+- *What the project computes:* where each monomer and precursor sits relative to its ingredients and
+  to the next species up the assembly ladder, in every hydration and protonation state.
+- *Test:* across ligands and salts with known outcomes, crystalline products should come from
+  monomers inside the window. Sinks and missing intermediates should line up with failed or
+  amorphous syntheses.
+
+**H2 — The synthesis recipe is the object to design, and a good recipe is a smooth energy path.**
+This is the project's main focus. A recipe — which salt, which base or modulator, which solvent, in
+what order — fixes the sequence of intermediate species and the energy level of each. The aim is to
+**regulate those levels so that each intermediate forms as smoothly as possible**: no large uphill
+step that stalls the assembly, and no deep well that traps it.
+- *What the project computes:* the energy-level diagram of a route under a stated recipe, so that
+  two recipes for the same target can be compared step by step. The first study is an instance:
+  moving the released proton from water to acetate removes the one large uphill step on the route.
+- *Test:* recipes ranked smoother should be the ones that work at the bench (§5.4).
+- *Stated limit:* these are levels, not barriers. A smooth thermodynamic path is necessary for an
+  easy synthesis, not sufficient.
+
+**H3 — Synthesis conditions can be approximated by how the solvation is treated.**
+Most of what a chemist varies reaches the molecular model through its surroundings:
+- **the solvent**, as explicit molecules on the metal's open sites plus a continuum for the bulk;
+- **pH and the base**, as the species that accepts each released proton;
+- **the counterion and modulator**, as competing ligands in the same enumeration.
+
+Temperature and concentration enter later, through free-energy and activity terms.
+- *What the project computes:* the same route priced under different media and proton acceptors.
+- *Test:* the calibration against measured pKa and stability constants (§5.2) says how far this
+  approximation carries. Where it fails, more explicit solvent is the next refinement.
+
 ### Hence: MolCluster
 MolCluster models the step **before** the topology — **the molecular chemistry of node formation in
 solution**. Given the ingredients of a synthesis, it asks:
 > Which metal–ligand clusters (candidate SBUs and their precursors) can form, by which routes, and
-> which conditions favour a target one?
+> which recipe makes the route to a target one smoothest?
 
 This turns the unpredictable part of synthesis into an explicit, auditable graph of species and
 reactions:
