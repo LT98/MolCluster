@@ -710,8 +710,8 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
 
     The relaxed coordinates are filed under the SAME identity.  A relax that breaks or
     forms a bond is detected by `put_geometry` (gate E1) and stored `connectivity_changed`,
-    which keeps it out of energy selection; filing it under the species it actually is,
-    with a `derived_from` edge (D11, §6.2), is not built yet.
+    which keeps it out of energy selection; a single-piece change is filed beside it under
+    the species it became, with a `relaxation` edge, and a separation is held back (D31).
     """
     from mofsbu.energy.relax import relax_geometry
     from mofsbu.registry import RegistryError, geometry_graph, geometry_xyz, get_graph
@@ -782,8 +782,12 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
         verdict = json.loads(conn["connectivity_json"] or "null")
         if conn["connectivity_changed"]:
             # Stored and flagged, like a QC failure below: the energy is excluded from
-            # selection, the coordinates stay inspectable.
+            # selection, the coordinates stay inspectable.  A single-piece change is filed
+            # beside it (D31); a refusal, a separation included, is recorded, never raised.
+            from mofsbu.assembly.derive import file_derived
+
             detail["connectivity_changed"] = verdict
+            detail["derived"] = file_derived(reg, geom.id)
         elif verdict and "unchecked" in verdict:
             detail["connectivity_unchecked"] = verdict["unchecked"]
     if after is None:
