@@ -67,16 +67,32 @@ step that stalls the assembly, and no deep well that traps it.
 - *Stated limit:* these are levels, not barriers. A smooth thermodynamic path is necessary for an
   easy synthesis, not sufficient.
 
-**H3 — Synthesis conditions can be approximated by how the solvation is treated.**
-Most of what a chemist varies reaches the molecular model through its surroundings:
-- **the solvent**, as explicit molecules on the metal's open sites plus a continuum for the bulk;
-- **pH and the base**, as the species that accepts each released proton;
-- **the counterion and modulator**, as competing ligands in the same enumeration.
+**H3 — Synthesis conditions can be approximated by the degree of solvation shell in the model.**
+How much solvent surrounds the reacting species is the main thing that separates one synthesis
+method from another, and the model has a matching setting for each:
 
+| Model treatment | Synthesis method it approximates | What the species see |
+|---|---|---|
+| gas phase, no solvent | **dry high-energy ball milling** | each other only; charges are unscreened, so by-products leave as neutral molecules |
+| gas phase + one explicit solvent shell | **wet milling** (liquid-assisted grinding) | a few solvent molecules on the metal's open sites, and no bulk liquid |
+| explicit shell + continuum | **wet-phase (solution) synthesis** | a first shell plus the screening of the bulk solvent |
+
+So one enumeration of species can be priced three ways, and the same route compared across methods.
+A recipe (H2) that is rough in solution may be smooth in the mill, or the reverse. Mechanochemical
+routes to MOFs are established experimentally [74–76], which makes the comparison testable.
+- *What the project computes:* every route under each treatment. The first study already holds all
+  three for the Ni–tetrahydroxyquinone system. One example: releasing a proton into water is strongly
+  uphill with no solvent and much less so in a continuum, while handing it to acetate is close to
+  level in both.
+- *Test:* for one target made by dry milling, wet milling and from solution, the treatment matched
+  to each method should rank the recipes the way the bench does. The calibration against measured
+  pKa and stability constants (§5.2) checks the solution end.
+- *Stated limit:* a mill is not a gas. Lattice energies of the solid reagents, local heating and
+  pressure are absent from the gas-phase picture, so the dry-milling treatment is the roughest of
+  the three.
+
+pH, base, counterion and modulator enter in all three as species in the same enumeration.
 Temperature and concentration enter later, through free-energy and activity terms.
-- *What the project computes:* the same route priced under different media and proton acceptors.
-- *Test:* the calibration against measured pKa and stability constants (§5.2) says how far this
-  approximation carries. Where it fails, more explicit solvent is the next refinement.
 
 ### Hence: MolCluster
 MolCluster models the step **before** the topology — **the molecular chemistry of node formation in
@@ -162,7 +178,7 @@ Two runs (NiCl₂ and Ni(OAc)₂ with tHQ, ≤1 deprotonation) into one registry
 | volume | 1,123 structures · 15,722 geometries · 19,762 reaction edges · 126,235 site-state rows | 14,766 relax tasks, 3,600 MACE geometries; 3,600 continuum corrections |
 | size / time | 97 MB database + 234 MB blob store (56k blobs, ~4 KB each) → **~90 KB database per identified structure** | construction 2.2 CPU-h (place median 0.8 s, grow 0.16 s); **MACE 5.0 h (~5 s each)**; xTB-ALPB screen ~7 s per geometry |
 | reuse | builds landing on an existing identity write nothing new | 1,364 relaxations skipped as already computed (acetate run) |
-| concurrency | 32 workers, 0 lock failures, after the write-lock fix | 8 workers, 1 GPU; wall time 2 h 24 min + 1 h 19 min |
+| concurrency | 32 workers, 0 lock failures | 8 workers, 1 GPU; wall time 2 h 24 min + 1 h 19 min |
 
 **Scaling.**
 - **Line 1** grows with ligands × protomers × co-ligand window × CN × geometry. The primary runs (tHQ
@@ -202,8 +218,7 @@ a per-geometry state.
 | DENOPTIM [5] | attachment-point classes on fragments | the closest in spirit; no lone-pair or torsion model |
 | CSD / Mogul | empirical coordination statistics | data, not perception — the validation source |
 
-**Known gaps:** pyrazolate N typing (B14), oxide vs hydroxide (B15), steric blocking of sp³ amines
-(B8).
+**Known gaps:** pyrazolate N typing, oxide vs hydroxide, steric blocking of sp³ amines.
 **Benchmark.** Donor-set recall and precision against CSD Ni(II)/Cu(II) complexes: are the donors
 seen coordinated in crystals among the donors perceived?
 
@@ -220,7 +235,7 @@ seen coordinated in crystals among the donors perceived?
 |---|---|---|
 | molSimplify [3] | mononuclear TMCs, high-throughput | more mature geometry; no route graph |
 | Architector [4] | mononuclear, s–f block, xTB conformer sampling | the strongest geometry comparator; no provenance or routes |
-| Molassembler [6] | any polyhedron, stereopermutations | best at stereo; MolCluster's L2 lags (B2) |
+| Molassembler [6] | any polyhedron, stereopermutations | best at stereo; MolCluster's isomer level is behind |
 | AaronTools [7] | ligand swaps on TS templates | catalysis and TS focus |
 | stk [8] | cage and supramolecular assembly | polynuclear assembly without chemical donor perception |
 | PORMAKE [9], ToBaCCo [10], AuToGraFS [11] | MOFs from SBUs + topology | *consumers* of SBUs; MolCluster aims to *produce* them |
@@ -268,7 +283,7 @@ demonstrated on mononuclear Ni.
 ### 1.5 Registry, provenance and search
 **MolCluster.**
 - SQLite plus a content-addressed blob store, with one write surface.
-- `UNIQUE(l0, l1, l2)`.
+- One row per species: composition, connectivity and isomer together are unique.
 - A reaction DAG in which one species is one node with many incoming edges.
 - Versioned algorithms, soft delete, structural filters.
 
@@ -291,18 +306,24 @@ demonstrated on mononuclear Ni.
 
 ## 3. Line 2 — energy evaluation and pathway determination
 
-The governing idea (`WORKPLAN_energy.md`): **MACE decides what to compute; it does not compute the
+The governing idea: **the machine-learned potential decides what to compute; it does not compute the
 answer.** It relaxes, ranks within an identity, triages across routes, and accelerates Hessians and
-sampling. Reported numbers are stage-5 recipe results.
+sampling. Reported numbers come only from the refinement stage (2.4).
 
 ### 2.1 Relaxation and first evaluation — the MLIP accelerator
 **MolCluster.** MACE-OMOL-0 [21] (trained on OMol25 [22], ωB97M-V/def2-TZVPD) relaxes every
-construct today, ~5 s on the GPU. Study E-MH (`WORKPLAN_energy.md` §3a) rejected **MACE-MH-1** as
-the relaxer — blind to charge and spin, and DFT prefers OMOL-0's Ni minima — and found
-**MACE-POLAR-1-L** DFT-equivalent to OMOL-0 on five of six species and better on the sixth; run as
-a small → large funnel it costs ~0.8× all-OMOL-0. Whether it replaces OMOL-0 waits on stage 5a.
-**Missing:** the connectivity check after relaxation (gate E1), and the partial-relaxation funnel
-(slices F0–F6).
+construct today, ~5 s on the GPU. After each relaxation the bonding is re-derived from the
+coordinates and compared with the intended structure, so a relaxation that breaks or forms a bond
+is flagged and kept out of the energies.
+
+A model-comparison study against DFT has been run on six Ni species:
+- **MACE-MH-1** was rejected as the relaxer. It is blind to charge and spin, and DFT prefers
+  OMOL-0's Ni minima.
+- **MACE-POLAR-1-L** is DFT-equivalent to OMOL-0 on five of the six and better on the sixth. Run as
+  a small → large funnel it costs ~0.8× all-OMOL-0. Whether it replaces OMOL-0 waits on the
+  geometry validation in 2.4.
+
+**Planned:** a partial-relaxation funnel that stops unpromising relaxations early.
 
 | Existing | Coverage | Relative to MACE-OMOL-0 |
 |---|---|---|
@@ -312,7 +333,7 @@ a small → large funnel it costs ~0.8× all-OMOL-0. Whether it replaces OMOL-0 
 | AIMNet2 [26] | 14 main-group elements; no transition metals (a Pd variant exists) | out of scope for Ni |
 | ANI-2x, MACE-OFF | organic | out of scope |
 
-**Benchmark (E-1).** MACE-OMOL-0, MACE-POLAR-1, MACE-MH, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
+**Benchmark.** MACE-OMOL-0, MACE-POLAR-1, MACE-MH, UMA, GFN2-xTB and g-xTB against ωB97M-V on the escalated species,
 MOR41 [27], WCCR10 [28] and a tmQM Ni subset. Metrics:
 - geometry RMSD;
 - **Spearman ρ of conformer ranking** — the property MACE is actually used for;
@@ -337,7 +358,7 @@ MOR41 [27], WCCR10 [28] and a tmQM Ni subset. Metrics:
 - Proton exchange with acetate: +0.25 eV. Its experimental reference is pending a sourced tHQ pKa.
 - Status: **screening only**.
 
-**Benchmark (E-2).** A pKa calibration set, as RMSE in pKa units for three schemes: direct (H₃O⁺),
+**Benchmark.** A pKa calibration set, as RMSE in pKa units for three schemes: direct (H₃O⁺),
 relative (proton sink) and cluster-continuum (H₃O⁺(H₂O)₃); plus the ALPB–GBSA–SMD spread per
 species.
 
@@ -368,11 +389,11 @@ screened routes contain the top-M DFT routes?
 | Existing | Relative to MolCluster |
 |---|---|
 | ORCA, Gaussian, Q-Chem, Psi4, PySCF / GPU4PySCF | consumed, not replaced |
-| quasi-RRHO [37], GoodVibes [38], xTB `bhess` | thermochemistry; MolCluster's contribution is the MACE Hessian as accelerator |
+| quasi-RRHO [37], GoodVibes [38], xTB single-point Hessians | thermochemistry; MolCluster's contribution is the MACE Hessian as accelerator |
 | r²SCAN-3c [39], ωB97X-3c [40], DLPNO-CCSD(T) | cheaper recipes, and reference points |
 | SSE17 [41] | experimentally derived spin-state energetics, Ni²⁺ included |
 
-**Benchmark (E-3/E-4).**
+**Benchmark.**
 1. G_RRHO from the MACE Hessian against a DFT Hessian on ~10 species.
 2. DFT at the MACE geometry against the DFT minimum — the accelerator claim.
 3. Ni(II) spin ordering on the route species.
@@ -387,7 +408,7 @@ computed ΔG against experiment gives the reported uncertainty.
 | NIST SRD 46 [42], IUPAC SC-Database | the reference constants |
 | HySS [43], PHREEQC [44], Visual MINTEQ | speciation codes that **consume** measured constants; MolCluster **computes** constants for species that have none |
 
-**Benchmark (E-6).**
+**Benchmark.**
 - Ni(II) stepwise log β for Cl⁻, acetate and one catecholate against NIST 46 (RMSE, log units).
 - The first hydrolysis of Ni(H₂O)₆²⁺.
 - The **Irving–Williams order** [45] (Mn < Fe < Co < Ni < Cu > Zn) for one ligand across metals — the
@@ -400,14 +421,14 @@ computed ΔG against experiment gives the reported uncertainty.
 - A basis token decides when two routes may be compared.
 - The net equation is judged whole.
 - Every number carries its recipe and caveats.
-- Next: speciation from priced equilibria. No transition states (barrier proxy C6 is deferred).
+- Next: speciation from priced equilibria. No transition states (a barrier proxy is deferred).
 
 | Existing | Approach | Relative to MolCluster |
 |---|---|---|
 | Chemoton + KiNetX [18] | automated elementary steps with TSs, then kinetics | **far more complete kinetics**; MolCluster is thermodynamic, curated, composition-level |
 | AutoMeKin [46], YARP [47], GSM [48] | automated reaction discovery with TSs | kinetics-first; mostly organic or gas phase |
 | RMG [49] | rate-based mechanism generation | gas and combustion |
-| energetic span model [50] | turnover-determining states | a candidate for the C6 barrier proxy |
+| energetic span model [50] | turnover-determining states | a candidate for the barrier proxy |
 | HySS / PHREEQC | speciation from constants | MolCluster's intended output form |
 
 **Domain boundary — state it.** Ni(II) exchanges water at ~3×10⁴ s⁻¹ [51], so ligand substitution is
@@ -415,7 +436,7 @@ under thermodynamic control, and composition-level routes plus speciation answer
 question without transition states. For inert centres (Cr(III), Co(III)) that fails, and
 Chemoton-style kinetics would be needed.
 
-**Benchmark (E-7).**
+**Benchmark.**
 1. **End to end:** aqueous Ni(II)–acetate speciation against pH, from ingredients alone.
 2. **The salt question** under a common proton acceptor (screen: Cl route −0.66 eV, OAc route −0.08
    eV), re-priced at the refine tier.
@@ -442,7 +463,7 @@ needs labels MACE lacks — DFT from refinement (2.4) and experiment (§5).
 | nodes | 1,123 typed graphs, L0–L2, charge, spin | species energy, stability, hydration preference | one metal, three ligands |
 | geometries | 15,722 (3,600 MACE) | conformer priors: which choice vector reaches the minimum | near-duplicates |
 | energies | MACE + ALPB | — | labels at screening fidelity |
-| edges | 19,762 with roles, stoichiometry and `atom_map_json` | reaction energies; a condensed graph of reaction is directly buildable | ΔE depends on proton sink, medium and recipe |
+| edges | 19,762 with roles, stoichiometry and atom maps | reaction energies; a condensed graph of reaction is directly buildable | ΔE depends on proton sink, medium and recipe |
 | task outcomes | 33,829 with rejection codes | construction feasibility | partly the constructor's limits, not chemistry |
 
 ### Models, ranked by value against risk
@@ -450,8 +471,8 @@ needs labels MACE lacks — DFT from refinement (2.4) and experiment (§5).
 | # | Model | Labels | Data needed | Use | Existing comparator |
 |---|---|---|---|---|---|
 | L1 | **Δ-learning** E_DFT − E_MACE and ΔG_SMD − ΔG_ALPB, with uncertainty (GP or ensemble on RAC descriptors or graph kernels) | refine stage | 10²–10³ | corrects screening numbers; a "MACE trust" map (e.g. redox non-innocent THQ) | Δ-ML [36]; RACs for TMCs [52] |
-| L2 | **Active-learning escalation** — acquisition (expected improvement or UCB) over the route graph from screen mean plus L1 uncertainty; replaces the fixed stage-4 rule | refine stage, iteratively | grows as it runs | **the nudge**: what to refine next | uncertainty-driven TMC discovery [53]; Chemoton heuristics [18] |
-| L3 | **Construction-feasibility classifier** — predicts `qc_clash`, `placer_refused` and `chelate_cannot_span` before building | task outcomes | 10⁴ already | pruning at polynuclear (M6) scale, where enumeration explodes | — (no comparator records rejections) |
+| L2 | **Active-learning escalation** — acquisition (expected improvement or UCB) over the route graph from screen mean plus L1 uncertainty; replaces the fixed selection rule | refine stage, iteratively | grows as it runs | **the nudge**: what to refine next | uncertainty-driven TMC discovery [53]; Chemoton heuristics [18] |
+| L3 | **Construction-feasibility classifier** — predicts clashes, refused placements and chelates that cannot span, before building | task outcomes | 10⁴ already | pruning at polynuclear scale, where enumeration explodes | — (no comparator records rejections) |
 | L4 | **Geometry-free species-energy surrogate** — a GNN on the typed graph | MACE + corrections over a diverse generated corpus | 10⁵ | pruning 10⁶-scale enumerations before relaxing | tmQMg GNNs [16]; Chemprop [54] |
 | L5 | **Foundation fine-tune** — MACE-OMOL or UMA fine-tuned on refine-stage DFT | refine stage | 10²–10³ | the realistic "larger model": better screening *for this chemistry* | MACE foundation fine-tuning [55] |
 | L6 | **Experimental priors** — "is this species observed / stable in solution?" | CSD existence [56]; NIST log β [42] | 10³–10⁵ | the only prediction genuinely beyond calculation | — |
@@ -460,8 +481,8 @@ needs labels MACE lacks — DFT from refinement (2.4) and experiment (§5).
 is too narrow, the labels are the wrong fidelity, and OMol25-scale models already fill that niche.
 
 ### Rules it inherits from the design
-- **A learned number is its own tier.** The fidelity ladder already has `HEURISTIC` for numbers with
-  no structure-specific compute. A learned number gets a `MethodSpec` carrying the model version and
+- **A learned number is its own tier.** The fidelity ladder already has a rung for numbers with
+  no structure-specific compute. A learned number carries a record of the model version and
   training-set hash. The pinned-theory rule refuses any equation mixing learned and computed terms.
   Learned numbers are never reported as results.
 - **Species-level, not edge-level, energies** for thermodynamics. Edge ΔE then follows by Hess's
@@ -480,7 +501,7 @@ of registry. The same corpus serves the Irving–Williams benchmark (§5).
 | Model | Metric | Baseline |
 |---|---|---|
 | L1 | held-out MAE of corrected screening vs DFT; calibration of the uncertainty (coverage of 1σ/2σ) | uncorrected screening |
-| L2 | **selection recall** — top-M DFT routes found per DFT job spent | the fixed stage-4 rule |
+| L2 | **selection recall** — top-M DFT routes found per DFT job spent | the fixed selection rule |
 | L3 | precision and recall of rejection; construction time saved | build everything |
 | L4 | MAE vs MACE on held-out metals and ligands; enrichment of top-k | random pruning |
 | L5 | MAE vs DFT on held-out species vs MACE-OMOL-0 | MACE-OMOL-0 |
@@ -530,17 +551,17 @@ citation; *measure* = needs a wet-lab experiment.
 |---|---|---|---|---|
 | Ni(II) spin ground state (octahedral triplet; μ_eff ≈ 2.9–3.3 μB) | magnetic susceptibility literature; SSE17 [41] | spin ordering at the refine stage | correct ground state; splitting error | exists |
 | d–d band positions of Ni(II) species (UV-vis) | literature; own measurements | TD-DFT, or ligand-field ordering of predicted species | band shift direction on substitution | exists / measure |
-| metal oxidation state in THQ complexes | EPR, XANES where reported | spin density on Ni (`oxidation_state_mismatch`) | agreement | **source** |
+| metal oxidation state in THQ complexes | EPR, XANES where reported | spin density on Ni | agreement | **source** |
 
 ### 5.4 The project's own question — proposed experiments
 These test the salt result (acetate vs chloride as the Ni source for THQ complexation) directly:
 1. **Potentiometric (pH-metric) titration** of Ni²⁺ + THQ in NiCl₂ and in Ni(OAc)₂ media at fixed
    ionic strength. Fit with Hyperquad [61] to get log β and the species distribution against pH, and
-   compare with the predicted speciation (E7). This is the decisive experiment.
+   compare with the predicted speciation. This is the decisive experiment.
 2. **UV-vis titration** of the same systems. The appearance of the complex band against pH is an
    independent speciation readout.
 3. **Isothermal titration calorimetry** gives ΔH and TΔS separately, which tests the entropy terms
-   (5d) that screening lacks.
+   that screening lacks.
 4. **Synthesis outcome.** Does the solid obtained (PXRD, single-crystal structure) contain the SBU
    predicted as the dominant solution species? It's a weaker link, since crystallisation selects, but
    it is the question MOF synthesis actually asks.
@@ -594,8 +615,71 @@ field's standard tool.
 | 13 | pKa, log β, hydrolysis, hydration energies (5.2) | 5 | with 2 and 6 | numbers match experiment |
 | 14 | Ni–THQ titration in chloride vs acetate media (5.4) | 5 | wet lab, weeks | **the project's question, answered by experiment** |
 
-Feasible before an external review: 1, 2 and 9. Benchmark 3 needs the DFT backend (E4); 14 needs a
-collaborator with a titrator.
+Benchmark 3 has started (six Ni species, three MACE variants against DFT). Next in reach are 1, 2
+and 9. Benchmark 14 needs a collaborator with a titrator. Status of every item is in §8.
+
+---
+
+## 8. Progress ledger — done against planned
+
+Status on 13 October 2026. **Done** = built and in use; **Partly** = built in part, with the
+remainder named; **In progress** = being built now; **Planned** = not started.
+
+### Line 1 — structure generation, classification, identification
+| Step | What was planned | Status | What remains |
+|---|---|---|---|
+| 1.1 | ligand input from SMILES; protomers enumerated and named by symmetry | **Done** | pH-aware enumeration; tautomers |
+| 1.2 | automatic binding-site perception with frames, lone pairs and torsion wells | **Done** | three known typing gaps (pyrazolate, oxide, sp³ amines) |
+| 1.3 | mononuclear coordination spheres: whole-sphere placement, one-ligand growth, reserved vacancies | **Done** | shown on Ni(II), tetrahedral and octahedral |
+| 1.3 | explicit first-shell solvent through the co-ligand window | **Done** | — |
+| 1.3 | polynuclear nodes (bridged and metal–metal bonded) | **In progress** | bridging and metal–metal joins are built; validated full nodes are not |
+| 1.4 | identity by composition and exact connectivity | **Done** | verification against nauty (benchmark 1) |
+| 1.4 | isomer level (cis/trans, fac/mer) | **Partly** | the classifier exists; production runs do not apply it yet |
+| 1.4 | conformer level | **Done** | the energy window is still open |
+| 1.5 | registry with provenance: one species once, every route an edge | **Done** | scaling test (benchmark 7) |
+| 1.5 | each geometry linked atom-by-atom to its structure | **Done** | — |
+| — | interface: recipe builder, run inspector, registry browser, energy-level graph | **Done** | — |
+
+### Line 2 — energy evaluation and pathway determination
+| Step | What was planned | Status | What remains |
+|---|---|---|---|
+| 2.1 | relaxation of every construct with a machine-learned potential | **Done** | — |
+| 2.1 | bonding re-checked after each relaxation | **Done** | — |
+| 2.1 | comparison of candidate potentials against DFT | **Partly** | done on six Ni species; the choice of relaxer is open; UMA, g-xTB and external sets remain |
+| 2.1 | partial-relaxation funnel | **Planned** | — |
+| 2.2 | screening in a continuum (water) on the same geometry | **Done** | error bar from a second continuum; pH and water-reference options; a flag for hydration changes |
+| 2.2 | proton exchange with a reference acid | **Done** | — |
+| 2.2 | refusal or flagging of unbalanced, non-isodesmic and charge-separating equations | **Done** | — |
+| 2.3 | selection of whole equations for refinement | **Planned** | — |
+| 2.4 | DFT refinement | **Partly** | single points with spin and oxidation-state checks are built; DFT-level solvation and the spin ladder are not |
+| 2.4 | thermochemistry from machine-learned Hessians | **Planned** | — |
+| 2.5 | calibration against pKa and stability constants; standard state, pH | **Planned** | the pKa of tetrahydroxyquinone still needs a source |
+| 2.6 | routes walked hop by hop, forward and reverse, priced as whole equations | **Done** | — |
+| 2.6 | automatic route enumeration and ranking | **Planned** | needs a barrier proxy |
+| 2.6 | speciation from priced equilibria | **Planned** | — |
+| — | hydrogen-bonded solvent shells for free ions and the proton | **Planned** | — |
+
+### Studies and hypotheses
+| Item | Status | Note |
+|---|---|---|
+| Ni–tetrahydroxyquinone, chloride vs acetate salt | **Done at screening level** | re-pricing at the refinement level is planned |
+| H1 monomer metastability | **Planned** | needs systems with known crystalline and failed outcomes |
+| H2 recipe as a smooth energy path | **Partly** | one worked instance (the proton acceptor in the salt study) |
+| H3 solvation shell as synthesis method | **Partly** | all three treatments exist for the salt study; no systematic comparison with milling results yet |
+
+### Learning layer and experiments
+| Item | Status |
+|---|---|
+| dataset exporter | **Planned** |
+| Δ-learning, active-learning selection, feasibility classifier, surrogate, fine-tuning | **Planned** |
+| benchmark 3 (potentials against DFT) | **In progress** |
+| benchmarks 1, 2, 4–13 | **Planned** |
+| benchmark 14 (titration in chloride and acetate media) | **Planned** — needs a wet-lab partner |
+
+**Reading the ledger.** Line 1 is largely built for mononuclear species; its open front is
+polynuclear nodes and the isomer level. Line 2 is built up to screening. Every number produced so
+far is a screening number, and the first reportable ones wait on the rest of the refinement stage
+and on calibration.
 
 ---
 
@@ -684,3 +768,9 @@ checked for this document.
     likelihood.
 73. Van Vleet, Weng, Li & Schmidt, *Chem. Rev.* **118**, 3681 (2018) — in situ studies of MOF
     nucleation and growth.
+74. Pichon, Lazuen-Garay & James, *CrystEngComm* **8**, 211 (2006) — solvent-free mechanochemical
+    synthesis of a microporous MOF.
+75. Friščić et al., *CrystEngComm* **11**, 418 (2009) — liquid-assisted grinding and the role of the
+    added liquid.
+76. James et al., *Chem. Soc. Rev.* **41**, 413 (2012) — mechanochemistry: opportunities for new and
+    cleaner synthesis.
