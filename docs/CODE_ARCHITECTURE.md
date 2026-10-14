@@ -94,6 +94,7 @@ charge, spin — travels with it in a `methods` row.
 | `registry/verify.py` | Does every stored row still agree with its recipe? Includes each geometry's link (D30): a wrong one is an error, a missing one stale | ✅ |
 | `registry/recover.py` | B28: links geometries stored before D30 to their graph — match by bonds, relaxations inherit, pulled-back starts only in the stored numbering; coordinates untouched, mis-keyed site states dropped. Run by `scripts/recover_atom_links.py`, dry run by default | ✅ |
 | `naming.py` | Labels are **derived from retrieved rows**, never an input to retrieval | ✅ |
+| `explog/` | Wet-lab experiment log, apart from the registry: YAML entries under `<data root>/experiments`, one field spec (`spec.py`) driving templates, `check` (blank = still to record; `n/a`, `unknown` are answers), the editor schema and the `show`/`diff`/`index` views. Never fills a value. CLI `scripts/expt.py` | ✅ |
 | `ui/` | Read-only viewer + spec builder + run inspector (FastAPI + 3Dmol.js) | ✅ |
 | `ui/static/chrome.{js,css}` | The four pages' shared tab strip and registry picker. `MOFSBU_PAGES` is the one list of pages; a new page is an entry there and a route | ✅ |
 | `ui/static/routes.js` | How to read a provenance edge, shared by the registry panel and the energy graph: what to call a species, when two edges are one chemistry, how a dE carries its caveat. Pure functions; each page lays them out for the width it has | ✅ |

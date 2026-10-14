@@ -276,6 +276,28 @@ gone, checked by pid on the host that wrote them; where that cannot be checked �
 machine, or Windows — the run is reported as unverified rather than assumed dead, and a
 run with a task genuinely in flight is never touched.
 
+## Experiment log (`scripts/expt.py`)
+
+Wet-lab syntheses, characterization and cell tests, one YAML file per experiment under
+`<data root>/experiments/` — git-ignored, so the records stay on the machine while the tool is
+public. A blank field is *still to record*; `n/a` means it does not apply, `unknown` that it
+cannot be recovered. Nothing is ever filled in for you.
+
+    python scripts/expt.py init                         # folders, reagents.yaml, phases.yaml
+    python scripts/expt.py new 2-04 --like 2-01         # copy the recipe, outcome left blank
+    python scripts/expt.py new 4-01 --method solution   # solution | ball_mill | soxhlet | ...
+    python scripts/expt.py check                        # what is still to record, and problems
+    python scripts/expt.py show 2-01                    # one entry, readable
+    python scripts/expt.py diff 2-01 2-02               # only what differs
+    python scripts/expt.py index                        # regenerate INDEX.md
+    python scripts/expt.py fmt                          # restore canonical, commented layout
+
+Enter masses as weighed: with a `formula` in `reagents.yaml`, mmol, the molar ratio against what
+was planned, and η for milling are computed and shown. Instrument files go in `raw/` and are
+referred to by path. In VS Code with the Red Hat YAML extension, each file's first line links a
+schema that `expt` regenerates, giving dropdowns for methods, reagent codes and phases, and a red
+mark on a misspelt field as you type.
+
 ## Two-machine workflow (git is the bridge)
 
 Laptop = editing / light dev; Linux workstation = heavy xTB/DFT/MACE runs.

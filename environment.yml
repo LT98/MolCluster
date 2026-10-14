@@ -14,6 +14,7 @@ dependencies:
   - pytest
   - fastapi           # read-only registry viewer (M3.5)
   - uvicorn
+  - pyyaml            # experiment log (scripts/expt.py)
   - pip
   # ---- optional extras (uncomment as needed) ----
   # - pymatgen        # StructureMatcher / MoleculeMatcher for L3 dedup
