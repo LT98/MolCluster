@@ -1,0 +1,773 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mofsbu — experiment log</title>
+<link rel="stylesheet" href="/static/chrome.css">
+<script src="/static/chrome.js"></script>
+<style>
+  :root{--bg:#fbfbfa;--panel:#fff;--ink:#1c1b19;--muted:#6b6862;--line:#e2e0dc;
+        --accent:#3a6ea5;--accent-soft:#e9f0f7;--warn:#8a5a00;--warnbg:#fff6e0;
+        --ok:#2f6b3a;--bad:#a33;--badbg:#fbeaea}
+  @media (prefers-color-scheme:dark){:root{--bg:#16181c;--panel:#1d2025;--ink:#e6e4e1;
+        --muted:#9a968f;--line:#2e333a;--accent:#7fb0e0;--accent-soft:#243444;
+        --warn:#e0b062;--warnbg:#2b2313;--ok:#7fc48d;--bad:#e08080;--badbg:#3a1f1f}}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;
+       font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .main{flex:1 1 auto;display:grid;grid-template-columns:250px minmax(420px,1fr) 340px;
+        gap:12px;padding:12px;min-height:0}
+  .col{min-height:0;overflow:auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+  .card + .card{margin-top:10px}
+  h2{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+     margin:0 0 8px;font-weight:600}
+  input,select,textarea{width:100%;padding:5px 7px;background:var(--bg);color:var(--ink);
+        border:1px solid var(--line);border-radius:5px;font:inherit;font-size:13px}
+  textarea{min-height:64px;resize:vertical}
+  button{padding:5px 10px;border:1px solid var(--line);border-radius:5px;background:var(--bg);
+         color:var(--ink);font:inherit;font-size:13px;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.small{padding:1px 7px;font-size:12px}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .muted{color:var(--muted);font-size:12px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .row>input,.row>select{flex:1 1 90px}
+  .err{color:var(--bad);font-size:12px;margin-top:6px;white-space:pre-wrap}
+  .views{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+  .views a{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;
+           color:var(--ink);text-decoration:none}
+  .views a[aria-current]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+  ul.entries{list-style:none;margin:0;padding:0}
+  ul.entries li{padding:6px 6px;border-radius:5px;cursor:pointer;border:1px solid transparent}
+  ul.entries li:hover{background:var(--accent-soft)}
+  ul.entries li[aria-current]{border-color:var(--accent);background:var(--accent-soft)}
+  .eid{font-weight:600}
+  .chip{display:inline-block;padding:0 6px;border:1px solid var(--line);border-radius:999px;
+        font-size:11px;color:var(--muted);margin-left:4px}
+  .chip.pend{border-color:var(--warn);color:var(--warn)}
+  .chip.prob{border-color:var(--bad);color:var(--bad)}
+  /* the form */
+  .bar{position:sticky;top:0;z-index:2;display:flex;gap:8px;align-items:center;
+       background:var(--panel);border:1px solid var(--line);border-radius:8px;
+       padding:8px 12px;margin-bottom:10px}
+  .bar .title{font-weight:600;font-size:15px}
+  .bar .state{margin-left:auto;font-size:12px;color:var(--muted)}
+  .bar .state.dirty{color:var(--warn)}
+  details.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+                  margin-bottom:10px}
+  details.section>summary{padding:8px 12px;cursor:pointer;font-weight:600;font-size:13px;
+                          display:flex;gap:8px;align-items:center}
+  details.section>summary .help{font-weight:400}
+  details.section>.body{padding:0 12px 12px}
+  details.section.dim>summary::after{content:"not asked for while planned or abandoned";
+        margin-left:auto;font-weight:400;font-size:11.5px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px 10px}
+  .field label{display:block;font-size:11.5px;color:var(--muted);margin:0 0 2px}
+  .field.wide{grid-column:1/-1}
+  fieldset{border:1px solid var(--line);border-radius:6px;padding:6px 10px 10px;margin:8px 0;
+           min-width:0}
+  legend{font-size:12px;color:var(--muted);padding:0 4px;display:flex;gap:6px;align-items:center}
+  legend select{width:auto;padding:0 4px;font-size:11px}
+  .sentinel>:not(legend){display:none}
+  .pending>input,.pending>select,.pending>textarea{border-color:var(--warn);background:var(--warnbg)}
+  fieldset.pending{border-color:var(--warn)}
+  .problem>input,.problem>select,.problem>textarea{border-color:var(--bad);background:var(--badbg)}
+  fieldset.problem{border-color:var(--bad)}
+  .flash{outline:2px solid var(--accent);outline-offset:2px}
+  /* side panel */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:3px 5px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .off{color:var(--bad);font-weight:600}
+  ul.find{list-style:none;margin:0;padding:0;font-size:12px}
+  ul.find li{padding:2px 0;cursor:pointer;border-bottom:1px dotted var(--line)}
+  ul.find li:hover{color:var(--accent)}
+  ul.find.prob li{color:var(--bad)}
+  .tablewrap{overflow:auto}
+  table.rows{margin:2px 0 6px}
+  table.rows th{font-size:11px;white-space:nowrap}
+  table.rows td{padding:2px 3px;border-bottom:0}
+  table.rows td input,table.rows td select{min-width:70px}
+  table.rows td.ops{white-space:nowrap;width:1%}
+  td.pending>input,td.pending>select{border-color:var(--warn);background:var(--warnbg)}
+  td.problem>input,td.problem>select{border-color:var(--bad);background:var(--badbg)}
+  tr.pending>td:first-child{box-shadow:inset 3px 0 var(--warn)}
+  tr.problem>td:first-child{box-shadow:inset 3px 0 var(--bad)}
+  .tablewrap table input,.tablewrap table select{min-width:90px;font-size:12px;padding:3px 5px}
+  .tablewrap td.pending input,.tablewrap td.pending select{border-color:var(--warn);background:var(--warnbg)}
+  .tablewrap td.problem input,.tablewrap td.problem select{border-color:var(--bad);background:var(--badbg)}
+  .single{grid-column:2/4}
+</style>
+
+<header class="appbar">
+  <a class="appbar-brand" href="/">mofsbu</a>
+  <nav class="tabs"></nav>
+  <div class="appbar-right">
+    <h1>experiment log — wet-lab records, kept apart from the registry</h1>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="col">
+    <div class="card">
+      <nav class="views" id="views">
+        <a href="#overview">overview</a><a href="#reagents">reagents</a>
+        <a href="#phases">phases</a><a href="#compare">compare</a>
+      </nav>
+      <h2>experiments</h2>
+      <input id="filter" placeholder="filter" autocomplete="off" style="margin-bottom:6px">
+      <ul class="entries" id="entryList"><li class="muted">loading…</li></ul>
+    </div>
+    <div class="card">
+      <h2>new experiment</h2>
+      <input id="newId" placeholder="id, e.g. 2-04" autocomplete="off" spellcheck="false">
+      <div class="row" style="margin-top:6px">
+        <select id="newMethod" title="start blank for this method"></select>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <select id="newLike" title="or copy the recipe of an existing entry"></select>
+      </div>
+      <button class="primary" id="newBtn" style="margin-top:8px;width:100%">create</button>
+      <div class="err" id="newErr"></div>
+      <p class="muted" style="margin:8px 0 0">Type <b>n/a</b> in a field that does not apply
+        and <b>unknown</b> in one that cannot be recovered. Blank means still to record.</p>
+    </div>
+    <div class="card muted" id="rootNote"></div>
+  </aside>
+
+  <main class="col" id="centre"></main>
+  <aside class="col" id="side"></aside>
+</div>
+
+<datalist id="dl-reagent"></datalist>
+<datalist id="dl-phase"></datalist>
+<datalist id="dl-entry"></datalist>
+
+<script>
+"use strict";
+const esc = s => mofsbuChrome.esc(s);
+const S = {spec: null, entries: [], reagents: {table: {}, version: null},
+           phases: {table: {}, version: null}, cur: null, view: null,
+           findings: null, computed: null, timer: null};
+
+async function api(url, opts = {}){
+  if(opts.body && typeof opts.body !== "string"){
+    opts.body = JSON.stringify(opts.body);
+    opts.headers = {"Content-Type": "application/json"};
+  }
+  const r = await fetch(url, opts);
+  const text = await r.text();
+  let body; try { body = JSON.parse(text); } catch(e){ body = text; }
+  if(!r.ok) throw new Error((body && body.detail) || r.statusText);
+  return body;
+}
+function el(tag, cls, html){
+  const e = document.createElement(tag);
+  if(cls) e.className = cls;
+  if(html !== undefined) e.innerHTML = html;
+  return e;
+}
+const human = k => k.replace(/_/g, " ");
+const isObj = v => v && typeof v === "object" && !Array.isArray(v);
+const isSentinel = v => typeof v === "string" && S.spec.sentinels.includes(v);
+const fmtNum = v => v == null ? "" : (Math.abs(v) >= 100 ? v.toFixed(1) : v.toPrecision(3));
+
+function parseVal(leaf, text){
+  const t = text.trim();
+  if(t === "") return null;
+  if(S.spec.sentinels.includes(t.toLowerCase())) return t.toLowerCase();
+  if(["num", "int", "temp"].includes(leaf.kind)){
+    if(leaf.kind === "temp" && t.toUpperCase() === "RT") return "RT";
+    const n = Number(t);
+    return Number.isFinite(n) ? n : t;           // a non-number is kept and reported
+  }
+  return t;
+}
+function itemName(node, item, i){
+  const k = node.key;
+  if(isObj(item) && k && item[k] != null && item[k] !== "") return String(item[k]);
+  return String(i + 1);
+}
+const join = (path, key) => path ? `${path}.${key}` : key;
+
+/* ── the entry form: built from the spec, writing straight into S.cur.entry ── */
+
+function leafInput(leaf, value, onChange){
+  let input;
+  if(leaf.kind === "enum"){
+    input = el("select");
+    const opts = ["", ...leaf.choices, ...S.spec.sentinels];
+    input.innerHTML = opts.map(o => `<option value="${esc(o)}">${esc(o || "—")}</option>`).join("");
+    if(value != null && !opts.includes(String(value)))
+      input.insertAdjacentHTML("beforeend", `<option>${esc(value)}</option>`);
+    input.value = value == null ? "" : String(value);
+  } else if(leaf.kind === "text"){
+    input = el("textarea");
+    input.value = value == null ? "" : String(value);
+  } else {
+    input = el("input");
+    input.value = value == null ? "" : String(value);
+    if(["num", "int", "temp"].includes(leaf.kind)) input.inputMode = "decimal";
+    if(["reagent", "phase", "entry"].includes(leaf.kind)) input.setAttribute("list", `dl-${leaf.kind}`);
+    if(leaf.kind === "date") input.placeholder = "YYYY-MM-DD";
+  }
+  if(leaf.help && !input.placeholder) input.placeholder = leaf.help;
+  input.title = [leaf.unit, leaf.help].filter(Boolean).join(" — ");
+  input.addEventListener("input", () => onChange(parseVal(leaf, input.value), false));
+  input.addEventListener("change", () => onChange(parseVal(leaf, input.value), true));
+  return input;
+}
+
+function renderLeaf(key, leaf, parent, path, host, opts = {}){
+  const wrap = el("div", "field" + (leaf.kind === "text" || opts.wide ? " wide" : ""));
+  wrap.dataset.path = path;
+  const unit = unitOf(key, leaf) ? ` <span class="muted">(${esc(leaf.unit)})</span>` : "";
+  wrap.appendChild(el("label", "", esc(label(key, leaf)) + unit + (leaf.required ? "" : " · optional")));
+  const input = leafInput(leaf, parent[key], (v, committed) => {
+    parent[key] = v;
+    touched();
+    if(committed && opts.rerender) renderEntry();
+  });
+  if(opts.readOnly) input.readOnly = true;
+  wrap.appendChild(input);
+  host.appendChild(wrap);
+}
+
+function sentinelPicker(value, onPick){
+  const s = el("select");
+  s.title = "mark this whole group as not applicable or unknown";
+  s.innerHTML = ["", ...S.spec.sentinels].map(o => `<option value="${o}">${o || "recorded"}</option>`).join("");
+  s.value = isSentinel(value) ? value : "";
+  s.addEventListener("change", () => onPick(s.value || null));
+  return s;
+}
+
+function renderBlockBody(block, obj, path, host){
+  const grid = el("div", "grid");
+  host.appendChild(grid);
+  for(const [k, child] of block.fields){
+    const p = join(path, k);
+    if(child.type === "leaf") renderLeaf(k, child, obj, p, grid, {rerender: k === itemKeyOf(path)});
+    else renderNode(k, child, obj, p, host);
+  }
+}
+// The field that names an item in paths: changing it re-renders so paths stay true.
+const KEYS = {};
+function itemKeyOf(path){ return KEYS[path.replace(/\[[^\]]*\]$/, "")]; }
+
+function renderNode(key, node, parent, path, host){
+  if(node.type === "block") return renderBlock(key, node, parent, path, host);
+  return renderItems(key, node, parent, path, host);
+}
+
+function renderBlock(key, block, parent, path, host){
+  const fs = el("fieldset");
+  fs.dataset.path = path;
+  const lg = el("legend", "", esc(human(key)) + (block.help ? ` <span class="muted">${esc(block.help)}</span>` : ""));
+  const value = parent[key];
+  lg.appendChild(sentinelPicker(value, v => { parent[key] = v ?? {}; touched(); renderEntry(); }));
+  fs.appendChild(lg);
+  if(isSentinel(value)) fs.classList.add("sentinel");
+  else {
+    if(!isObj(parent[key])) parent[key] = {};
+    renderBlockBody(block, parent[key], path, fs);
+  }
+  host.appendChild(fs);
+}
+
+function renderItems(key, node, parent, path, host, top = false){
+  KEYS[path] = node.key;
+  const wrap = top ? host : el("fieldset");
+  wrap.dataset.path = path;
+  const value = parent[key];
+  if(!top){
+    const lg = el("legend", "", esc(human(key)) + (node.help ? ` <span class="muted">${esc(node.help)}</span>` : ""));
+    lg.appendChild(sentinelPicker(value, v => { parent[key] = v ?? []; touched(); renderEntry(); }));
+    wrap.appendChild(lg);
+  }
+  if(isSentinel(value)){ wrap.classList.add("sentinel"); if(!top) host.appendChild(wrap); return; }
+  if(!Array.isArray(parent[key])) parent[key] = [];
+  const list = parent[key];
+  const flat = !top && node.item.fields.every(([, f]) => f.type === "leaf");
+  if(flat){ renderRows(key, node, list, path, wrap); host.appendChild(wrap); return; }
+  list.forEach((item, i) => {
+    if(!isObj(item)) list[i] = item = {};
+    const name = itemName(node, item, i);
+    const fs = el("fieldset");
+    const ipath = `${path}[${name}]`;
+    fs.dataset.path = ipath;
+    const lg = el("legend", "", `<b>${i + 1}</b> ${esc(name === String(i + 1) ? "" : name)}`);
+    lg.append(...moveButtons(list, i));
+    fs.appendChild(lg);
+    renderBlockBody(node.item, item, ipath, fs);
+    wrap.appendChild(fs);
+  });
+  const add = el("button", "small", `+ add ${esc(human(key).replace(/s$/, ""))}`);
+  add.type = "button";
+  add.onclick = () => { list.push(key === "preparations" ? {components: [{}]} : {}); touched(); renderEntry(); };
+  wrap.appendChild(add);
+  if(!top) host.appendChild(wrap);
+}
+
+/* A list whose items are all plain values (components, washes, a rate ladder) is a
+   table: one row per item, so a preparation with six components stays readable. */
+function moveButtons(list, i){
+  const out = [];
+  for(const [txt, d, tip] of [["↑", -1, "up"], ["↓", 1, "down"], ["✕", 0, "remove"]]){
+    const b = el("button", "small", txt); b.type = "button"; b.title = tip;
+    b.onclick = () => {
+      if(d === 0) list.splice(i, 1);
+      else { const j = i + d; if(j < 0 || j >= list.length) return; [list[i], list[j]] = [list[j], list[i]]; }
+      touched(); renderEntry();
+    };
+    out.push(b);
+  }
+  return out;
+}
+
+function renderRows(key, node, list, path, host){
+  const fields = node.item.fields;
+  const table = el("table", "rows");
+  table.innerHTML = "<tr>" + fields.map(([k, f]) =>
+    `<th title="${esc(f.help)}">${esc(label(k, f))}${unitOf(k, f) ? ` <span class="muted">${esc(f.unit)}</span>` : ""}${f.required ? "" : " <span class='muted'>·</span>"}</th>`).join("")
+    + "<th></th></tr>";
+  list.forEach((item, i) => {
+    if(!isObj(item)) list[i] = item = {};
+    const ipath = `${path}[${itemName(node, item, i)}]`;
+    const tr = el("tr"); tr.dataset.path = ipath;
+    for(const [k, f] of fields){
+      const td = el("td"); td.dataset.path = `${ipath}.${k}`;
+      td.appendChild(leafInput(f, item[k], (v, committed) => {
+        item[k] = v; touched();
+        if(committed && k === node.key) renderEntry();
+      }));
+      tr.appendChild(td);
+    }
+    const td = el("td", "ops"); td.append(...moveButtons(list, i)); tr.appendChild(td);
+    table.appendChild(tr);
+  });
+  const scroll = el("div", "tablewrap"); scroll.appendChild(table);
+  host.appendChild(scroll);
+  const add = el("button", "small", `+ add ${esc(human(key).replace(/s$/, ""))}`);
+  add.type = "button";
+  add.onclick = () => { list.push({}); touched(); renderEntry(); };
+  host.appendChild(add);
+}
+
+/* "mass_mg" with unit mg reads "mass"; the unit is shown once, beside it. */
+const UNIT_SUFFIX = /_(mg|ml|ul|mmol|min|h|c|hz|pct|rpm|mm|nm|m2_g|mah_g|ma_g|cm2|mg_cm2|g_ml|m|v)$/;
+function label(k, f){
+  const base = f && f.unit ? k.replace(UNIT_SUFFIX, "") : k;
+  return human(base);
+}
+const unitOf = (k, f) => f.unit && f.unit !== label(k, f) ? f.unit : "";
+
+const HEADER = ["id", "title", "status", "date", "operator", "notebook_ref", "derived_from", "method"];
+const OPEN = new Set(["preparations", "steps", "apparatus", "workup", "product"]);
+
+function renderEntry(){
+  const c = S.cur;
+  const centre = document.getElementById("centre");
+  const scroll = centre.scrollTop;
+  const openNow = new Set([...centre.querySelectorAll("details.section")]
+                          .filter(d => d.open).map(d => d.dataset.path));
+  centre.innerHTML = "";
+  const bar = el("div", "bar");
+  bar.innerHTML = `<span class="title">${esc(c.id)}</span>`;
+  const save = el("button", "primary", "save"); save.onclick = saveEntry; save.id = "saveBtn";
+  const copy = el("button", "", "copy as markdown"); copy.onclick = copyCard;
+  const rm = el("button", "", "remove"); rm.onclick = removeEntry;
+  const state = el("span", "state" + (c.dirty ? " dirty" : ""), c.dirty ? "unsaved changes" : "saved");
+  state.id = "saveState";
+  bar.append(save, copy, rm, state);
+  centre.appendChild(bar);
+
+  const e = c.entry;
+  const spec = S.spec.entry;
+  const fields = Object.fromEntries(spec.fields);
+  const head = el("div", "card");
+  const grid = el("div", "grid");
+  head.appendChild(grid);
+  for(const k of HEADER)
+    renderLeaf(k, fields[k], e, k, grid, {readOnly: k === "id", rerender: k === "method" || k === "status"});
+  centre.appendChild(head);
+
+  const quiet = ["planned", "abandoned"].includes(e.status);
+  for(const [k, node] of spec.fields){
+    if(HEADER.includes(k)) continue;
+    const d = el("details", "section" + (node.outcome && quiet ? " dim" : ""));
+    d.dataset.path = k;
+    d.open = openNow.size ? openNow.has(k) : OPEN.has(k);
+    const sum = el("summary", "", `${esc(human(k))} <span class="muted help">${esc(node.help || "")}</span>`);
+    sum.appendChild(el("span", "chip pend", "")).hidden = true;
+    d.appendChild(sum);
+    const body = el("div", "body");
+    if(node.type === "leaf"){ const g = el("div", "grid"); renderLeaf(k, node, e, k, g, {wide: true}); body.appendChild(g); }
+    else if(node.type === "items") renderItems(k, node, e, k, body, true);
+    else {
+      const block = k === "apparatus" ? (S.spec.apparatus[e.method] || S.spec.apparatus.other) : node;
+      if(k === "apparatus") body.appendChild(el("p", "muted", `for method: ${esc(e.method || "—")}`));
+      if(isSentinel(e[k])) body.appendChild(el("p", "muted", `marked ${esc(e[k])}`));
+      const wrapper = el("div"); wrapper.dataset.path = k;
+      const lg = el("div", "row");
+      lg.appendChild(el("span", "muted", "whole section:"));
+      lg.appendChild(sentinelPicker(e[k], v => { e[k] = v ?? {}; touched(); renderEntry(); }));
+      body.appendChild(lg);
+      if(!isSentinel(e[k])){
+        if(!isObj(e[k])) e[k] = {};
+        renderBlockBody(block, e[k], k, wrapper);
+      }
+      body.appendChild(wrapper);
+    }
+    d.appendChild(body);
+    centre.appendChild(d);
+  }
+  centre.scrollTop = scroll;
+  highlight();
+}
+
+function findEl(path){
+  let p = path.replace(/ \(.*\)$/, "");
+  const root = document.getElementById("centre");
+  while(p){
+    const hit = root.querySelector(`[data-path="${CSS.escape(p)}"]`);
+    if(hit) return hit;
+    const cut = Math.max(p.lastIndexOf("."), p.lastIndexOf("["));
+    if(cut <= 0) return null;
+    p = p.slice(0, cut);
+  }
+  return null;
+}
+
+function highlight(){
+  const root = document.getElementById("centre");
+  root.querySelectorAll(".pending,.problem").forEach(n => { n.classList.remove("pending", "problem"); n.removeAttribute("data-msg"); });
+  const f = S.findings;
+  if(!f) return;
+  const counts = {};
+  for(const p of f.pending){
+    const n = findEl(p); if(n) n.classList.add("pending");
+    const top = p.split(/[.[ ]/)[0]; counts[top] = (counts[top] || 0) + 1;
+  }
+  for(const p of f.problems){
+    const [path, msg] = p.split(/: (.*)/s);
+    const n = findEl(path); if(n){ n.classList.add("problem"); n.title = msg || ""; }
+  }
+  root.querySelectorAll("details.section").forEach(d => {
+    const chip = d.querySelector("summary .chip");
+    const n = counts[d.dataset.path] || 0;
+    chip.hidden = !n; chip.textContent = `${n} to record`;
+  });
+}
+
+function jumpTo(path){
+  const n = findEl(path);
+  if(!n) return;
+  let d = n.closest("details"); if(d) d.open = true;
+  n.scrollIntoView({block: "center", behavior: "smooth"});
+  n.classList.add("flash"); setTimeout(() => n.classList.remove("flash"), 1200);
+  const input = n.querySelector("input,select,textarea"); if(input) input.focus({preventScroll: true});
+}
+
+function renderSide(){
+  const side = document.getElementById("side");
+  side.innerHTML = "";
+  if(!S.cur){ return; }
+  const calc = S.computed, f = S.findings;
+  const amounts = el("div", "card");
+  amounts.innerHTML = "<h2>amounts (computed)</h2>";
+  if(calc && calc.components.length){
+    // eq is relative to the first solute with an amount; flag it against the stated ratio
+    const ref = calc.components.find(x => x.eq === 1);
+    let rows = calc.components.map(r => {
+      const stated = ref && typeof r.ratio === "number" && typeof ref.ratio === "number" && ref.ratio
+        ? r.ratio / ref.ratio : null;
+      const off = r.eq != null && stated ? Math.abs(r.eq / stated - 1) > 0.05 : false;
+      return `<tr><td>${esc(r.preparation)}</td><td>${esc(r.code)}</td>`
+        + `<td class="num" title="${esc(r.from)}">${fmtNum(r.mmol)}</td>`
+        + `<td class="num ${off ? "off" : ""}">${r.eq == null ? "" : fmtNum(r.eq)}</td>`
+        + `<td class="num">${r.ratio ?? ""}</td></tr>`;
+    }).join("");
+    amounts.innerHTML += `<table><tr><th>prep</th><th>code</th><th>mmol</th><th>eq</th><th>stated</th></tr>${rows}</table>`;
+    const lines = calc.preparations.filter(p => Object.keys(p.conc_m).length).map(p =>
+      `<li><b>${esc(p.label)}</b>: ${fmtNum(p.solvent_ml)} mL solvent — `
+      + Object.entries(p.conc_m).map(([c, m]) => `${esc(c)} ${fmtNum(m)} M`).join(", ") + "</li>");
+    const mix = calc.mixture;
+    if(mix.solvent_ml) lines.push(`<li><b>reaction mixture</b>: ${fmtNum(mix.solvent_ml)} mL — `
+      + Object.entries(mix.solutes).filter(([, v]) => v.conc_m != null)
+          .map(([c, v]) => `${esc(c)} ${fmtNum(v.conc_m)} M`).join(", ") + "</li>");
+    if(calc.eta_ul_per_mg != null) lines.push(`<li><b>η</b> ${fmtNum(calc.eta_ul_per_mg)} µL/mg</li>`);
+    if(lines.length) amounts.innerHTML += `<ul class="muted" style="padding-left:16px;margin:8px 0 0">${lines.join("")}</ul>`;
+    amounts.innerHTML += `<p class="muted" style="margin:6px 0 0">mmol needs a mass and a formula
+      (or density, assay or molarity) in the reagent table; hover a value to see its source.</p>`;
+  } else amounts.innerHTML += `<p class="muted">add preparations and components to see amounts.</p>`;
+  side.appendChild(amounts);
+  if(!f) return;
+  for(const [title, list, cls] of [["problems", f.problems, "prob"], ["still to record", f.pending, ""]]){
+    const card = el("div", "card");
+    card.innerHTML = `<h2>${title} (${list.length})</h2>`;
+    const ul = el("ul", "find " + cls);
+    for(const p of list){
+      const li = el("li", "", esc(p));
+      li.onclick = () => jumpTo(p.split(/: (.*)/s)[0]);
+      ul.appendChild(li);
+    }
+    if(!list.length) ul.innerHTML = `<li class="muted">none</li>`;
+    card.appendChild(ul);
+    side.appendChild(card);
+  }
+}
+
+function touched(){
+  S.cur.dirty = true;
+  const st = document.getElementById("saveState");
+  if(st){ st.textContent = "unsaved changes"; st.className = "state dirty"; }
+  clearTimeout(S.timer);
+  S.timer = setTimeout(liveCheck, 350);
+}
+
+async function liveCheck(){
+  if(!S.cur) return;
+  try {
+    const r = await api("/api/explog/check", {method: "POST", body: {entry: S.cur.entry, id: S.cur.id}});
+    S.findings = r.findings; S.computed = r.computed;
+    highlight(); renderSide();
+  } catch(e){ /* the next save reports it */ }
+}
+
+async function saveEntry(){
+  const c = S.cur;
+  try {
+    const r = await api(`/api/explog/entries/${encodeURIComponent(c.id)}`,
+                        {method: "PUT", body: {entry: c.entry, version: c.version}});
+    c.version = r.version; c.dirty = false;
+    S.findings = r.findings; S.computed = r.computed;
+    const st = document.getElementById("saveState");
+    st.textContent = "saved"; st.className = "state";
+    highlight(); renderSide(); await loadEntries();
+  } catch(e){ alert(`not saved: ${e.message}`); }
+}
+
+async function removeEntry(){
+  if(!confirm(`Remove ${S.cur.id}? It is moved to entries/.deleted, not destroyed.`)) return;
+  try { await api(`/api/explog/entries/${encodeURIComponent(S.cur.id)}`, {method: "DELETE"}); }
+  catch(e){ alert(e.message); return; }
+  S.cur = null; await loadEntries(); location.hash = "#overview";
+}
+
+async function copyCard(){
+  if(S.cur.dirty && !confirm("The card is made from the saved version. Copy it anyway?")) return;
+  const text = await api(`/api/explog/entries/${encodeURIComponent(S.cur.id)}/card`);
+  try { await navigator.clipboard.writeText(text); alert("copied"); }
+  catch(e){ const w = window.open("", "_blank"); w.document.body.innerText = text; }
+}
+
+/* ── reagent and phase tables ── */
+
+function renderTable(name){
+  const centre = document.getElementById("centre");
+  const data = S[name];
+  const spec = S.spec[name === "reagents" ? "reagent" : "phase"];
+  centre.innerHTML = "";
+  const bar = el("div", "bar");
+  bar.innerHTML = `<span class="title">${name}</span>`;
+  const save = el("button", "primary", "save");
+  const state = el("span", "state", "saved");
+  bar.append(save, state);
+  centre.appendChild(bar);
+  const card = el("div", "card");
+  const wrap = el("div", "tablewrap");
+  // the derived column sits beside what it is derived from
+  const extraTitle = name === "reagents" ? "MW (computed)" : "entries";
+  const extraAfter = name === "reagents" ? "formula" : spec.fields[spec.fields.length - 1][0];
+  const head = `<tr><th>code</th>${spec.fields.map(([k, l]) => `<th title="${esc(l.help)}">${esc(label(k, l))}${unitOf(k, l) ? ` (${esc(l.unit)})` : ""}</th>`
+             + (k === extraAfter ? `<th>${extraTitle}</th>` : "")).join("")}<th></th></tr>`;
+  const table = el("table"); table.innerHTML = head;
+  const dirty = () => { state.textContent = "unsaved changes"; state.className = "state dirty"; };
+  for(const [code, row] of Object.entries(data.table)){
+    const tr = el("tr");
+    tr.appendChild(el("td", "mono", `<b>${esc(code)}</b>`));
+    const found = (data.findings || {})[code] || {pending: [], problems: []};
+    const info = name === "reagents" ? fmtNum((data.molar_mass || {})[code])
+      : S.entries.filter(e => e.phase === code).map(e => e.id).join(", ");
+    for(const [k, leaf] of spec.fields){
+      const td = el("td");
+      if(found.pending.includes(k)) td.classList.add("pending");
+      const prob = found.problems.find(p => p.startsWith(k + ":"));
+      if(prob){ td.classList.add("problem"); td.title = prob; }
+      td.appendChild(leafInput(leaf, row[k], v => { row[k] = v; dirty(); }));
+      tr.appendChild(td);
+      if(k === extraAfter) tr.appendChild(el("td", "num", esc(info ?? "")));
+    }
+    const rm = el("button", "small", "✕"); rm.title = "remove this row";
+    rm.onclick = () => { if(confirm(`Remove ${code}? Entries that use it will show a problem.`)){
+      delete data.table[code]; renderTable(name); dirty(); } };
+    const td = el("td"); td.appendChild(rm); tr.appendChild(td);
+    table.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+  const add = el("div", "row"); add.style.marginTop = "8px";
+  const code = el("input"); code.placeholder = name === "reagents" ? "new code, e.g. CuOAc" : "new label, e.g. C";
+  const addBtn = el("button", "", "add row");
+  addBtn.onclick = () => {
+    const c = code.value.trim();
+    if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(c)){ alert("letters, digits, . _ - only"); return; }
+    if(data.table[c]){ alert(`${c} exists`); return; }
+    data.table[c] = {}; renderTable(name); dirty();
+  };
+  add.append(code, addBtn);
+  card.appendChild(add);
+  if(name === "reagents") card.appendChild(el("p", "muted",
+    "Give a formula (hydrate after ·) for the molar mass. For a liquid also give the density; for a solution sold by assay, the wt%; for a stock solution, its molarity."));
+  centre.appendChild(card);
+  save.onclick = async () => {
+    try {
+      const r = await api(`/api/explog/${name}`, {method: "PUT", body: {table: data.table, version: data.version}});
+      Object.assign(data, r); await loadTables(); renderTable(name); fillDatalists();
+    } catch(e){ alert(`not saved: ${e.message}`); }
+  };
+  document.getElementById("side").innerHTML = "";
+}
+
+/* ── overview and compare ── */
+
+function renderOverview(){
+  const centre = document.getElementById("centre");
+  const cols = ["id", "status", "date", "method", "metal", "ligand", "additive", "phase", "capacity", "retention", "pending", "problems"];
+  const rows = S.entries.map(e => "<tr>" + cols.map(c => {
+    const v = e[c] ?? "";
+    if(c === "id") return `<td><a href="#e/${encodeURIComponent(v)}">${esc(v)}</a></td>`;
+    if(c === "pending") return `<td class="num">${v || ""}</td>`;
+    if(c === "problems") return `<td class="num ${v ? "off" : ""}">${v || ""}</td>`;
+    return `<td>${esc(v)}</td>`;
+  }).join("") + "</tr>").join("");
+  centre.innerHTML = `<div class="card"><h2>overview</h2><div class="tablewrap"><table>
+    <tr>${cols.map(c => `<th>${c === "pending" ? "to record" : c}</th>`).join("")}</tr>${rows}</table></div>
+    <p class="muted">The same table is written to INDEX.md in the log folder on every save.</p></div>`;
+  document.getElementById("side").innerHTML = "";
+}
+
+async function renderCompare(a, b){
+  const centre = document.getElementById("centre");
+  const opts = sel => S.entries.map(e => `<option ${e.id === sel ? "selected" : ""}>${esc(e.id)}</option>`).join("");
+  centre.innerHTML = `<div class="card"><h2>compare</h2><div class="row">
+    <select id="cmpA">${opts(a)}</select><span>→</span><select id="cmpB">${opts(b)}</select></div>
+    <div id="cmpOut" style="margin-top:10px"></div>
+    <p class="muted">Preparations pair by position and components by role, so a swapped additive is one row.</p></div>`;
+  const go = () => { location.hash = `#compare/${encodeURIComponent(cmpA.value)}/${encodeURIComponent(cmpB.value)}`; };
+  const cmpA = document.getElementById("cmpA"), cmpB = document.getElementById("cmpB");
+  cmpA.onchange = go; cmpB.onchange = go;
+  document.getElementById("side").innerHTML = "";
+  if(!a || !b) return;
+  try {
+    const r = await api(`/api/explog/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+    document.getElementById("cmpOut").innerHTML = r.rows.length
+      ? `<table><tr><th>field</th><th>${esc(a)}</th><th>${esc(b)}</th></tr>`
+        + r.rows.map(x => `<tr><td class="mono">${esc(x.field)}</td><td>${esc(x.a ?? "")}</td><td>${esc(x.b ?? "")}</td></tr>`).join("")
+        + "</table>"
+      : `<p class="muted">no differences</p>`;
+  } catch(e){ document.getElementById("cmpOut").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
+/* ── loading and routing ── */
+
+async function loadEntries(){
+  const r = await api("/api/explog/entries");
+  S.entries = r.entries;
+  document.getElementById("rootNote").innerHTML = `log folder <span class="mono">${esc(r.root)}</span>`
+    + (Object.keys(r.load_errors).length ? `<div class="err">cannot read: ${esc(Object.entries(r.load_errors).map(([k, v]) => k + " — " + v).join("; "))}</div>` : "");
+  renderList();
+  fillDatalists();
+  const like = document.getElementById("newLike");
+  like.innerHTML = `<option value="">— or copy the recipe of —</option>` + S.entries.map(e => `<option>${esc(e.id)}</option>`).join("");
+}
+
+async function loadTables(){
+  for(const name of ["reagents", "phases"]) S[name] = await api(`/api/explog/${name}`);
+}
+
+function fillDatalists(){
+  document.getElementById("dl-reagent").innerHTML = Object.keys(S.reagents.table)
+    .concat(S.entries.map(e => `product:${e.id}`)).map(c => `<option value="${esc(c)}">`).join("");
+  document.getElementById("dl-phase").innerHTML = Object.keys(S.phases.table).map(c => `<option value="${esc(c)}">`).join("");
+  document.getElementById("dl-entry").innerHTML = S.entries.map(e => `<option value="${esc(e.id)}">`).join("");
+}
+
+function renderList(){
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const ul = document.getElementById("entryList");
+  const shown = S.entries.filter(e => !q || JSON.stringify(e).toLowerCase().includes(q));
+  ul.innerHTML = shown.length ? "" : `<li class="muted">${S.entries.length ? "no match" : "none yet"}</li>`;
+  for(const e of shown){
+    const li = el("li");
+    if(S.cur && S.cur.id === e.id) li.setAttribute("aria-current", "true");
+    li.innerHTML = `<span class="eid">${esc(e.id)}</span><span class="chip">${esc(e.status || "?")}</span>`
+      + (e.pending ? `<span class="chip pend" title="still to record">${e.pending}</span>` : "")
+      + (e.problems ? `<span class="chip prob" title="problems">${e.problems}</span>` : "")
+      + `<div class="muted">${esc(e.method || "")}${e.phase ? " · phase " + esc(e.phase) : ""}${e.title ? " · " + esc(e.title) : ""}</div>`;
+    li.onclick = () => { location.hash = `#e/${encodeURIComponent(e.id)}`; };
+    ul.appendChild(li);
+  }
+}
+
+async function openEntry(id){
+  const r = await api(`/api/explog/entries/${encodeURIComponent(id)}`);
+  S.cur = {id, entry: r.entry, version: r.version, dirty: false};
+  S.findings = r.findings; S.computed = r.computed;
+  renderEntry(); renderSide(); renderList();
+}
+
+async function route(){
+  const [view, a, b] = location.hash.replace(/^#/, "").split("/").map(decodeURIComponent);
+  document.querySelectorAll("#views a").forEach(x =>
+    x.toggleAttribute("aria-current", x.getAttribute("href") === `#${view}`));
+  try {
+    if(view === "e" && a){ await openEntry(a); return; }
+    S.cur = null; renderList();
+    if(view === "reagents" || view === "phases"){ await loadTables(); renderTable(view); }
+    else if(view === "compare") await renderCompare(a || (S.entries[0] || {}).id, b || (S.entries[1] || {}).id);
+    else renderOverview();
+  } catch(e){
+    document.getElementById("centre").innerHTML = `<div class="card err">${esc(e.message)}</div>`;
+  }
+}
+
+window.addEventListener("beforeunload", ev => { if(S.cur && S.cur.dirty){ ev.preventDefault(); ev.returnValue = ""; } });
+let lastHash = location.hash;
+window.addEventListener("hashchange", () => {
+  // leaving an entry with unsaved changes: ask, and put the hash back if the answer is no
+  if(S.cur && S.cur.dirty && !confirm("Discard unsaved changes?")){
+    history.replaceState(null, "", lastHash);
+    return;
+  }
+  lastHash = location.hash;
+  route();
+});
+document.addEventListener("keydown", ev => {
+  if((ev.ctrlKey || ev.metaKey) && ev.key === "s" && S.cur){ ev.preventDefault(); saveEntry(); }
+});
+document.getElementById("filter").addEventListener("input", renderList);
+document.getElementById("newBtn").onclick = async () => {
+  const id = document.getElementById("newId").value.trim();
+  const like = document.getElementById("newLike").value;
+  const method = document.getElementById("newMethod").value;
+  const err = document.getElementById("newErr"); err.textContent = "";
+  try {
+    await api("/api/explog/entries", {method: "POST", body: like ? {id, like} : {id, method}});
+    await loadEntries();
+    location.hash = `#e/${encodeURIComponent(id)}`;
+  } catch(e){ err.textContent = e.message; }
+};
+
+(async () => {
+  S.spec = await api("/api/explog/spec");
+  const methods = Object.fromEntries(S.spec.entry.fields)["method"].choices;
+  document.getElementById("newMethod").innerHTML = methods.map(m => `<option>${esc(m)}</option>`).join("");
+  await loadTables();
+  await loadEntries();
+  await route();
+})();
+</script>

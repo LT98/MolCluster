@@ -1,31 +1,38 @@
-"""Field specification for the experiment log: one source for templates, checks and schema.
+"""Field specification for the experiment log: one source for the form, the check and the views.
 
 A value is one of three things:
 
-* blank (YAML `~` or nothing after the colon) — not recorded yet; `expt check` flags it;
+* blank (absent or null) — not recorded yet; the check flags it;
 * `n/a` — does not apply to this experiment;
 * `unknown` — cannot be recovered;
 
 or the value itself.  Blank is never read as zero, and neither sentinel is a gap.
+
+A recipe is a list of *preparations* (each solution, suspension or solid mixture made
+before the reaction: what is in it, in which solvents, and how it was mixed), then an
+ordered list of *steps* (what was combined or done, how, for how long, at what
+temperature, with what mixing), then the *apparatus* the method needs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 
 NA = "n/a"
 UNKNOWN = "unknown"
 SENTINELS = (NA, UNKNOWN)
 
 STATUSES = ("planned", "ongoing", "done", "abandoned")
-METHODS = ("solution", "ball_mill", "soxhlet", "recrystallization", "other")
+METHODS = ("solution", "solvothermal", "ball_mill", "soxhlet", "recrystallization", "other")
 ROLES = ("metal_source", "ligand", "additive", "solvent", "substrate")
 KINDS = ("metal_salt", "ligand", "additive", "solvent", "other")
+FORMS = ("solution", "suspension", "solid_mixture", "neat")
+ACTIONS = ("add", "combine", "stir", "sonicate", "heat", "cool", "reflux", "mill", "extract",
+           "age", "other")
 
 
 @dataclass(frozen=True)
 class Leaf:
-    """One value.  `kind`: num, int, temp, str, text, date, bool, path, enum, reagent, phase,
-    entry."""
+    """One value.  `kind`: num, int, temp, str, text, date, enum, path, reagent, phase, entry."""
 
     kind: str
     help: str = ""
@@ -39,7 +46,7 @@ class Block:
     fields: dict[str, Node]
     help: str = ""
     required: bool = True
-    outcome: bool = False          # not asked for while the entry is `planned`
+    outcome: bool = False          # not asked for while the entry is `planned` or `abandoned`
 
 
 @dataclass(frozen=True)
@@ -49,7 +56,6 @@ class Items:
     required: bool = True
     outcome: bool = False
     key: str = ""                  # item field used to name an item in reports
-    skeleton: tuple[dict, ...] = field(default=({},))   # blank items a new template carries
 
 
 Node = Leaf | Block | Items
@@ -59,8 +65,8 @@ def _num(help: str = "", unit: str = "", required: bool = True) -> Leaf:
     return Leaf("num", help, unit, required=required)
 
 
-def _temp(help: str = "") -> Leaf:
-    return Leaf("temp", help, "°C, or RT")
+def _temp(help: str = "", required: bool = True) -> Leaf:
+    return Leaf("temp", help, "°C, or RT", required=required)
 
 
 def _str(help: str = "", required: bool = True) -> Leaf:
@@ -72,68 +78,90 @@ def _path(help: str = "data file, relative to the log folder (e.g. raw/2-01_pxrd
     return Leaf("path", help, required=required)
 
 
-REAGENT_LINE = Block({
-    "code": Leaf("reagent", "code from reagents.yaml, or product:<id> for another entry's product"),
+COMPONENT = Block({
+    "code": Leaf("reagent", "reagent code, or product:<id> for another entry's product"),
     "role": Leaf("enum", choices=ROLES),
-    "mass_mg": _num("enter what was weighed; mmol is then computed", "mg", required=False),
-    "volume_ml": _num("liquids and solvents", "mL", required=False),
+    "mass_mg": _num("what was weighed; mmol is computed from it", "mg", required=False),
+    "volume_ml": _num("liquids, solvents and stock solutions", "mL", required=False),
     "mmol": _num("only when neither mass nor volume can give it", "mmol", required=False),
-    "ratio": _num("planned molar equivalents (solvents: n/a)", "eq"),
+    "ratio": _num("planned molar equivalents (not asked for solvents)", "eq"),
+    "note": _str("e.g. few drops; added last", required=False),
+})
+
+PREPARATION = Block({
+    "label": _str("e.g. A: salt solution"),
+    "form": Leaf("enum", choices=FORMS),
+    "components": Items(COMPONENT, "solutes and solvents in this preparation", key="code"),
+    "mix_method": _str("how it was made up: magnetic stirring, sonication, vortex, grinding, "
+                       "none"),
+    "mix_speed_rpm": _num(unit="rpm", required=False),
+    "mix_time_min": _num(unit="min"),
+    "temperature_c": _temp(),
+    "observation": _str("e.g. fully dissolved; cloudy", required=False),
+})
+
+STEP = Block({
+    "action": Leaf("enum", choices=ACTIONS),
+    "what": _str("e.g. B into A; jar sealed and milled"),
+    "addition": _str("dropwise, portionwise, at once — and over how long", required=False),
+    "duration_h": _num("how long this step lasted", "h"),
+    "temperature_c": _temp(),
+    "mixing": _str("magnetic stirring, overhead, shaking, none"),
+    "speed_rpm": _num(unit="rpm", required=False),
+    "atmosphere": _str("air, N2, Ar"),
     "note": _str(required=False),
 })
 
-CONDITIONS: dict[str, Block] = {
+APPARATUS: dict[str, Block] = {
     "solution": Block({
-        "temperature_c": _temp(),
-        "time_h": _num("total reaction time", "h"),
-        "addition": _str("what was added to what, how, and over how long"),
-        "stirring": _str("e.g. magnetic, 500 rpm"),
-        "atmosphere": _str("air, N2, Ar"),
+        "vessel": _str("e.g. 250 mL round-bottom flask"),
+    }),
+    "solvothermal": Block({
+        "vessel": _str("e.g. 23 mL Teflon-lined autoclave"),
+        "fill_pct": _num(unit="%"),
+        "oven": _str(),
+        "heating_rate": _str("e.g. 2 °C/min, or placed in a hot oven"),
+        "cooling": _str("e.g. 0.1 °C/min, or natural"),
     }),
     "ball_mill": Block({
         "mill": _str("model"),
         "frequency_hz": _num(unit="Hz"),
-        "time_h": _num(unit="h"),
-        "pauses": _str("e.g. 5 min every 30 min; none"),
         "jar_material": _str(),
         "jar_volume_ml": _num(unit="mL"),
         "ball_material": _str(),
         "ball_count": Leaf("int"),
         "ball_diameter_mm": _num(unit="mm"),
-        "liquid": Leaf("reagent", "liquid-assisted grinding liquid (reagent code), or n/a"),
+        "liquid": Leaf("reagent", "liquid-assisted grinding liquid, or n/a"),
         "liquid_ul": _num("η is computed from this and the solid masses", "µL"),
-        "atmosphere": _str("air, N2, Ar"),
+        "pauses": _str("e.g. 5 min every 30 min; none"),
     }),
     "soxhlet": Block({
-        "thimble_contents": _str("reagent codes in the thimble"),
-        "flask_contents": _str("reagent codes and solvent in the collection flask"),
-        "solvent": _str("extraction solvent"),
-        "temperature_c": _temp("bath or mantle temperature"),
-        "time_h": _num(unit="h"),
+        "thimble_contents": _str("what sat in the thimble"),
+        "flask_contents": _str("what was in the collection flask"),
+        "thimble": _str("thimble material and size", required=False),
         "cycles": Leaf("int", "siphon cycles, if counted", required=False),
     }),
     "recrystallization": Block({
-        "solvent": _str("solvent system and ratio"),
-        "solvent_ml": _num(unit="mL"),
-        "temperature_c": _temp(),
-        "time_h": _num(unit="h"),
+        "vessel": _str("e.g. sealed 20 mL vial"),
         "cooling": _str("how it was cooled"),
-        "vessel": _str("e.g. sealed vial, open beaker"),
     }),
-    "other": Block({"description": Leaf("text", "the procedure")}),
+    "other": Block({"description": Leaf("text", "the apparatus")}),
 }
 
 WORKUP = Block({
+    "separation": _str("e.g. centrifuge 8000 rpm 10 min; filtration"),
     "washes": Items(Block({
-        "solvent": _str(),
+        "solvent": Leaf("reagent"),
+        "volume_ml": _num("per wash", "mL"),
         "times": Leaf("int"),
-        "mode": _str("e.g. vortex + centrifuge, filtration"),
+        "mode": _str("e.g. vortex, soak 1 h", required=False),
     }), key="solvent"),
     "drying": Block({
         "method": _str("e.g. vacuum oven, hot plate, air"),
         "temperature_c": _temp(),
         "time_h": _num(unit="h"),
     }),
+    "storage": _str("e.g. desiccator, glovebox", required=False),
 })
 
 PRODUCT = Block({
@@ -145,7 +173,7 @@ PRODUCT = Block({
 
 CHARACTERIZATION = Block({
     "pxrd": Block({
-        "phase": Leaf("phase", "label from phases.yaml"),
+        "phase": Leaf("phase", "label from the phase table"),
         "file": _path(),
         "instrument": _str("instrument, radiation, 2θ range"),
         "notes": _str("e.g. unreacted ligand peaks present", required=False),
@@ -227,34 +255,34 @@ CELL = Block({
 })
 
 
-def conditions_for(method: object) -> Block:
-    return CONDITIONS.get(method if isinstance(method, str) else "", CONDITIONS["other"])
+def apparatus_for(method: object) -> Block:
+    return APPARATUS.get(method if isinstance(method, str) else "", APPARATUS["other"])
 
 
 def entry_spec(method: object) -> Block:
     """The full entry for one synthesis method."""
     return Block({
-        "id": Leaf("str", "matches the file name"),
+        "id": Leaf("str", "letters, digits, . _ - ; it names the file"),
         "title": _str("short description", required=False),
         "status": Leaf("enum", choices=STATUSES),
-        "date": Leaf("date", "YYYY-MM-DD the synthesis started"),
+        "date": Leaf("date", "the day the synthesis started"),
         "operator": _str(),
         "notebook_ref": _str("lab notebook page"),
         "derived_from": Leaf("entry", "entry this one was copied from", required=False),
         "method": Leaf("enum", choices=METHODS),
-        "reagents": Items(REAGENT_LINE, key="code", skeleton=(
-            {"role": "metal_source"}, {"role": "ligand"}, {"role": "additive"},
-            {"role": "solvent"})),
-        "conditions": conditions_for(method),
+        "preparations": Items(PREPARATION, "each solution, suspension or solid mixture",
+                              key="label"),
+        "steps": Items(STEP, "in the order they were done", key="action"),
+        "apparatus": apparatus_for(method),
         "workup": WORKUP,
         "product": PRODUCT,
         "characterization": CHARACTERIZATION,
-        "cells": Items(CELL, outcome=True, key="id"),
-        "notes": Leaf("text", required=False),
+        "cells": Items(CELL, "one per coin cell built", outcome=True, key="id"),
+        "notes": Leaf("text", "anything the fields do not hold", required=False),
     })
 
 
-# Reagents and phases are keyed by code / label; these are the per-item fields.
+# Reagents and phases are tables keyed by code / label; these are the per-row fields.
 REAGENT = Block({
     "name": _str("full name"),
     "kind": Leaf("enum", choices=KINDS),
@@ -264,16 +292,40 @@ REAGENT = Block({
     "smiles": _str("ligands and additives at least", required=False),
     "supplier": _str(),
     "purity": _str(),
-    "density_g_ml": _num("liquids", "g/mL", required=False),
-    "concentration": _str("solutions, e.g. 28 wt% NH3", required=False),
+    "density_g_ml": _num("liquids and solutions; turns a volume into a mass", "g/mL",
+                         required=False),
+    "wt_pct": _num("solutions sold by assay, e.g. 28 for 28 wt% NH3", "wt%", required=False),
+    "molarity_m": _num("stock solutions made up to a concentration", "mol/L", required=False),
 })
 
 PHASE = Block({
     "description": _str(),
-    "peaks_2theta": _str("defining reflections, e.g. 6.2, 12.4, 26.8", required=True),
+    "peaks_2theta": _str("defining reflections, e.g. 6.2, 12.4, 26.8"),
     "radiation": _str("e.g. Cu Kα"),
     "reference_file": _path(required=False),
 })
 
 OUTCOME_SECTIONS = tuple(k for k, v in entry_spec("other").fields.items()
                          if getattr(v, "outcome", False))
+
+
+def describe(node: Node) -> dict:
+    """The spec as plain data, for the page that builds its form from it."""
+    if isinstance(node, Leaf):
+        return {"type": "leaf", **asdict(node), "choices": list(node.choices)}
+    if isinstance(node, Block):
+        return {"type": "block", "help": node.help, "required": node.required,
+                "outcome": node.outcome,
+                "fields": [[k, describe(v)] for k, v in node.fields.items()]}
+    return {"type": "items", "help": node.help, "required": node.required,
+            "outcome": node.outcome, "key": node.key, "item": describe(node.item)}
+
+
+def describe_all() -> dict:
+    return {
+        "sentinels": list(SENTINELS),
+        "entry": describe(entry_spec("other")),
+        "apparatus": {m: describe(b) for m, b in APPARATUS.items()},
+        "reagent": describe(REAGENT),
+        "phase": describe(PHASE),
+    }

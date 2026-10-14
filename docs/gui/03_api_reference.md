@@ -3,7 +3,8 @@
 Every page is built on these. They are usable directly — `curl`, a notebook, a script —
 which is the point of keeping run state in the task table rather than in the page.
 
-Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only writer).
+Three routers: `ui/app.py` (the read-only viewer), `ui/builder.py` (the only writer to the
+registry) and `ui/explog.py` (the experiment log, which writes only its own folder).
 
 | Method | Path | Area | Notes |
 |---|---|---|---|
@@ -44,6 +45,19 @@ Two routers: `ui/app.py` (the read-only viewer) and `ui/builder.py` (the only wr
 | GET | `/api/filters` | Registry | live filter domains + `reserved_inactive` |
 | GET | `/api/build` | Registry | version, branch, commit, dirty-at-start-up |
 | GET | `/api/meta` | Registry | db/store paths, read-only flag, `algo_versions` |
+| GET | `/experiments` | Log | the experiment log page |
+| GET | `/api/explog/spec` | Log | the field spec the page builds its form from |
+| GET | `/api/explog/entries` | Log | one summary row per entry, the log folder, unreadable files |
+| POST | `/api/explog/entries` | Log | create: `{id, method}` blank, or `{id, like}` copying a recipe; 409 if it exists |
+| GET | `/api/explog/entries/{id}` | Log | the entry, its `version`, `findings` (pending, problems) and `computed` amounts |
+| PUT | `/api/explog/entries/{id}` | Log | save `{entry, version}`; blanks are dropped; **409** if the file changed since `version` |
+| DELETE | `/api/explog/entries/{id}` | Log | move to `entries/.deleted/` |
+| POST | `/api/explog/check` | Log | findings and computed amounts for a draft, without saving |
+| GET | `/api/explog/entries/{id}/card` | Log | the saved entry as markdown |
+| GET | `/api/explog/diff` | Log | `a=`, `b=`: the fields that differ |
+| GET, PUT | `/api/explog/reagents` | Log | the reagent table, `version`, findings, computed `molar_mass`; PUT `{table, version}` |
+| GET, PUT | `/api/explog/phases` | Log | the phase table, as above |
+| GET | `/api/explog/index.md` | Log | the overview as markdown (also written to `INDEX.md` on every save) |
 
 Note the two `POST /api/structures/...` rows: they are served by the *builder* router even
 though they act on a registry entry, because the viewer has no write path at all.

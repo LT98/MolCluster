@@ -149,6 +149,18 @@ that they agree — a ladder filled with water can be priced in another continuu
 from one medium named in the spec is decided and not built (`WORKPLAN_energy.md` stage 0), as is
 refusing to price a structure that has no solvated root to compose from.
 
+## Experiment log
+
+- **No upload.** Instrument files are copied into `raw/` in the log folder by hand and named
+  by path in the entry; the check reports a path that does not exist.
+- **An entry cannot be renamed.** Copy its recipe to the new id and remove the old one.
+- **Renaming a reagent code does not follow into entries.** Entries still naming the old
+  code show a problem until they are changed.
+- **The ratio check needs formulas.** A component with no formula (or density, assay or
+  molarity) in the reagent table has no mmol, so it is left out of the comparison rather
+  than guessed.
+- **Concurrent edits are refused, not merged.** A save based on a stale version gets a 409.
+
 ## Two things that are deliberate, not missing
 
 - **The viewer cannot write.** Not an oversight — `mode=ro` plus `PRAGMA query_only`, with

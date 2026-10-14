@@ -63,7 +63,7 @@ local ref or on `origin/main`.
 | Registry/schema/migrations | `src/mofsbu/registry/` | `test_registry.py`, `test_migration.py`, `test_verify.py` |
 | Energy backends/references (M7 screen, M7R refine) | `docs/WORKPLAN_energy.md` first (the pipeline every energy slice sits in), then `docs/WORKPLAN_M7.md`, `src/mofsbu/energy/`, `scripts/regress_m7.py` | `test_energy.py`, `test_reference.py` |
 | Browser/API behavior | `src/mofsbu/ui/` | `test_ui.py`, `test_run_inspector.py` |
-| Experiment log (wet lab) | `src/mofsbu/explog/spec.py`, then `cli.py` | `test_explog.py` |
+| Experiment log (wet lab) | `src/mofsbu/explog/spec.py`, then `ui/explog.py` | `test_explog.py` |
 
 `src/mofsbu/registry/api.py` is the only write surface. Preserve graph-derived identity,
 method/fidelity provenance, versioned migrations, and the distinction between absent and zero.

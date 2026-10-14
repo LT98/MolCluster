@@ -16,6 +16,7 @@ const MOFSBU_PAGES = [
   {href: "/builder", label: "builder",        title: "write a spec and queue a run"},
   {href: "/runs",    label: "run inspector",  title: "what each run planned, built and refused"},
   {href: "/graph",   label: "energy graph",   title: "walk a structure's provenance back and compare the routes"},
+  {href: "/experiments", label: "experiment log", title: "wet-lab syntheses, characterization and cells"},
 ];
 
 const mofsbuChrome = {

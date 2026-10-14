@@ -27,7 +27,7 @@ CUDA for this server's `ml_go`/`xtb_go` runs, and whether to allow more than one
 in-process worker. Neither is inferred from the hardware — the device is *declared*, and
 the page shows which declaration is in force.
 
-## The four pages
+## The five pages
 
 | Page | Path | What it is for |
 |---|---|---|
@@ -35,6 +35,7 @@ the page shows which declaration is in force.
 | **Builder** | `/builder` | Compose a spec and queue a run. Never edit JSON by hand |
 | **Run inspector** | `/runs` | Watch a run, and read why anything was refused |
 | **Energy graph** | `/graph` | Walk a structure's provenance back and forward and compare the routes ([05](05_graph.md)) |
+| **Experiment log** | `/experiments` | Record wet-lab syntheses, characterization and cell tests; see what is still to record ([06](06_experiments.md)) |
 
 They share one tab strip (`chrome.css` / `chrome.js`), and each page names the database it
 is pointed at, so two servers on two registries are not confusable. The registry page and the
@@ -55,6 +56,9 @@ label — those only ever arrive through `registry.api`, from a worker.
 That split is what lets a page queue an hour-long job without becoming stateful: run state
 lives in the task table, so you can close the page, reopen it, or replace it with a
 notebook and lose nothing.
+
+**The experiment log writes only its own folder** (`<data root>/experiments/`: one JSON
+file per entry, the reagent and phase tables, `INDEX.md`). It never opens the registry.
 
 A footer stamp (`/api/build`) reports version, branch, commit and whether the working tree
 was dirty at start-up — served from the app rather than baked into the static HTML, so it

@@ -276,27 +276,19 @@ gone, checked by pid on the host that wrote them; where that cannot be checked �
 machine, or Windows — the run is reported as unverified rather than assumed dead, and a
 run with a task genuinely in flight is never touched.
 
-## Experiment log (`scripts/expt.py`)
+## Experiment log (`/experiments`)
 
-Wet-lab syntheses, characterization and cell tests, one YAML file per experiment under
-`<data root>/experiments/` — git-ignored, so the records stay on the machine while the tool is
-public. A blank field is *still to record*; `n/a` means it does not apply, `unknown` that it
-cannot be recovered. Nothing is ever filled in for you.
+Wet-lab syntheses, characterization and cell tests are recorded on the viewer's
+**experiment log** page — one JSON file per experiment under `<data root>/experiments/`,
+which is ignored by version control, so the records stay on the machine while the code is
+public. A blank field is *still to record* and is highlighted; `n/a` means it does not apply,
+`unknown` that it cannot be recovered. Nothing is ever filled in for you.
 
-    python scripts/expt.py init                         # folders, reagents.yaml, phases.yaml
-    python scripts/expt.py new 2-04 --like 2-01         # copy the recipe, outcome left blank
-    python scripts/expt.py new 4-01 --method solution   # solution | ball_mill | soxhlet | ...
-    python scripts/expt.py check                        # what is still to record, and problems
-    python scripts/expt.py show 2-01                    # one entry, readable
-    python scripts/expt.py diff 2-01 2-02               # only what differs
-    python scripts/expt.py index                        # regenerate INDEX.md
-    python scripts/expt.py fmt                          # restore canonical, commented layout
-
-Enter masses as weighed: with a `formula` in `reagents.yaml`, mmol, the molar ratio against what
-was planned, and η for milling are computed and shown. Instrument files go in `raw/` and are
-referred to by path. In VS Code with the Red Hat YAML extension, each file's first line links a
-schema that `expt` regenerates, giving dropdowns for methods, reagent codes and phases, and a red
-mark on a misspelt field as you type.
+A recipe is a list of preparations (each solution or mixture: solutes, solvents, how it was
+made up), ordered steps (what into what, how fast, how long, temperature, mixing, atmosphere)
+and the method's apparatus. With a formula in the reagent table, mmol, equivalents against the
+planned ratio, concentrations and η are computed as you type. Every save rewrites `INDEX.md`
+in the log folder. The page is described in [docs/gui/06_experiments.md](docs/gui/06_experiments.md).
 
 ## Two-machine workflow (git is the bridge)
 

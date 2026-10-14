@@ -224,7 +224,8 @@ def sweep_stale_runs(db_path: Path, store_root: Path) -> list[dict]:
 
 
 def create_app(db_path: Path, store_root: Path,
-               active: "ActiveDatabase | None" = None) -> FastAPI:
+               active: "ActiveDatabase | None" = None,
+               explog_root: Path | None = None) -> FastAPI:
     """Build the viewer app.  No server is started; tests use ``TestClient``.
 
     `active` is the switchable registry reference shared with the builder.  It defaults
@@ -261,6 +262,12 @@ def create_app(db_path: Path, store_root: Path,
     # geometry and gain nothing.
     app.include_router(build_router(db_path, store_root,
                                     Path(db_path).parent / "specs", active=active))
+    # The experiment log writes wet-lab records to its own folder and never opens the
+    # registry; ui/explog.py states that boundary.
+    from mofsbu.config import data_root
+    from mofsbu.ui.explog import build_explog_router
+
+    app.include_router(build_explog_router(explog_root or data_root() / "experiments"))
     app.state.db_path = db_path                  # where it STARTED; see active for now
     app.state.active = active
     app.state.store = store
