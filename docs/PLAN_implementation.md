@@ -780,9 +780,6 @@ that would fail if the claim stopped being true.**
 
 - Ledger calls for C11–C14 (`WORKPLAN_M7.md` §7) and C16–C18 (built provisionally), from D30.
 - C19–C21 leftovers: the frozen-cluster stopping tolerance (solvation S5), and S per solvent.
-- One predicate for "a `place` edge" (e.g. `registry.api.is_construction`) replacing the
-  `reagent_ids` truthiness tests in `tests/test_pathways.py`, `tests/test_co_ligand_counts.py`
-  and `ui/static/graph.html`; repoint the remaining "C15" source comments to D29 in the same change.
 - The water-activity constant: RT ln 55.5 (`WORKPLAN_energy.md`) vs RT ln 55.3
   (`WORKPLAN_solvation.md` C21) — one value, both docs.
 - `WORKPLAN_solvation.md` §4: state that S4–S6 wait for E6, as `WORKPLAN_energy.md` §5 does.

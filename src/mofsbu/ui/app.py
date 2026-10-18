@@ -370,17 +370,22 @@ def create_app(db_path: Path, store_root: Path,
         return {"structure": row, "geometries": geoms, "routes": routes}
 
     def _price_routes(con: sqlite3.Connection, routes: list[dict[str, Any]]) -> None:
-        """Attach dE to each route, or the stated reason it has none.
+        """Attach dE to each route, or the stated reason it has none, and what it cites.
+
+        `reagent_ids` and `is_construction` come from the edge's own rows, not from the
+        priced terms, so a route that fails to price is still not taken for a `place` edge.
 
         Read-only throughout: `ReadOnlyRegistry` wraps the connection this request already
         holds at `PRAGMA query_only = ON` rather than letting `Registry` open a writable
         one of its own.  No chemistry is run — every number comes from a stored energy.
         """
         from mofsbu.energy.routes import price_reaction
-        from mofsbu.registry import ReadOnlyRegistry
+        from mofsbu.registry import ReadOnlyRegistry, is_construction, reaction_reagent_ids
 
         reg = ReadOnlyRegistry(conn=con, store=store)
         for route in routes:
+            route["reagent_ids"] = reaction_reagent_ids(reg, route["id"])
+            route["is_construction"] = is_construction(route)
             try:
                 priced = price_reaction(reg, route["id"])
             except Exception:                 # noqa: BLE001 - a panel must still render
@@ -428,7 +433,7 @@ def create_app(db_path: Path, store_root: Path,
         without a request per candidate.
 
         `inferred=1` adds what `decompositions` derives from composition, in a list of
-        its own.  A `place` edge cites nothing (C15), so a structure the runner built
+        its own.  A `place` edge cites nothing (D29), so a structure the runner built
         whole has no recorded precursor at all — derivation is the only answer to what
         it is made of, and keeping it in a separate key is what stops it being read as
         a record.

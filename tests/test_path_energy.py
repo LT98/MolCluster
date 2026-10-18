@@ -165,7 +165,7 @@ def test_shedding_a_proton_changes_what_the_numbers_are_measured_against(reg):
 
 
 def test_a_derived_leg_is_marked_inferred_and_carries_no_reaction(reg):
-    """Option 2 on C15: a structure the runner built whole has no recorded precursor,
+    """D29: a structure the runner built whole has no recorded precursor,
     so the only answer to what it is made of is derivation.  It is priced and walkable
     — and never labelled as something that was recorded."""
     one = _store(reg, aqua_ion(1), energy=-40.0)

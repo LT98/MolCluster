@@ -518,8 +518,7 @@ function renderSteps(routes, derived, species){
   const groups = groupRoutes(routes).sort((a, b) => {
     const rank = (g) => {
       const r = g.rep;
-      if(!((r.steps && r.steps[0] || {}).terms || []).some(t => t.side === "reagent"))
-        return 2;                                   // built whole, nothing to walk to
+      if(r.is_construction) return 2;               // built whole, nothing to walk to
       return r.can_price && r.total_dE !== null ? 0 : 1;
     };
     return (rank(a) - rank(b))
@@ -532,8 +531,8 @@ function renderSteps(routes, derived, species){
     const r = g.rep, step = (r.steps && r.steps[0]) || {};
     const {source, added} = split[gi];
     // A `place` edge cites nothing: the sphere was constructed whole, not reacted
-    // together (C15).  There is nothing to walk to, so the row does not pretend.
-    const built = !source && !added;
+    // together (D29).  There is nothing to walk to, so the row does not pretend.
+    const built = r.is_construction === true;
     const shed = protonsShed(step);
     const placements = g.placements > 1
       ? ` <span class="muted">(${esc(g.placements)} pl.)</span>` : "";
@@ -542,15 +541,15 @@ function renderSteps(routes, derived, species){
     // so "the other part" is not recoverable from where the step went.
     const inferred = r.origin === "inferred";
     const via = inferred ? (added ? "d" + added.structure_id : "") : String(r.id);
-    return `<tr class="${built || !via ? "dead" : "step"}${inferred ? " derived" : ""}"`
+    return `<tr class="${built || !via || !source ? "dead" : "step"}${inferred ? " derived" : ""}"`
          + ` data-rid="${esc(via)}"`
-         + `${built ? "" : ` data-source="${esc(source.structure_id)}"`}`
+         + `${built || !source ? "" : ` data-source="${esc(source.structure_id)}"`}`
          + `${r.why_not ? ` title="${esc(r.why_not)}"` : ""}>`
          + `<td class="num">${stepEnergy(r)}</td>`
          + `<td>${built ? "" : (shed || cell(added) + onward(added, species))}</td>`
          + `<td>${built
              ? `<span class="muted" title="a place edge cites no reagents: the sphere`
-               + ` was constructed whole rather than reacted together (C15)">`
+               + ` was constructed whole rather than reacted together (D29)">`
                + `— (built whole)</span>`
              : cell(source) + onward(source, species) + placements}</td>`
          + `<td>${routeRung(r)}${inferred
@@ -851,11 +850,10 @@ function say(text){ $("msg").textContent = text || ""; }
 
 /* Deriving splits is a scan of the whole structures table, so it is asked for rather
    than assumed — but a node whose only recorded edges cite nothing (a `place` edge,
-   C15) has no other answer to what it is made of, so at a dead end it is asked for
-   automatically.  That is option 2 on C15: leave `place` citing nothing, and derive. */
+   D29) has no other answer to what it is made of, so at a dead end it is asked for
+   automatically. */
 function walkable(routes){
-  return routes.some(r => ((r.steps && r.steps[0] || {}).terms || [])
-    .some(t => t.side === "reagent" && (t.role || "reagent") === "reagent"));
+  return routes.some(r => !r.is_construction);
 }
 
 async function fetchHop(sid, inferred){

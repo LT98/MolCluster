@@ -89,6 +89,33 @@ def test_the_walk_can_name_every_species_its_edges_mention(client):
         assert "display_label" in s and "n_incoming_routes" in s
 
 
+def test_every_recorded_edge_says_whether_it_is_a_construction(tmp_path):
+    """D29: a `place` edge cites nothing.  The pages read that from one server-side
+    flag (`registry.api.is_construction`) rather than from the priced terms."""
+    from mofsbu.registry import Provenance, Registry, incoming_routes, put_reaction
+    from mofsbu.registry.api import is_construction
+
+    db, store = tmp_path / "r.db", tmp_path / "store"
+    seed(db, store, n=40)
+    with Registry(db, BlobStore(store)) as reg:
+        sid = reg.conn.execute(
+            "SELECT product_structure_id FROM reactions ORDER BY id LIMIT 1").fetchone()
+        if sid is None:
+            pytest.skip("the demo registry seeded no provenance edges")
+        sid = sid[0]
+        put_reaction(reg, sid, Provenance(kind="assembly", note="placed"))
+        expected = {r["id"]: is_construction(r) for r in incoming_routes(reg, sid)}
+    assert sorted(expected.values()) == [False, True]
+
+    client = TestClient(create_app(db, store))
+    for url in (f"/api/structures/{sid}/routes", f"/api/structures/{sid}"):
+        routes = client.get(url).json()["routes"]
+        assert {r["id"]: r["is_construction"] for r in routes} == expected
+        assert all(r["is_construction"] == (r["reagent_ids"] == []) for r in routes)
+    with pytest.raises(KeyError):
+        is_construction({"id": 1})
+
+
 def test_the_walk_refuses_a_structure_that_is_not_there(client):
     assert client.get("/api/structures/999999/routes").status_code == 404
 
