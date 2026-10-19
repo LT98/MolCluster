@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
@@ -414,6 +415,21 @@ def _reagent_counts(reagents: Iterable[int | tuple[int, int]]) -> dict[int, int]
 # Everything here is regenerable except provenance.  So the registry hides.
 
 
+def reaction_reagent_ids(reg: Registry, reaction_id: int) -> list[int]:
+    """Every structure this edge cites, in any role — the `reagent_ids` of a route row."""
+    return [r[0] for r in reg.conn.execute(
+        "SELECT structure_id FROM reaction_reagents WHERE reaction_id = ?", (reaction_id,))]
+
+
+def is_construction(route: Mapping[str, Any]) -> bool:
+    """True for a `place` edge: the runner built the product whole, so it cites nothing (D29).
+
+    `route` is a row carrying `reagent_ids` (`incoming_routes`, `outgoing_routes`); a row
+    without the key raises `KeyError`, because absent is not "cites nothing".
+    """
+    return len(route["reagent_ids"]) == 0
+
+
 def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
     """Every provenance edge that arrives at this structure, with its reagents.
 
@@ -432,8 +448,7 @@ def incoming_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
             " choice_vector_digest, atom_map_json FROM reactions "
             "WHERE product_structure_id = ? ORDER BY id", (structure_id,)):
         item = dict(row)
-        item["reagent_ids"] = [r[0] for r in reg.conn.execute(
-            "SELECT structure_id FROM reaction_reagents WHERE reaction_id = ?", (row["id"],))]
+        item["reagent_ids"] = reaction_reagent_ids(reg, row["id"])
         out.append(item)
     return out
 
@@ -459,8 +474,7 @@ def outgoing_routes(reg: Registry, structure_id: int) -> list[dict[str, Any]]:
             "WHERE rr.structure_id = ? AND rr.role = ? ORDER BY r.id",
             (structure_id, CONSUMING_ROLE)):
         item = dict(row)
-        item["reagent_ids"] = [r[0] for r in reg.conn.execute(
-            "SELECT structure_id FROM reaction_reagents WHERE reaction_id = ?", (row["id"],))]
+        item["reagent_ids"] = reaction_reagent_ids(reg, row["id"])
         out.append(item)
     return out
 

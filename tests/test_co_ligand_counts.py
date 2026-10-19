@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from mofsbu import runner
-from mofsbu.registry import BlobStore, Registry, find, incoming_routes
+from mofsbu.registry import BlobStore, Registry, find, incoming_routes, is_construction
 from mofsbu.runner import enumerate_plan, estimate, run
 from mofsbu.spec import SPEC_VERSION, BuildSpec, MetalSpec, MoleculeSpec
 
@@ -319,7 +319,8 @@ def test_the_co_ligand_ladder_is_built_and_connected(reg):
     assert len(complexes) == 5, sorted(rows[i]["display_label"] for i in complexes)
 
     # The water step cites the rung below and the free water.
-    steps = [r for r in incoming_routes(reg, by_formula["NiH6O3"]) if r["reagent_ids"]]
+    steps = [r for r in incoming_routes(reg, by_formula["NiH6O3"])
+             if not is_construction(r)]
     assert [sorted(s["reagent_ids"]) for s in steps] == [
         sorted([by_formula["NiH4O2"], by_formula["H2O"]])]
 
