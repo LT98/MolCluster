@@ -1,5 +1,11 @@
 # Bug tracker — open only
 
+> **New bugs are filed as GitHub issues** (`gh issue create --label bug`), not added here: an
+> issue is visible from every branch, a section in this file only from the branches that have
+> it. Put the severity and the module in the issue body, using the vocabulary below. This file
+> keeps the entries filed before 2026-10-19 until each is fixed or moved to an issue. First
+> filed that way: [#69](https://github.com/LT98/MolCluster/issues/69) (was drafted as B30).
+
 Everything here is **unresolved**. When something is fixed and has a test, move the entry to
 [`archive/BUGS_resolved.md`](archive/BUGS_resolved.md) — do not leave it here struck through.
 The point of this file is that its length is the size of the problem.
@@ -31,48 +37,6 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
 | [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
 | [B29](#b29) | correctness | `identity/isomers.py` | `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) |
-| [B30](#b30) | correctness | `geometry/placer.py`, `geometry/qc.py` | Constructs put a hydrogen 1.3–2.0 Å from the metal (an O–H pointed at it), below any physical contact but above QC's H clash limit, so they pass and are relaxed from |
-
----
-
-## B30
-
-**A built geometry can put a hydrogen 1.3–2.0 Å from the metal, and QC lets it through.**
-`correctness` · `geometry/placer.py` (where the H is put), `geometry/qc.py` (why it passes)
-
-Found in stage 5a (2026-10-19): `salt_study_k1.db` structure #132 (NiC₆H₇ClO₈, geometry 312)
-has the H of a phenolic O–H on an O that is *not* bound to Ni (Ni–O 2.67 Å) pointing at the
-metal from **1.86 Å**. The waters' hydrogens on the same centre sit at 2.76 Å. MACE-OMOL-0 and
-MACE-POLAR-1-L leave that contact in different directions (OMOL-0 keeps the O–H and moves it out
-to 2.90 Å; POLAR-L moves it to 4.24 Å and transfers a second proton), so the two ML minima are
-different species built from a construct that should not exist, and comparing them compares
-nothing.
-
-**Why QC passes it.** `qc.clash_limit` gives a pair with an H `CLASH_SCALE_H = 0.50` of the summed
-vdW radii: Ni–H 1.42 Å, Cu–H 1.30 Å, Zn–H 1.30 Å. Those limits are set for H against organic
-atoms. Against a metal, an O–H hydrogen 1.4–2.0 Å away is not a rigid-placement near miss but an
-O–H pointing into the coordination sphere, so it is never flagged.
-
-**Scope, measured read-only (2026-10-19)** — every stored geometry, closest metal–H distance
-< 2.0 Å, by fidelity:
-
-| registry | constructs (fidelity 0) | ML-relaxed (fidelity 2) |
-|---|---|---|
-| `salt_study_k1.db` | 2685 / 12361 geometries (500 structures) | 30 / 10929 (22 structures) |
-| `THQ_run.db` | 6206 / 18491 (2052 structures) | 74 / 8733 (42 structures) |
-
-The count is by distance only and does not yet separate an O–H hydrogen from a coordinated
-water's, nor check which of these geometries a relaxation started from. It also contains contacts
-below the clash limit that should have been refused: `THQ_run.db` geometry 4 (CuC₆H₈O₈, a
-construct) has Cu–H **1.00 Å**, and geometry 27186 (CuC₁₈H₇O₂₀, ML-relaxed) has Cu–H 0.55 Å
-and Cu–O 1.05 Å. How those were stored is not diagnosed.
-
-**Fix direction, not chosen.** Either the placer orients a non-coordinating O–H away from the
-metal (the torsion is free, and this repairs the construct), or QC adds a metal–H limit near
-the physical non-bonded contact (~2.2–2.5 Å) and refuses or re-places, or both. A QC limit
-changes which constructs are stored, so it needs a `qc` algo-version bump and the design
-argued before it is coded. Stage 5a's #132 record stays in the measurement, annotated with this
-entry.
 
 ---
 
