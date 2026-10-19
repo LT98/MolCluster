@@ -6,7 +6,7 @@
 |---|---|
 | `PLAN_implementation.md` | what is **left to build** — remaining milestones, exit gates, open decision gates |
 | `DESIGN_registry_assembly.md` | the **reasoning** — decision ledger, subsystems, open checkpoints |
-| `BUGS.md` | what is **built and behaving wrongly**. Open only |
+| `BUGS.md` | what is **built and behaving wrongly**, filed before 2026-10-19. Open only. New bugs are GitHub issues labelled `bug` |
 | `archive/` | finished milestones, resolved bugs, and the full changelogs |
 
 Rule for keeping this file useful: if something here needs a paragraph, it belongs in one of

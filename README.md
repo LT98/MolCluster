@@ -14,7 +14,7 @@ moves to [`docs/archive/`](docs/archive).
 | | |
 |---|---|
 | [`docs/CODE_ARCHITECTURE.md`](docs/CODE_ARCHITECTURE.md) | the map: module table, invariants, known seams. Start here |
-| [`docs/BUGS.md`](docs/BUGS.md) | open defects only |
+| [`docs/BUGS.md`](docs/BUGS.md) | open defects filed before 2026-10-19; new ones are [GitHub issues](https://github.com/LT98/MolCluster/issues?q=is%3Aissue+is%3Aopen+label%3Abug) labelled `bug` |
 | [`docs/PLAN_implementation.md`](docs/PLAN_implementation.md) | what is left to build: API signatures, remaining milestones, open decision gates |
 | [`docs/DESIGN_registry_assembly.md`](docs/DESIGN_registry_assembly.md) | why: decision ledger D1–D18, open checkpoints |
 
