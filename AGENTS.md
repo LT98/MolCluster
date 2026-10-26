@@ -19,7 +19,7 @@ Four active documents, each with one job. Nothing finished stays in an active do
 | | |
 |---|---|
 | `docs/CODE_ARCHITECTURE.md` | the map — read first |
-| `docs/BUGS.md` | **open** defects only, IDs `B1…`. Fixing one means *moving* its entry to `docs/archive/BUGS_resolved.md`, not striking it through |
+| `docs/BUGS.md` | **open** defects filed before 2026-10-19, IDs `B1…B29`. Fixing one means *moving* its entry to `docs/archive/BUGS_resolved.md`, not striking it through. **New bugs are GitHub issues** with the `bug` label (`gh issue create --label bug`), so they are visible from every branch; give severity and module in the body. A fix closes its issue from the PR (`Fixes #N`) |
 | `docs/PLAN_implementation.md` | **remaining** milestones and open decision gates. A milestone that meets its exit gate moves to `docs/archive/PLAN_completed.md` |
 | `docs/DESIGN_registry_assembly.md` | current reasoning — decision ledger D1…, open checkpoints C…. Revisions move to `docs/archive/DESIGN_history.md` |
 

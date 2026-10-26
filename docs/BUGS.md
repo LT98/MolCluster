@@ -1,5 +1,11 @@
 # Bug tracker — open only
 
+> **New bugs are filed as GitHub issues** (`gh issue create --label bug`), not added here: an
+> issue is visible from every branch, a section in this file only from the branches that have
+> it. Put the severity and the module in the issue body, using the vocabulary below. This file
+> keeps the entries filed before 2026-10-19 until each is fixed or moved to an issue. First
+> filed that way: [#69](https://github.com/LT98/MolCluster/issues/69) (was drafted as B30).
+
 Everything here is **unresolved**. When something is fixed and has a test, move the entry to
 [`archive/BUGS_resolved.md`](archive/BUGS_resolved.md) — do not leave it here struck through.
 The point of this file is that its length is the size of the problem.
