@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from mofsbu.registry import BlobStore, Registry, find, incoming_routes
+from mofsbu.registry import BlobStore, Registry, find, incoming_routes, is_construction
 from mofsbu.registry.jobs import task_rows
 from mofsbu.runner import enumerate_plan, estimate, plan, run
 from mofsbu.spec import BuildSpec, MetalSpec, MoleculeSpec, PocketPredicate
@@ -100,8 +100,8 @@ def test_the_step_reaches_the_structure_the_place_task_built(reg):
 
     product = labelled(reg, "]2")                     # Zn[catechol…]2
     routes = incoming_routes(reg, product["id"])
-    placed = [r for r in routes if not r["reagent_ids"]]
-    steps = [r for r in routes if r["reagent_ids"]]
+    placed = [r for r in routes if is_construction(r)]
+    steps = [r for r in routes if not is_construction(r)]
     assert placed and steps, "one node, two kinds of route"
     assert product["n_incoming_routes"] == len(routes)
 
@@ -112,7 +112,7 @@ def test_the_step_carries_its_reagents_and_its_choice_vector(reg):
     run(reg, ladder_spec())
     product, rung = labelled(reg, "]2"), labelled(reg, "Zn[catechol-2Hcfg(0,1)sep(3)] ")
     ligand = labelled(reg, "[catechol-2Hcfg(0,1)sep(3)] q-2")
-    step = next(r for r in incoming_routes(reg, product["id"]) if r["reagent_ids"])
+    step = next(r for r in incoming_routes(reg, product["id"]) if not is_construction(r))
     assert sorted(step["reagent_ids"]) == sorted([rung["id"], ligand["id"]])
     # The recipe version, read rather than spelled: what this asserts is that the digest
     # is a VERSIONED key — a bare hash could not say it was stale — and pinning the
@@ -128,7 +128,7 @@ def test_the_ladder_reaches_down_to_the_bare_centre(reg):
     chain, row_id = [], labelled(reg, "]2")["id"]
     while True:
         chain.append(complexes[row_id])
-        step = next((r for r in incoming_routes(reg, row_id) if r["reagent_ids"]), None)
+        step = next((r for r in incoming_routes(reg, row_id) if not is_construction(r)), None)
         if step is None:
             break
         below = [i for i in step["reagent_ids"] if i in complexes and i != row_id]

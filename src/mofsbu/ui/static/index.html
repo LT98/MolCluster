@@ -428,8 +428,8 @@ function renderRouteGroup(g, gi){
   const placements = g.placements > 1
     ? ` <span class="muted">(${esc(g.placements)} placements)</span>` : "";
   // A `place` edge cites nothing: the sphere was constructed whole, not reacted together
-  // (C15).  Two bare dashes would read as missing data rather than as what happened.
-  const built = !source && !added
+  // (D29).  Two bare dashes would read as missing data rather than as what happened.
+  const built = r.is_construction
     ? `<span class="muted">— (built whole, no reagents recorded)</span>` : null;
   // What a deprotonation adds is nothing; what it LOSES is the point.
   const shed = protonsShed((r.steps && r.steps[0]) || {});

@@ -59,6 +59,13 @@ from a `placement 3` one.
 geometry and asks the blob store about each one, which a walk does not want once per hop.
 Every entry in `routes` carries `direction: "made_from"`.
 
+Every recorded edge, in `routes` (here and on `GET /api/structures/{id}`) and in `consumed_by`,
+carries `reagent_ids` — every structure it cites, in any role — and `is_construction`, true for
+a `place` edge, which cites nothing because the structure was built whole (D29). The flag is
+`registry.api.is_construction` applied server-side and is read from the edge's own rows, so an
+edge that fails to price is not mistaken for a construction. The pages read the flag rather
+than inferring it from the priced terms. `derived` entries do not carry it.
+
 `consumed_by` is the other direction: every edge that takes the structure as a **reagent**
 (`registry.api.outgoing_routes`), priced the same way, each with `product_structure_id` and
 `direction: "consumed_by"`. Only `role = 'reagent'` counts — a structure that appears in an
