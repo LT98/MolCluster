@@ -114,6 +114,44 @@ def test_a_donor_closing_onto_the_metal_is_filed_as_the_chelate(reg):
     assert file_derived(reg, relaxed.id)["skipped"] == "already filed"
 
 
+@pytest.mark.parametrize("pending", [True, False], ids=["inside-a-transaction", "none-open"])
+def test_an_edge_that_fails_to_balance_leaves_nothing_filed(reg, monkeypatch, pending):
+    """All or none: the structure, geometry and edge are rolled back together, so a retry
+    files the species instead of skipping it as already filed, and nothing is committed."""
+    from mofsbu._types import MofsbuError
+    from mofsbu.energy import reference
+
+    g = zn_formate_diaqua()
+    sid = put_structure(reg, g).id
+    raw = put_geometry(reg, sid, xyz_of(g, zn_coords(False)), fidelity=Fidelity.RAW,
+                       method=RAW)
+    relaxed = put_geometry(reg, sid, xyz_of(g, zn_coords(True)), fidelity=Fidelity.ML,
+                           method=OMOL, energy=-42.0, converged=True, relaxed_from=raw.id)
+    if not pending:
+        reg.conn.commit()
+
+    def counts():
+        return [reg.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                for t in ("structures", "geometries", "reactions")]
+
+    before = counts()
+
+    class Unbalanced:
+        balanced = False
+
+        def describe(self):
+            return "unbalanced (test)"
+
+    monkeypatch.setattr(reference, "check_balance", lambda reg_, rid: Unbalanced())
+    with pytest.raises(MofsbuError, match="must conserve atoms"):
+        file_derived(reg, relaxed.id)
+    assert counts() == before
+    assert reg.conn.in_transaction == pending, "file_derived committed or opened a transaction"
+
+    monkeypatch.undo()
+    assert len(file_derived(reg, relaxed.id)["filed"]) == 1
+
+
 # ── a water leaves: the separation is held back ──────────────────────────────
 
 AXES = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]], float)

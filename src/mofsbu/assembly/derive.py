@@ -207,18 +207,33 @@ def file_derived(reg: Any, geometry_id: int) -> dict[str, Any]:
         return {"refused": "separation — second shell or leaving, pending",
                 "summary": derived.summary}
 
-    put = put_structure(reg, derived.pieces[0].graph, l2="", tags=["derived"])
-    geom = put_geometry(reg, put.id, reg.store.get(row["coords_hash"]).decode(),
-                        fidelity=Fidelity(int(row["fidelity"])),
-                        method=_method_of(reg, row["method_id"]), energy=row["energy"],
-                        converged=None if row["converged"] is None else bool(row["converged"]),
-                        canonical_order=put.canonical_order, derived_from=geometry_id)
-    rid = put_reaction(reg, put.id, Provenance(
-        kind="relaxation", reagent_ids=(int(row["structure_id"]),),
-        note=f"geometry {geometry_id}: {derived.summary}"))
-    balance = check_balance(reg, rid)
-    if not balance.balanced:
-        raise MofsbuError(f"relaxation edge {rid} from geometry {geometry_id} is "
-                          f"{balance.describe()}; a derived species must conserve atoms")
+    # All three rows or none: a failure after the first write must not leave a structure
+    # that the "already filed" check would then accept.
+    began = not reg.conn.in_transaction
+    if began:
+        reg.conn.execute("BEGIN")
+    reg.conn.execute("SAVEPOINT file_derived")
+    try:
+        put = put_structure(reg, derived.pieces[0].graph, l2="", tags=["derived"])
+        geom = put_geometry(
+            reg, put.id, reg.store.get(row["coords_hash"]).decode(),
+            fidelity=Fidelity(int(row["fidelity"])),
+            method=_method_of(reg, row["method_id"]), energy=row["energy"],
+            converged=None if row["converged"] is None else bool(row["converged"]),
+            canonical_order=put.canonical_order, derived_from=geometry_id)
+        rid = put_reaction(reg, put.id, Provenance(
+            kind="relaxation", reagent_ids=(int(row["structure_id"]),),
+            note=f"geometry {geometry_id}: {derived.summary}"))
+        balance = check_balance(reg, rid)
+        if not balance.balanced:
+            raise MofsbuError(f"relaxation edge {rid} from geometry {geometry_id} is "
+                              f"{balance.describe()}; a derived species must conserve atoms")
+    except BaseException:
+        reg.conn.execute("ROLLBACK TO SAVEPOINT file_derived")
+        reg.conn.execute("RELEASE SAVEPOINT file_derived")
+        if began:
+            reg.conn.execute("ROLLBACK")
+        raise
+    reg.conn.execute("RELEASE SAVEPOINT file_derived")
     return {"filed": [put.id], "geometries": [geom.id], "created": [put.created],
             "edge": rid, "summary": derived.summary}
