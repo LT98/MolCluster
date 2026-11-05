@@ -784,6 +784,13 @@ that would fail if the claim stopped being true.**
   (`WORKPLAN_solvation.md` C21) — one value, both docs.
 - `WORKPLAN_solvation.md` §4: state that S4–S6 wait for E6, as `WORKPLAN_energy.md` §5 does.
 - `WORKPLAN_M7.md` §10: the M7 resize is done; correct the rest after the ledger calls.
+- **Backfill the changelog** (`archive/PLAN_completed.md` §4) for PRs #31–#68, one revision
+  each, from the PR descriptions. Rev 26 records the gap.
+- **`OVERVIEW.md` for the other nine packages**, `registry` and `assembly` first. Generated
+  tables are free; each hand-written top needs the package read.
+- **DFT with both GPUs visible** fails four GPU4PySCF tests (`LinAlgError: Eigenvalues did not
+  converge`); one visible card passes. Pin `DFTBackend` to the declared device, or document
+  `CUDA_VISIBLE_DEVICES` as required for DFT. Should be a `bug` issue.
 - Open bugs: none blocks M7 or M7R. **B9 stays in the backlog** (called 2026-10-02); C2's energy
   window is tracked in §3 on its own.
 

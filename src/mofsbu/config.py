@@ -12,6 +12,7 @@ construction, which is why it is out of git in the first place.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -124,6 +125,7 @@ def relax_workers() -> int:
 # decide on its own to seize hardware you are using for something else.
 
 CPU = "cpu"
+_DEVICE = re.compile(r"cpu|mps|(?:cuda|xpu)(?::\d+)?")
 
 
 def compute_device() -> str:
@@ -133,10 +135,11 @@ def compute_device() -> str:
     you typed, rather than silently becoming "cpu" and looking like slow hardware.
     """
     value = (os.environ.get("MOFSBU_DEVICE") or CPU).strip().lower()
-    if value != CPU and not value.startswith(("cuda", "mps", "xpu")):
+    if not _DEVICE.fullmatch(value):
         raise ValueError(
             f"MOFSBU_DEVICE={value!r} is not a device torch would recognise; "
-            f"expected cpu, cuda, cuda:<n>, or mps")
+            f"expected cpu, cuda, cuda:<n>, mps or xpu. One device per process: a list "
+            f"such as 'cuda:0,cuda:1' is not supported")
     return value
 
 

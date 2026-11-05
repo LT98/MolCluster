@@ -7,9 +7,12 @@ before searching broadly.
 
 1. `docs/CODE_ARCHITECTURE.md` — compact module map, invariants, and known seams.
 2. `README.md` — setup, command entry points, data-root rules, and two-machine workflow.
-3. The task-specific module listed below.
-4. The focused tests before changing behavior.
-5. `docs/PLAN_implementation.md` and `docs/DESIGN_registry_assembly.md` only when the task
+3. The `OVERVIEW.md` of each subpackage the task touches (`src/mofsbu/<pkg>/OVERVIEW.md`):
+   purpose, rules, and a generated API table with callers. Read it before the code.
+   After changing a public name or signature, run `python scripts/gen_overview.py`.
+4. The task-specific module listed below.
+5. The focused tests before changing behavior.
+6. `docs/PLAN_implementation.md` and `docs/DESIGN_registry_assembly.md` only when the task
    changes an invariant, milestone boundary, or data model decision.
 
 ## Document layout
@@ -50,6 +53,30 @@ Do not infer current branch state from old session notes. Run `git status --shor
 `git fetch origin --prune`, and compare the checked-out branch with its tracking branch before
 branch or merge work. A local branch may be stale even when the completed work exists in another
 local ref or on `origin/main`.
+
+## Finishing a change
+
+The plan and the archive are updated **in the same branch as the work**, not afterwards. A change
+is not finished until each of these that applies is done:
+
+1. **`docs/archive/PLAN_completed.md` §4** gets a changelog revision (next `rev N`, newest first):
+   what was wrong or missing, what was built, and what building it turned up. Name the PR.
+2. **`docs/PLAN_implementation.md`** loses what the change finished: the item in §7 (or its
+   backlog), the "Where the work stands" row if a milestone moved, and any reminder whose trigger
+   landed. A milestone that met its exit gate moves to `PLAN_completed.md` §1.
+3. **Bugs:** a fixed `B…` entry moves from `BUGS.md` to `archive/BUGS_resolved.md`; a fixed issue
+   is closed from the PR (`Fixes #N`).
+4. **Decisions:** a called checkpoint becomes a ledger line in `DESIGN_registry_assembly.md`, and
+   a revised one moves its old text to `archive/DESIGN_history.md`.
+5. **The WORKPLAN the work belongs to** (`WORKPLAN_energy.md`, `_M6`, `_M7`, `_solvation`) marks
+   the slice done.
+6. **`OVERVIEW.md`** of every package whose public names changed: run
+   `python scripts/gen_overview.py`, and edit its hand-written top if a rule or boundary moved.
+
+`scripts/check.sh` enforces item 1 through `scripts/check_docs.py`: a branch that changes `src/`
+or `scripts/` without touching the changelog fails the gate. A change with nothing to record
+says why in a commit trailer, `Plan-update: none — <reason>`. The other items are checked in
+review (`.github/pull_request_template.md`).
 
 ## Task routing
 

@@ -310,6 +310,24 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 26)* **Organising: package overviews, a gate that keeps this changelog current, and
+  a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
+  M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
+  backends, E1, D29, D30, B28 closed, B30 filed as #69) were never written here. That gap is why
+  `scripts/check_docs.py` now fails the gate when a branch changes code without changing this
+  file. Backfilling those revisions is in `PLAN_implementation.md` §7. What landed:
+  `src/mofsbu/energy/OVERVIEW.md`, a hand-written top (purpose, rules, boundaries) over an API
+  table that `scripts/gen_overview.py` generates from the code, with the callers of every
+  public name; `tests/test_overview.py` fails when a table is stale. `AGENTS.md` gains a
+  "Finishing a change" checklist and puts the overviews in the reading order, and the
+  checklist is also the PR template. `energy.backends` no longer imports `assembly` (the lazy
+  `NotBuiltYet` import now comes from `_types`, where the class lives), which removes one edge
+  of the assembly–energy cycle. `config.compute_device` now refuses a value torch cannot use.
+  It used to pass anything starting with `cuda`, so `MOFSBU_DEVICE=cuda:0,cuda:1` got through
+  and failed later, inside a MACE call, as `Invalid device string`. A committed vim swap file
+  and the `.ua/` knowledge-graph output are ignored. What it turned up: the DFT tests still
+  fail with both GPUs visible (`LinAlgError`) and pass with `CUDA_VISIBLE_DEVICES` set to one
+  card, independent of `MOFSBU_DEVICE`, so that one is in the backlog, not fixed here.
 - *(rev 25)* **A sweep is one question: ranges, an estimate, and the ladder's own edges.**
   Three asks from the builder page, and the third one turned out to need the chelate join
   that M5 carried out unbuilt.

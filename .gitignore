@@ -45,3 +45,10 @@ id_ed25519*
 *_rsa
 *_ed25519
 .env.local
+
+# understand-anything knowledge graph (generated)
+.ua/
+
+# editor swap files
+*.swp
+*.swo

@@ -214,6 +214,7 @@ def _atomic_number(symbol: str) -> int:
 
 
 def electron_count(symbols: Sequence[str], charge: int) -> int:
+    """Total electrons: the sum of atomic numbers minus the net charge."""
     return sum(_atomic_number(s) for s in symbols) - charge
 
 
@@ -766,6 +767,7 @@ def ml_backend_key(ml_model: str | None = None) -> str:
 
 
 def get_backend(name: str, **kwargs: Any) -> EnergyBackend:
+    """A backend by its registry key (`xtb`, `mace_omol`, `dft`, ...); unknown keys raise."""
     try:
         cls = _BACKENDS[name]
     except KeyError:
@@ -779,7 +781,7 @@ def backend_for(fidelity: Fidelity, *, ml_model: str | None = None,
     if fidelity is Fidelity.ML:
         return get_backend(ml_backend_key(ml_model), **kwargs)
     if fidelity not in _BY_FIDELITY:
-        from mofsbu.assembly.join import NotBuiltYet
+        from mofsbu._types import NotBuiltYet
 
         raise NotBuiltYet(
             f"no energy backend serves {fidelity.name}. "
