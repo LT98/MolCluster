@@ -51,12 +51,36 @@ class OxidationStateMismatch(MofsbuError):
 _TOOLCHAIN: dict[str, str | None] = {}
 
 
+def _preload_cutensor() -> None:
+    """Load both cuTENSOR libraries CuPy's binding links, so GPU4PySCF contracts with
+    cuTENSOR rather than einsum (WORKPLAN_energy §3a: memory).  No wheel: no-op."""
+    try:
+        from cuda import pathfinder
+    except ImportError:
+        return
+    for lib in ("cutensor", "cutensorMg"):
+        try:
+            pathfinder.load_nvidia_dynamic_lib(lib)
+        except Exception:                                               # noqa: BLE001
+            return
+
+
+def contraction_engine() -> str:
+    """Which engine GPU4PySCF contracts with here: 'cutensor', or the fallback it warned of."""
+    _preload_cutensor()
+    from gpu4pyscf.lib import cutensor
+
+    return "cutensor" if cutensor.cutensor is not None else "einsum"
+
+
 def _toolchain_problem() -> str | None:
     """None if GPU4PySCF imports and CuPy can compile a kernel here; else why not.  Cached."""
     if "problem" in _TOOLCHAIN:
         return _TOOLCHAIN["problem"]
     try:
         import cupy
+
+        _preload_cutensor()
         import gpu4pyscf  # noqa: F401
 
         if cupy.cuda.runtime.getDeviceCount() < 1:
@@ -238,8 +262,11 @@ class DFTBackend:
                             extras=extras)
 
     def relax(self, symbols, positions, *, charge, multiplicity, solvent=None,
-              fmax=0.05, steps=100):
-        """geomeTRIC on the SCF gradient.  `fmax` (eV/Å) sets the gradient criteria."""
+              fmax=0.05, steps=100, on_step=None):
+        """geomeTRIC on the SCF gradient.  `fmax` (eV/Å) sets the gradient criteria.
+
+        `on_step(energy_eV, fmax_eV_per_A)` is called after every optimiser step.
+        """
         from pyscf.geomopt.geometric_solver import kernel as geometric_kernel
 
         from mofsbu.energy.backends import RelaxResult
@@ -253,6 +280,8 @@ class DFTBackend:
             g = np.asarray(env["gradients"])
             trail.append((float(env["energy"]),
                           float(np.sqrt((g ** 2).sum(axis=1)).max()) * HARTREE_EV / BOHR_ANGSTROM))
+            if on_step is not None:
+                on_step(trail[-1][0] * HARTREE_EV, trail[-1][1])
 
         converged, final = geometric_kernel(
             mf, maxsteps=steps, callback=callback, assert_convergence=False,

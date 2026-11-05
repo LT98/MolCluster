@@ -128,8 +128,9 @@ Construction, identity, clash QC, choice vectors (`runner`, `assembly/`, `geomet
   1.30×, non-edges formed inside 1.10× of the `geometry/distances.py` lengths) and stores
   `connectivity_changed`; best-geometry and `energy/reference` never select a changed one, and
   an equation left without an energy says so. `registry.backfill_connectivity` gives rows
-  written before E1 their verdict. Still missing: the D11 `derived_from` record filing a
-  changed geometry under the species it became.
+  written before E1 their verdict. A changed geometry that stays one piece is filed under the
+  species it became (D31, `assembly/derive.py`): its energy counts again, for the species it
+  belongs to. A separation is held back until the second-shell probe decides it.
 - **E1 reads each geometry through its own link (D30).** A geometry is judged against the
   structure's graph renumbered like its rows, whichever build wrote them. One stored before the
   link existed is left NULL with the reason until `scripts/recover_atom_links.py` has linked it
@@ -174,7 +175,8 @@ G(aq) = E_DFT(gas, g)                                 5b
 - **5a Geometry.** MACE geometry by default, validated on ~10 species re-optimised at DFT
   (r²SCAN-3c): RMSD, and ΔE(single point at the MACE geometry − DFT minimum). Under 0.05 eV mean
   (proposal) and the accelerator claim stands. Not xTB geometries: xTB relaxes a MACE Ni minimum
-  by −1.9 eV (`WORKPLAN_solvation.md` §1).
+  by −1.9 eV (`WORKPLAN_solvation.md` §1). **Run 2026-10-22** at ωB97M-V/def2-TZVPD (not
+  r²SCAN-3c): holds for the Ni(II) species, fails where the ligand is oxidised (§3a "Stage 5a").
 - **5b Electronic energy.** ωB97M-V/def2-TZVPD, MACE's training level, so E_DFT − E_MACE is a
   per-species MACE error ("MACE trust"). ωB97X-3c or r²SCAN-3c as a cheaper recipe of its own.
   - **Spin check:** the triplet and the next multiplicity for every Ni species.
@@ -363,6 +365,9 @@ the MH minimum (−0.87 eV against its run's OMOL-0 energy) is ~1.4 eV above POL
 different starts in the MH and POLAR checks, so those two rows are each internally fair but not
 comparable with each other.
 
+*Superseded in part by stage 5a (§3a, 2026-10-22): #132 was a bad construct, and at
+def2-TZVPD with DFT re-optimisation the two models are not separated.*
+
 **Where this leaves the relaxer (2026-10-05, not yet called):** POLAR-L is DFT-equivalent to
 OMOL-0 on five of six species and much better on the sixth, is given charge and spin with a
 physical response, and costs ~2.5× OMOL-0 per relaxation. Run as an S → L funnel (k = 3) its
@@ -453,8 +458,64 @@ charges and spin populations and ⟨S²⟩ in `EnergyResult.extras`, and `check_
 | Gradients / geomeTRIC | yes |
 | **VV10 cost** | the NLC grid defaulted to the full XC grid (306k points on a 23-atom Ni complex) and VV10 is quadratic in it: 20.5 s of a 22 s Fock build. NLC level 1 (104k points) costs 4.5 s and moves the energy by 1.1 µEh; level 0 by 0.17 mEh. Default `nlc_grids_level=1` |
 | **Ni(II) SCF** | from the minao guess the triplet oscillates (ΔE of hundreds of Eh in early cycles) and does not converge in 150 cycles; ωB97X also failed in 60. Started from a converged PBE density it converges in 31 cycles. Default `guess_xc="pbe"` |
-| Memory, ~40-atom Ni at def2-TZVPD | not yet measured — the first attempt ran before the two fixes above |
+| **Contraction engine** | without cuTENSOR GPU4PySCF falls back to `cupy.einsum`, whose temporaries are not in its memory plan: the UKS density-fitted gradient (`df/grad/uhf._jk_energy_per_atom`) ran out of 20 GB from ~30 atoms at def2-TZVPD, with no MACE on the card. Installed **`cutensor-cu13==2.4.1`** (the version CuPy 14.0.1 is built against). CuPy 14.0.1 preloads `libcutensor` but not `libcutensorMg`, which its binding also links, so `energy/dft._preload_cutensor` loads both through `cuda.pathfinder` before GPU4PySCF is imported; `dft.contraction_engine()` says which engine is live (2026-10-18) |
+| Memory, Ni at def2-TZVPD (cuTENSOR) | peak CuPy pool 0.3–0.9 GiB at 8–31 atoms, **1.41 GiB at 33 atoms**, 1.3 GiB at 39–40 atoms, for single point + gradient and geomeTRIC relax (stage 5a, below). Memory is no longer the limit at this size; time is |
+| Time, Ni triplet, ωB97M-V/def2-TZVPD | single point + gradient: ~35 s at 8–9 atoms, 6–10 min at 23–24, 36 min at 40 (from a fresh PBE guess). geomeTRIC re-optimisation from a MACE minimum: 18–58 steps, **4–13 h at 30–40 atoms** |
 | GPU sharing | DFT and a MACE study on one card slowed both several-fold; DFT should run exclusively (an E5 `refine` queue concern) |
+| Device pinning | GPU4PySCF uses **every visible GPU**, whatever `MOFSBU_DEVICE` names: with both cards visible a DFT test spread onto the card a run held and failed. Pin with `CUDA_VISIBLE_DEVICES` until `DFTBackend` pins itself ([#70](https://github.com/LT98/MolCluster/issues/70)) |
+
+### Stage 5a — DFT re-optimisation of MACE minima (2026-10-16 → 10-22)
+
+`scripts/dft_reopt.py`, output `data/stage5a/reopt.json` (+ `xyz/` for viewing). Ten Ni species
+from `salt_study_k1.db`: the six of the arbitration set, #678 and #804 from the funnel, and the
+neutral and charged structure nearest 40 atoms (#189, #46). Each structure's first stored start
+was relaxed by MACE-OMOL-0 and by MACE-POLAR-1-L (fmax 0.05 eV/Å), and each ML minimum
+re-optimised by DFT (ωB97M-V/def2-TZVPD, triplet, gas, geomeTRIC, fmax 0.05). ΔE = E_DFT(ML
+minimum) − E_DFT(the DFT minimum reached from it). A record is left out of the mean only when
+the two DFT energies are not comparable (different SCF solution: ⟨S²⟩ differs by > 0.01, or
+unconverged); a DFT bonding change is counted and annotated.
+
+| sid | atoms, q | OMOL-0 ΔE / RMSD | POLAR-L ΔE / RMSD | Ni spin (DFT min) |
+|---|---|---|---|---|
+| 68 | 9, 0 | 0.006 eV / 0.08 Å | 0.002 / 0.03 | 1.82 |
+| 28 | 8, +1 | 0.006 / 0.09 | 0.008 / 0.11 | 1.72 |
+| 94 | 24, +1 | 0.021 / 0.15 | 0.071 / 0.42 | 1.77 |
+| 132 | 23, 0 | — (different SCF state) | 0.035 / 0.31 | 1.8 |
+| 189 | 40, 0 | 0.037 / 0.44 | 0.032 / 0.39 | 1.76 |
+| 46 | 39, +2 | 0.037 / 0.25 | 0.036 / 0.27 | 1.78 |
+| 569 | 31, 0 | 0.190 / 0.73 (DFT changed bonding) | 0.186 / 0.71 (same) | **0.93** |
+| 718 | 30, −1 | 0.076 / 0.63 | 0.114 / 0.65 | **0.91** |
+| 678 | 33, −1 | 0.240 / 1.61 | 0.234 / 1.55 | **0.93** |
+| 804 | 32, −2 | 0.144 / 0.73 | — (different SCF state) | **0.92** |
+
+**Against the 0.05 eV proposal (mean over comparable records):** OMOL-0 **0.084 eV** (n = 9;
+median 0.037), POLAR-L **0.080 eV** (n = 9; median 0.036). Neither mean is within the proposal;
+both medians are.
+
+- **The split is electronic, not size.** The six species whose DFT minimum is a Ni(II) triplet
+  (≈ 1.8 unpaired electrons on Ni) sit at 0.002–0.071 eV for both models, up to 40 atoms. All
+  four that miss it carry ≈ 0.92 on Ni at the DFT minimum, for both relaxers: the deprotonated
+  bis-THQ species. On #569 meta-Löwdin agrees with Mulliken (Ni 0.93; C21 0.47 and two O ≈ 0.18
+  each — a semiquinone-like ligand radical), while #94 stays 1.76. So these four are not the
+  Ni(II) the graph records: `check_oxidation_state` would refuse them (`oxidation_state_mismatch`),
+  and whether the triplet is even their ground state is the spin ladder's question (E4, not built).
+- **OMOL-0 and POLAR-L are not separated.** Their DFT minima coincide (|Δ| ≤ 1.4 meV) on every
+  structure except #132 and #804 (on #804 POLAR-L's DFT minimum is 0.22 eV higher, reached from an
+ML minimum where the SCF started in a different state). #132's 2.5 eV gap is a bad construct, not a better relaxer: an
+  O–H points at Ni from 1.86 Å and the two models leave it in different directions, one of them
+  moving a proton ([#69](https://github.com/LT98/MolCluster/issues/69)). The "much better on the
+  sixth" reading of the POLAR-1 study above is withdrawn.
+- **DFT moves the larger species' shape** (RMSD 0.6–1.6 Å at 30–33 atoms) while keeping their
+  bonding, except #569, where DFT moves the binding site opposite the deprotonated one.
+- **Not shown:** one start per structure; the triplet only; gas phase; one functional and basis.
+  Two records were dropped for a different SCF solution — the SCF state at a ligand-radical
+  geometry is itself unstable.
+
+**What it decides and what it leaves.** The accelerator claim (MACE geometry + DFT single point
+≈ DFT minimum) holds for these Ni(II) species and fails, by 0.08–0.24 eV, where the ligand is
+oxidised. The relaxer call stays open: 5a does not separate POLAR-L from OMOL-0, so the cost
+(POLAR-L ~2.5× per relaxation) is the remaining argument. Next for the redox-active species: the
+spin ladder and the oxidation-state check (E4), before any of them is priced at the refine tier.
 
 ### xTB — what it does today, and whether it stays (to be decided)
 

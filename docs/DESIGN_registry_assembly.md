@@ -250,7 +250,9 @@ geometry realizations:
 - Maintain a materialized **best-available geometry** pointer per structure for fast recall.
 - A basin-crossing relaxation (DFT lands in a different minimum than the raw build) becomes a
   **new L3** with a `derived_from` edge to the coarse one — nothing is lost, and the cheap
-  geometry is recorded as having correctly pointed at it.
+  geometry is recorded as having correctly pointed at it.  A relaxation that **changes
+  connectivity** has left the identity altogether — a different graph, so a new **L1** — and
+  is filed under the species it became with a `relaxation` edge (D31).
 
 Prior-art pattern: ASE-db KV / Materials-Project `TaskDoc` provenance — but SQLite is sufficient
 at this scale.
@@ -754,6 +756,31 @@ coordinates.
   `test_load_block_of_a_second_build_puts_its_donor_sites_on_oxygen`,
   `test_recovery_links_without_touching_coordinates_and_drops_miskeyed_states`),
   `tests/test_connectivity.py::test_coordinates_in_another_numbering_without_their_link_are_refused`.
+
+- **D31 (D11's connectivity half)** **A relaxation that changes connectivity is filed under the
+  species it became, and the flagged geometry stays where it was.** E1 marks it and keeps it out
+  of energy selection; `assembly.derive.file_derived` applies the verdict to the geometry's own
+  graph (D30) and stores the result as its own structure (a new L1), joined to the species it
+  was built as by a `relaxation` edge that balances and is priced like any other. What is filed:
+  a donor bond to a metal formed or broken, and a proton moving between two non-carbon heavy
+  atoms (a localised atom's formal charge moves by one; a delocalised one keeps label 0, the
+  `from_rdkit` rule, D15). Anything else — a covalent skeleton broken, a C–H, a metal–metal
+  bond — is refused with its reason as a likely failed relaxation. Only a change that leaves
+  **one piece** is filed; it takes the relaxed geometry's coordinates, energy and theory as
+  built. A **separation** (the graph falls into more than one component — a water or a ligand
+  no longer bonded to the metal) is **held back, not filed**: whether the piece is held in the
+  second shell (an outer-sphere adduct, a C19 shell record) or keeps leaving (labelled unstable,
+  locked away) is decided by the second-shell probe, and until then `file_derived` returns it as
+  refused with that reason. `derive_species` still derives the pieces, so the probe can reuse
+  it; metals ending up apart, or a charged or open-shell leaver, are refused there because a
+  per-piece charge or spin cannot be stated. No site rows are written for a derived species
+  until its frames can be re-derived (M6/S7). Tests: `tests/test_derive.py`
+  (`test_a_donor_closing_onto_the_metal_is_filed_as_the_chelate`,
+  `test_a_water_leaving_is_held_back_and_nothing_is_filed`,
+  `test_a_proton_transfer_from_aqua_to_formate_gives_hydroxo_and_formic_acid`,
+  `test_a_broken_skeleton_is_refused`, `test_a_charged_leaver_is_refused`,
+  `test_metals_ending_up_apart_are_refused`,
+  `test_a_relax_task_records_a_separation_as_held_back`).
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in

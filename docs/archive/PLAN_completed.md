@@ -310,6 +310,12 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 59)* **Stage 5a: DFT re-optimisation of MACE minima (`WORKPLAN_energy.md` §3a).** Ten Ni
+  species, OMOL-0 and POLAR-L each re-optimised at ωB97M-V/def2-TZVPD (`scripts/dft_reopt.py`).
+  MACE geometry + DFT single point is within 0.07 eV for true Ni(II) triplets and misses by
+  0.08–0.24 eV on four deprotonated bis-THQ species whose DFT minimum is a ligand radical (Ni spin
+  ≈ 0.9). The two relaxers are not separated; #132's gap was a bad construct (#69). `dft.py` loads
+  cuTENSOR (without it, UKS gradients ran out of 20 GB from ~30 atoms) and `relax` takes `on_step`.
 - *(rev 58)* **A worker short of memory leaves the task pending instead of failing it.**
   Two declared floors, `MOFSBU_MIN_FREE_RAM_GIB` and `MOFSBU_MIN_FREE_VRAM_GIB` (unset: nothing is
   read). `headroom.shortfall` compares free RAM (`MemAvailable`) and free memory on
