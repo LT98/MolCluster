@@ -651,3 +651,20 @@ def test_the_co_ligand_count_is_offered_and_an_old_spec_reads_as_fill(client):
     # The page labels its specs v1 (B5): the field it sends must survive the migration.
     page = estimate(spec_version=1, co_ligand_counts="range", co_ligand_window=2)
     assert page["co_ligand_counts"] == "range" and page["tasks"] == new["tasks"]
+
+
+@pytest.mark.parametrize("value", ["cpu", "cuda", "cuda:1", "MPS", " xpu:0 "])
+def test_compute_device_accepts_one_device(monkeypatch, value):
+    from mofsbu.config import compute_device
+
+    monkeypatch.setenv("MOFSBU_DEVICE", value)
+    assert compute_device() == value.strip().lower()
+
+
+@pytest.mark.parametrize("value", ["cuda:0,cuda:1", "cuda0", "gpu", "cuda:"])
+def test_compute_device_refuses_what_torch_cannot_use(monkeypatch, value):
+    from mofsbu.config import compute_device
+
+    monkeypatch.setenv("MOFSBU_DEVICE", value)
+    with pytest.raises(ValueError, match="MOFSBU_DEVICE"):
+        compute_device()

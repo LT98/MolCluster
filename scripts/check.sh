@@ -4,4 +4,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 python -m pytest tests
 python scripts/verify_registry.py || echo "(no registry to verify yet)"
+python scripts/check_docs.py
 command -v ruff >/dev/null && ruff check src tests scripts || echo "(ruff not installed - skipped)"
