@@ -82,18 +82,19 @@ Energy backends behind one protocol (M7).
 | `class MACEMHBackend` | MACE-MH-1, a multi-head foundation model; one head per level of theory. |  |
 | `class MACEPolarBackend` | MACE-POLAR-1: explicit long-range electrostatics, given total charge and spin. |  |
 | `ml_backend_key(ml_model) -> str`* | Which ML backend a request means: the one named, else the one declared. |  |
-| `get_backend(name, **kwargs) -> EnergyBackend`* | A backend by its registry key (`xtb`, `mace_omol`, `dft`, ...); unknown keys raise. | `runner`, `scripts/compare_relaxers.py`, `scripts/dft_arbitrate.py`, `scripts/funnel_eval.py` |
+| `get_backend(name, **kwargs) -> EnergyBackend`* | A backend by its registry key (`xtb`, `mace_omol`, `dft`, ...); unknown keys raise. | `runner`, `scripts/compare_relaxers.py`, `scripts/dft_arbitrate.py`, `scripts/dft_reopt.py`, `scripts/funnel_eval.py` |
 | `backend_for(fidelity, *, ml_model, **kwargs) -> EnergyBackend`* | The backend that produces geometries at this rung, or a reason why not. | `runner` |
 | `available_backends() -> dict[str, bool]`* | What this machine can actually run. The UI reads this rather than guessing. |  |
 
-### `dft` (323 lines)
+### `dft` (352 lines)
 
 DFT through GPU4PySCF — the `Fidelity.DFT` rung (WORKPLAN_energy E4, stage 5b/5c).
 
 | Name | Does | Used by |
 |---|---|---|
 | `class OxidationStateMismatch` | The SCF put a different number of unpaired electrons on the metal than L0 claims. |  |
-| `class DFTBackend` | Kohn–Sham DFT on GPU4PySCF behind the `EnergyBackend` protocol. | `scripts/dft_arbitrate.py` |
+| `contraction_engine() -> str` | Which engine GPU4PySCF contracts with here: 'cutensor', or the fallback it warned of. | `scripts/dft_reopt.py` |
+| `class DFTBackend` | Kohn–Sham DFT on GPU4PySCF behind the `EnergyBackend` protocol. | `scripts/dft_arbitrate.py`, `scripts/dft_reopt.py` |
 | `expected_unpaired(symbol, oxidation_state, spin_class) -> int` | Unpaired d electrons the graph claims for one metal centre. |  |
 | `check_oxidation_state(result, metal_index, expected, *, tol) -> float` | Return the metal's spin population, or raise `OxidationStateMismatch`. |  |
 
