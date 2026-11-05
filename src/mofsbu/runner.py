@@ -45,8 +45,8 @@ from mofsbu.registry import (
 from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
-    outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
-    release_task, waiting_on_live_work,
+    has_pending, outcome_summary, set_diagnostics, sweep_interrupted, task_counts,
+    touch_run, release_task, waiting_on_live_work,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -710,8 +710,8 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
 
     The relaxed coordinates are filed under the SAME identity.  A relax that breaks or
     forms a bond is detected by `put_geometry` (gate E1) and stored `connectivity_changed`,
-    which keeps it out of energy selection; filing it under the species it actually is,
-    with a `derived_from` edge (D11, §6.2), is not built yet.
+    which keeps it out of energy selection; a single-piece change is filed beside it under
+    the species it became, with a `relaxation` edge, and a separation is held back (D31).
     """
     from mofsbu.energy.relax import relax_geometry
     from mofsbu.registry import RegistryError, geometry_graph, geometry_xyz, get_graph
@@ -782,8 +782,12 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
         verdict = json.loads(conn["connectivity_json"] or "null")
         if conn["connectivity_changed"]:
             # Stored and flagged, like a QC failure below: the energy is excluded from
-            # selection, the coordinates stay inspectable.
+            # selection, the coordinates stay inspectable.  A single-piece change is filed
+            # beside it (D31); a refusal, a separation included, is recorded, never raised.
+            from mofsbu.assembly.derive import file_derived
+
             detail["connectivity_changed"] = verdict
+            detail["derived"] = file_derived(reg, geom.id)
         elif verdict and "unchecked" in verdict:
             detail["connectivity_unchecked"] = verdict["unchecked"]
     if after is None:
@@ -1681,14 +1685,39 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
     of exiting.  That is what a relax worker needs and a build worker does not — relax
     tasks are queued BY the build tasks as they finish, so an empty relax queue early in
     a run means "not yet", while an empty build queue means "never again".
+
+    Before each claim the worker asks `headroom.shortfall`; while memory is under a
+    declared floor it claims nothing and waits, so the task stays pending rather than
+    failing part-way.
     """
+    from mofsbu.energy.relax import MODE_FIDELITY
+    from mofsbu.headroom import shortfall
+
+    feeds_device = (kinds is None or "relax" in kinds) and MODE_FIDELITY.get(
+        spec.run_mode) in (Fidelity.ML, Fidelity.DFT)
     done = 0
     idle = poll
+    held_back: str | None = None
     while limit is None or done < limit:
         if cancel_requested(reg, run_id):
             # Cooperative: the task in hand has already finished, and nothing new is
             # claimed.  Everything computed so far is in the registry.
             break
+        why = shortfall(gpu=feeds_device)
+        if why is not None and has_pending(reg, run_id, kinds=kinds,
+                                           exclude_kinds=exclude_kinds):
+            if held_back is None:             # once per hold, not once per poll
+                print(f"mofsbu run {run_id}: holding back claims — {why}", flush=True)
+            held_back = why
+            touch_run(reg, run_id)        # nothing is claimed, so the heartbeat is the proof
+            reg.conn.commit()
+            time.sleep(idle)
+            idle = min(idle * 2, MAX_IDLE_POLL)
+            continue
+        if held_back is not None:
+            print(f"mofsbu run {run_id}: memory back above the floor, claiming again",
+                  flush=True)
+            held_back = None
         task = claim_task(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds)
         if task is None:
             # Waiting backs off: every idle poll is a read on the shared database, and

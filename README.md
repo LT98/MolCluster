@@ -230,6 +230,12 @@ seize hardware or to switch theories:
     MOFSBU_WORKERS   N                           # or say exactly how many
     MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP and DFT run
     MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0 | mace-mh-1 | mace-polar-1-{s,m,l}   # WHICH MLIP; default mace-mp-0
+    MOFSBU_MIN_FREE_RAM_GIB   G   # claim no task while less RAM than this is free; unset = no check
+    MOFSBU_MIN_FREE_VRAM_GIB  G   # same for MOFSBU_DEVICE, on the workers that relax with ML or DFT
+
+A worker under a floor leaves its next task **pending** and waits (printing once why), so a
+task that would not fit is never started and failed; another worker, or this one once memory
+frees, takes it. The check is a snapshot before the claim, not a reservation.
 
 A run holds two kinds of work and they do not want the same hardware: construction
 (enumerate, embed, perceive, place, hash) scales with cores, while an ML relaxation on one

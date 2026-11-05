@@ -175,6 +175,9 @@ CREATE TABLE IF NOT EXISTS geometries (
     -- this (`registry.geometry_graph`).  NULL = stored before the link existed (B28):
     -- `scripts/recover_atom_links.py`.
     canonical_order_json TEXT    DEFAULT NULL,
+    -- D31: the connectivity-changed geometry this one files under the species it became
+    -- (`assembly.derive`); the two are joined by a `relaxation` edge between their structures.
+    derived_from         INTEGER DEFAULT NULL REFERENCES geometries(id) ON DELETE SET NULL,
     created_at           TEXT    NOT NULL,
     UNIQUE (structure_id, coords_hash, method_id)
 );

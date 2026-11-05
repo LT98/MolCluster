@@ -260,6 +260,21 @@ def release_task(reg: Registry, task_id: int) -> None:
     reg.conn.commit()
 
 
+def has_pending(reg: Registry, run_id: int, *,
+                kinds: Sequence[str] | None = None,
+                exclude_kinds: Sequence[str] | None = None) -> bool:
+    """Is any of this worker's share of the queue still pending?  Blocked rows count."""
+    where, args = ["run_id = ?", "status = ?"], [run_id, PENDING]
+    if kinds is not None:
+        where.append(f"kind IN ({','.join('?' * len(kinds))})")
+        args += list(kinds)
+    if exclude_kinds:
+        where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
+        args += list(exclude_kinds)
+    return reg.conn.execute("SELECT 1 FROM tasks WHERE " + " AND ".join(where) + " LIMIT 1",
+                            tuple(args)).fetchone() is not None
+
+
 def waiting_on_live_work(reg: Registry, run_id: int, *,
                          kinds: Sequence[str] | None = None,
                          exclude_kinds: Sequence[str] | None = None) -> bool:
@@ -271,15 +286,7 @@ def waiting_on_live_work(reg: Registry, run_id: int, *,
     parent; if every claim in the run belongs to a dead worker, waiting would never end, so
     this says no and the worker exits as it did before.
     """
-    where, args = ["run_id = ?", "status = ?"], [run_id, PENDING]
-    if kinds is not None:
-        where.append(f"kind IN ({','.join('?' * len(kinds))})")
-        args += list(kinds)
-    if exclude_kinds:
-        where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
-        args += list(exclude_kinds)
-    if reg.conn.execute("SELECT 1 FROM tasks WHERE " + " AND ".join(where) + " LIMIT 1",
-                        tuple(args)).fetchone() is None:
+    if not has_pending(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds):
         return False
     return any(worker_alive(r["claimed_by"]) is not False for r in reg.conn.execute(
         "SELECT DISTINCT claimed_by FROM tasks WHERE run_id=? AND status=?",
