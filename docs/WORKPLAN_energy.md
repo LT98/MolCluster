@@ -128,8 +128,9 @@ Construction, identity, clash QC, choice vectors (`runner`, `assembly/`, `geomet
   1.30×, non-edges formed inside 1.10× of the `geometry/distances.py` lengths) and stores
   `connectivity_changed`; best-geometry and `energy/reference` never select a changed one, and
   an equation left without an energy says so. `registry.backfill_connectivity` gives rows
-  written before E1 their verdict. Still missing: the D11 `derived_from` record filing a
-  changed geometry under the species it became.
+  written before E1 their verdict. A changed geometry that stays one piece is filed under the
+  species it became (D31, `assembly/derive.py`): its energy counts again, for the species it
+  belongs to. A separation is held back until the second-shell probe decides it.
 - **E1 reads each geometry through its own link (D30).** A geometry is judged against the
   structure's graph renumbered like its rows, whichever build wrote them. One stored before the
   link existed is left NULL with the reason until `scripts/recover_atom_links.py` has linked it
