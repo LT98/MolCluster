@@ -310,12 +310,12 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 26)* **Organising: package overviews, a gate that keeps this changelog current, and
+- *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
   backends, E1, D29, D30, B28 closed, B30 filed as #69) were never written here. That gap is why
   `scripts/check_docs.py` now fails the gate when a branch changes code without changing this
-  file. Backfilling those revisions is in `PLAN_implementation.md` §7. What landed:
+  file. Revs 26–56 backfill them, one per PR, from the PR descriptions. What landed:
   `src/mofsbu/energy/OVERVIEW.md`, a hand-written top (purpose, rules, boundaries) over an API
   table that `scripts/gen_overview.py` generates from the code, with the callers of every
   public name; `tests/test_overview.py` fails when a table is stale. `AGENTS.md` gains a
@@ -328,6 +328,160 @@ built, and what the building turned up that the diagnosis had not.
   and the `.ua/` knowledge-graph output are ignored. What it turned up: the DFT tests still
   fail with both GPUs visible (`LinAlgError`) and pass with `CUDA_VISIBLE_DEVICES` set to one
   card, independent of `MOFSBU_DEVICE`, so that one is in the backlog, not fixed here.
+- *(rev 56)* **New bugs are GitHub issues (#68).** An issue is visible from every branch; a
+  section in `BUGS.md` only from the branches that carry it. `BUGS.md` keeps B1–B29 until each is
+  fixed or moved; `AGENTS.md`, `README.md` and `CODE_ARCHITECTURE.md` point new bugs at
+  `gh issue create --label bug`, and a fix closes its issue with `Fixes #N`. B30 (an O–H hydrogen
+  1.3–2.0 Å from the metal that QC passes) filed as #69.
+- *(rev 55)* **`is_construction`: one predicate for a `place` edge (#67, D29).**
+  `registry.api.is_construction` (true when an edge cites no structure in any role) and
+  `reaction_reagent_ids` replace three copies of one query and the `reagent_ids` truthiness tests
+  in the pages and tests. Every priced edge in the API carries the flag. Fix: an edge that failed
+  to price used to be shown as "built whole" and ranked last, because the pages inferred it from
+  the (empty) priced terms. C15 references in source repointed to D29.
+- *(rev 54)* **Close B28, file B29, D11 `derived_from` next (#64, docs).** B28 moved to
+  `BUGS_resolved.md` after D30's recovery left nothing unmatched in any `data/*.db`. B29:
+  `isomer_tag` keys metal centres by canonical index, stable only up to symmetry (it changed in
+  298 of 360 random renumberings), latent until L2 is wired. B2 gains what wiring L2 needs.
+- *(rev 53)* **D30: each geometry is linked to its graph, not read by row position (#63, B28).**
+  Coordinates are stored as built, with `geometries.canonical_order_json` mapping canonical
+  position to row; site rows key through the build's own map (D5). Readers go through
+  `registry.geometry_graph`/`geometry_link`, and a geometry without a link is refused, never paired
+  by position. Relaxations inherit the parent's link; `verify` flags wrong links (error) and
+  missing ones (stale). E1's root gate from #62 is replaced by judging every geometry through its
+  link. Legacy registries recovered with nothing unmatched.
+- *(rev 52)* **E1: connectivity check after relaxation (#62), and the M6/S5 gate called.**
+  `geometry.connectivity.connectivity_check` judges every geometry above RAW against its graph
+  (bond broken past 1.30× ideal, non-bond formed inside 1.10×) and stores the verdict;
+  `connectivity_changed` geometries are excluded from selection. The changes measured on copies
+  are real chemistry (donor O closing onto the metal, water or axial O leaving, proton transfer).
+  S5 gate: both routes enumerated over every construction choice, ranking moved to M8.
+- *(rev 51)* **M6/S5: construction routes from registry entries; the Cu(HCOO)₂ + Cu refusal
+  withdrawn (#61).** Spec v9 `routes`: label-addressed construction steps run by
+  `scripts/run_spec.py`, `vary` enumerating choices, `release` as the water-loss step,
+  `persist.load_block` reading a stored structure back as a joinable block (site frames now stored
+  per geometry). Rebuilt from the ground up, both routes succeed under the same physical choice and
+  fail under the rest: the September refusal had measured anti-bound formates, the only binding
+  available before S1. S5's exit gate and M6 gate 6 marked withdrawn pending a decision. B27
+  filed (a torsion-well index is not one face across vertices).
+- *(rev 50)* **New backends: MACE-MH-1, MACE-POLAR-1 (S/M/L), GPU4PySCF DFT (#60).** MH-1 is
+  charge- and spin-blind in every head, so it carries the `charge_blind` flags and the reference
+  scheme refuses it on charged equations. POLAR-1 takes charge and spin. `energy/dft.py` fills
+  `Fidelity.DFT` (ωB97M-V/def2-TZVPD, RKS/UKS by multiplicity, `smd:`/`pcm:` media,
+  `check_oxidation_state`). Studies: DFT prefers OMOL-0 over MH-1 on all three charged species;
+  POLAR-L matches OMOL-0 on 5 of 6 and is 2.1 eV lower on #132; 62 of 84 Ni relaxations change
+  connectivity under every model, which made E1 urgent. The default relaxer stays OMOL-0.
+- *(rev 49)* **Docs: M7/M7R split, MACE-MH and GPU4PySCF calls, PLAN reconciled with the energy
+  plan (#59).** Calls of 2026-09-29 and 2026-10-02 recorded: relaxation moves to MACE-MH after
+  study E-MH; the DFT backend is GPU4PySCF; whether xTB stays is reopened (xTB-ALPB is the only
+  continuum at the screening rung). Ground rule 11 (a reported number is a recipe result), §3
+  gates for C11–C21, new D-numbers from D30 in merge order.
+- *(rev 48)* **C15 resolved as D29: `place` edges cite nothing (#58).** What a structure is made of
+  is answered by composing the recorded ladder with `price_path`, never by citing the free ion.
+  Saturation is not a node property. Pivot nodes on composed routes are never read as barriers.
+  Solvation rules called but not built (`WORKPLAN_solvation.md` §3a). Options prototyped and
+  measured; giving `place` its reagents is blocked by D17/D26.
+- *(rev 47)* **Resume re-declares the run's device and workers before executing (#57, fixes
+  #54).**
+- *(rev 46)* **Project plan: learning layer, experimental benchmarking and rationale (#56,
+  docs).**
+- *(rev 45)* **Energy pipeline workplan and presentation-level project plan (#55, docs).**
+  `WORKPLAN_energy.md`: MACE-OMOL-0 is the screening and accelerator tier; reported numbers are
+  stage-5 recipe results (DFT//MACE + SMD + qRRHO, calibrated against pKa and log β); slices
+  E0–E7 with E1 first. `docs/reports/PROJECT_PLAN.md`: the two lines of work, a comparison with
+  existing tools at every step, and an eight-item benchmark roadmap. Unsourced: the experimental
+  pKa of tHQ.
+- *(rev 44)* **Resume executes the run, and Stop cannot strand one (#52, fixes #33).** Resume used
+  to requeue tasks and start nothing. It now starts the run's executor from the stored spec,
+  revives tasks that failed only on `database is locked`, and closes a run with nothing left to
+  do. Stop with no executor and no live workers closes the run at once.
+- *(rev 43)* **Many workers without lock failures; submitted specs never cut; the run inspector
+  names tasks (#51, B26, B4).** Perception moved before a task's first write, each task commits
+  when it finishes, claims are compare-and-set, idle workers back off, and a locked task is
+  requeued: 32 workers went from 34 lock failures and a dead worker in 600 s to none in 141 s.
+  Caps now apply only to planning the backend starts itself; a submitted spec is planned in full
+  with a warning above 12,000 tasks. "What was attempted" describes tasks in the spec's own names.
+- *(rev 42)* **Salt study usability: dropping a node cuts routes at it instead of deleting them;
+  processes say what they are; the graph walk survives leaving the page (#50).**
+- *(rev 41)* **Salt study: NiCl₂ vs Ni(OAc)₂ with THQ, from stated inputs (#49).** Fixes B21
+  (empty vertices chosen with the chelates in view), B22 (an anion entered as one was registered
+  neutral), B23 (deprotonation edges paired by formula, now exactly one proton apart), B24 (`grow`
+  searches join poses: octahedral tHQ steps accepted 0 → 231 of 336) and B25 (`grow` claimed while
+  its parent was still building). A `pathways` run finishes by linking protomers and adding ALPB
+  corrections; `/graph` gains medium and proton-sink selects; runs record per-task timing.
+  Ledger D27 (enter a species in the form it exists in the medium) and D28 (where a released
+  proton goes). Study databases stay local.
+- *(rev 40)* **Solvation: work plan (C16–C21) and S1, a medium on a stored energy (#48).**
+  Cluster-continuum as decided: an implicit continuum on every energy plus a small explicit
+  solvent count per species (planned). Measured: ALPB/GBSA run in `ebu`, ddX does not, MACE-OMOL-0
+  has no continuum; ALPB vs GBSA spread 0.35–0.96 eV. S1: a `solvation_corrections` table,
+  `registry.put_solvation_correction`, and `energy.reference` accepting `solvent='model:solvent'`
+  from either in-medium energies or corrected gas-phase ones, never mixed. New quality code
+  `charge_separation`; `reference_scheme` bumped to `balanced2`.
+- *(rev 39)* **Co-ligand counts in a window, and the steps that link them (#47, D26).**
+  `BuildSpec.co_ligand_counts` (spec v8): `fill` is the old behaviour and every older spec migrates
+  to it; `range`, the new default, builds counts within `co_ligand_window` (default 2) of full,
+  never collapsing the CN. With `pathways`, co-ligand `grow` steps link in-window rungs and the free
+  co-ligand is a task of its own; one ladder per metal/CN/polyhedron, no bare-metal row. Old plans
+  pinned by digest against the pre-v8 planner.
+- *(rev 38)* **Hops go both ways: an exchange composed at a shared parent (#46).**
+  `registry.api.outgoing_routes`; `/graph` steps forward to what consumes a node as well as back.
+  A consumed-by leg enters at −dE, the route's isodesmic status and caveats come from its net
+  equation, and pivots (where the direction reverses) are flagged and never read as barriers.
+  No search, scoring or ranking: C6/C7 stay with M8.
+- *(rev 37)* **A formation-energy graph built by walking provenance backwards (#45).** A fourth
+  page. `pathways/route.py`, the first occupant of the M8 package, composes per-edge prices into
+  routes anchored on the target: a step that does not join its nodes is refused by name, the first
+  step without a number stops the running sum (a gap is not a zero), and two routes are comparable
+  only when they shed the same things. Inferred splits are dashed and badged, never merged with
+  recorded edges.
+- *(rev 36)* **Provenance: what a route cost, what it was made from, and what it lost (#44).**
+  `energy/routes.py` prices an edge for a reader, with refusals as data; `decompositions` lists
+  what a structure could have been made from, flagged `inferred`. Deprotonation is a balanced
+  reaction, the project's first isodesmic equations (458 edges, none refused). `put_reaction`
+  counts repeated reagents (it collapsed them before). The provenance panel collapses duplicate
+  edges. Giving `place` edges their reagents was built and reverted; logged as C15.
+- *(rev 35)* **MACE-OMOL-0 is handed the charge it is scored at (#43).** Charge and spin were
+  written to `atoms.info` keys MACE never reads, so every energy was the neutral one under a
+  charged `MethodSpec`; the stored numbers are void, not correctable. A new test scores one
+  geometry at two charges and fails if they agree. Also a relax-pool regression assertion at 64
+  declared workers, and a Ni(II)/tHQ/Cl/water reference spec.
+- *(rev 34)* **M6/S4: a declared nucleus states its own M–M, and a centre says which vertices stay
+  open (#42).** The M–M distance is an input for a declared nucleus and nowhere else;
+  vacancy–vacancy is a join, not a refusal. The ladder now asks for the vertices it needs, which
+  moves `placement` to version 3. `docs/gui/` updated.
+- *(rev 33)* **M6/S2: a bridging atom is a centre, and the bonding orients it (#41).** Mechanism B
+  complete: `bent` at CN 2, `bridging_metal_positions` reads the bonding, not a `SiteFrame`. B13
+  closed (a bare hydroxide perceived zero donors); B15 filed (`[O-2]` types as `[OH-]`). Fixed a
+  `cu2_mu2_hydroxide` reference row that was one field short.
+- *(rev 32)* **M6: slice 0 closed, and mechanism A's bridge reachable from the assembly path
+  (#40).** D20 supersedes DESIGN §6.1: M–M distance is an output to validate, not an input. B12
+  fixed (`metal_block` now writes `formal_charge=0`, so one species has one L1 hash). `join_bridge`
+  uses the lone pair as the join coordinate; the verdict on a bridge is necessary, not sufficient.
+- *(rev 31)* **M7 work plan: evaluate everything, through named decision points (#39, docs).**
+  `WORKPLAN_M7.md`: nothing composed steps into routes and nothing decided what to relax. Four
+  seams, each a named, versioned policy resolved like `get_backend`, recording a verdict per
+  candidate and tested with a restrictive policy injected.
+- *(rev 30)* **M6/S1 bridge mechanism (#38).** Both lone pairs of a donor are recorded, not only
+  the first; the M6 node battery folded in as a reference table with xfailing gates.
+- *(rev 29)* **M6 S0(b): the node battery as data and tests (#37).**
+  `data/reference/node_cases.tsv` (seven polynuclear nodes and the numbers a built one is measured
+  against) and `tests/test_placer_multicentre.py` (41 tests, 17 strict xfails on `NotBuiltYet`);
+  `zn4o` added to the fixtures; CN-5 vertex angles pinned.
+- *(rev 28)* **The worker pool is divided between the two queues, and a killed run's end is
+  derived (#36, fixes #32).** The builder page never spawned workers, and one queue fed both kinds
+  of hardware. `runner.plan_workers` divides the declared total into builders and a relax share,
+  `execute_run` is the one place a pool is built, and workers start with spawn (a forked child
+  cannot re-initialise CUDA). A run killed with its shell is now `interrupted`, derived from
+  claimant pids and `runs.heartbeat_at`, and swept when a process takes the database over.
+- *(rev 27)* **M6 planned: two bridge mechanisms, measured (#35, docs).** A multi-atom bridge
+  (carboxylate) is one branch away; a single-atom bridge (µ-OH, µ-O) is not expressible yet; where
+  the two meet in oxo-centred clusters the M···M constraints disagree by about 0.5 Å. Route
+  discrimination became an exit gate. B12, B13 and B14 filed.
+- *(rev 26)* **Registry viewer: keyboard paging, range bars, collapsible filter axes, donor
+  sketches (#31).** PgUp/PgDn page; min/max boxes became two-thumb bars over the registry's own
+  extremes, sending no bound when left full-width; the paging row is frozen; donor chips carry
+  their group. No Python changed.
 - *(rev 25)* **A sweep is one question: ranges, an estimate, and the ladder's own edges.**
   Three asks from the builder page, and the third one turned out to need the chelate join
   that M5 carried out unbuilt.

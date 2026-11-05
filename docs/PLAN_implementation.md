@@ -784,8 +784,6 @@ that would fail if the claim stopped being true.**
   (`WORKPLAN_solvation.md` C21) — one value, both docs.
 - `WORKPLAN_solvation.md` §4: state that S4–S6 wait for E6, as `WORKPLAN_energy.md` §5 does.
 - `WORKPLAN_M7.md` §10: the M7 resize is done; correct the rest after the ledger calls.
-- **Backfill the changelog** (`archive/PLAN_completed.md` §4) for PRs #31–#68, one revision
-  each, from the PR descriptions. Rev 26 records the gap.
 - **`OVERVIEW.md` for the other nine packages**, `registry` and `assembly` first. Generated
   tables are free; each hand-written top needs the package read.
 - **DFT with both GPUs visible** fails four GPU4PySCF tests (`LinAlgError: Eigenvalues did not
