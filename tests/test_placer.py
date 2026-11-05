@@ -350,3 +350,19 @@ def test_the_other_lobe_puts_the_metal_syn_to_the_free_oxygen():
     syn, _ = _formate_sphere(lone_pair=1)
     assert syn.choice_vector["ligands"][0]["lone_pair"] == 1
     assert cu_to_free_o(syn, bound) < 3.2 < cu_to_free_o(anti, bound)
+
+
+def test_a_hydroxyl_aimed_at_the_metal_is_turned_away():
+    """#69: an O–H on an O not bound to the metal is turned about its C–O bond, away from it."""
+    from mofsbu.geometry.placer import OH_METAL_MIN, turn_hydroxyl_h
+
+    # Ni, a bound O (donor), a C–O–H whose H points at Ni from ~1.6 Å.
+    sym = ["Ni", "O", "C", "O", "H"]
+    xyz = np.array([[0, 0, 0], [2.0, 0, 0], [2.8, 1.1, 0], [2.2, 2.3, 0], [1.3, 1.95, 0]], float)
+    bonds = [(0, 1), (1, 2), (2, 3), (3, 4)]
+    out = turn_hydroxyl_h(sym, xyz, bonds, [0])
+    assert np.linalg.norm(xyz[4]) < OH_METAL_MIN <= np.linalg.norm(out[4])
+    assert np.isclose(np.linalg.norm(out[4] - out[3]), np.linalg.norm(xyz[4] - xyz[3]))
+    assert np.allclose(out[:4], xyz[:4]), "only the H may move"
+    # The same H on a metal-bound O (a coordinated water's) is left alone.
+    assert np.allclose(turn_hydroxyl_h(sym, xyz, bonds + [(0, 3)], [0]), xyz)

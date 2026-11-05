@@ -34,7 +34,8 @@ calls a don't-care has one well, hence a full turn of azimuthal freedom — whic
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -49,7 +50,8 @@ from mofsbu.geometry.distances import (
 # `_linalg`; nothing about what they compute did.
 from mofsbu.geometry._linalg import (
     angle_between as _angle_between, axis_rotation as _axis_rotation, kabsch as _kabsch,
-    perpendicular as _perpendicular, rotation_between as _rotation_between, unit as _unit,
+    perpendicular as _perpendicular, rotate_vector as _rotate,
+    rotation_between as _rotation_between, unit as _unit,
 )
 from mofsbu.geometry.embed import coordinates
 from mofsbu.geometry.qc import QCReport, clash_limit, qc
@@ -327,6 +329,46 @@ def _azimuth_offsets(n_wells: int) -> list[float]:
     # belongs to both wells at once — well 0 reaching +90 and well 1 reaching -90 name the
     # same orientation — which is the one way this grid could still let two wells coincide.
     return _centred_grid(2 * half / (N_AZIMUTH + 1), N_AZIMUTH)
+
+
+#: Closest a hydroxyl H on an O not bound to a metal may sit to a metal (#69). A coordinated
+#: water's H sits at ~2.7 Å; nearer than this, the O–H is aimed into the coordination sphere.
+OH_METAL_MIN = 2.4
+
+
+def turn_hydroxyl_h(symbols: Sequence[str], coords: np.ndarray, bonds: Iterable[tuple[int, int]],
+                    metals: Iterable[int]) -> np.ndarray:
+    """Turn each such O–H about its X–O bond, away from the metals (#69); returns a copy.
+
+    The torsion is free and only that H moves. 180° (keeps a phenol planar) is tried first,
+    then 120° and 240°; the first that clears `OH_METAL_MIN` wins, else the farthest.
+    """
+    out = np.array(coords, dtype=float)
+    metals = list(metals)
+    adj: dict[int, set[int]] = {}
+    for i, j in bonds:
+        adj.setdefault(i, set()).add(j)
+        adj.setdefault(j, set()).add(i)
+    if not metals:
+        return out
+
+    def nearest(p: np.ndarray) -> float:
+        return float(np.linalg.norm(out[metals] - p, axis=1).min())
+
+    for h, sym in enumerate(symbols):
+        if sym != "H" or len(adj.get(h, ())) != 1:
+            continue
+        (o,) = adj[h]
+        heavy = [x for x in adj[o] if x != h and symbols[x] != "H"]
+        if symbols[o] != "O" or adj[o] & set(metals) or len(heavy) != 1 \
+                or nearest(out[h]) >= OH_METAL_MIN:
+            continue
+        axis = out[o] - out[heavy[0]]
+        turned = [out[o] + _rotate(out[h] - out[o], axis, math.radians(a))
+                  for a in (180, 120, 240)]
+        out[h] = next((p for p in turned if nearest(p) >= OH_METAL_MIN),
+                      max(turned, key=nearest))
+    return out
 
 
 def _clearance_scorer(symbols: list[str], other_symbols: list[str],
@@ -785,6 +827,7 @@ def place_mononuclear(
 
     arr = np.array(coords)
     _refine_azimuths(arr, symbols, refinable)
+    arr = turn_hydroxyl_h(symbols, arr, bonded, [0])
     report = qc(symbols, arr, bonded, metal_idx=0, donor_idxs=donor_idxs,
                 d_ml=donor_targets, owners=owners, sources=donor_sources)
     estimated = sorted({x.donor_element for dists in per_ligand_d for x in dists
