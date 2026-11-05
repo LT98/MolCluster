@@ -46,10 +46,13 @@ presentation-level view, with comparisons and benchmarks, is
 
 **Called 2026-09-29; measured 2026-10-02 to 10-05:** MACE-MH-1 is charge- and spin-blind and DFT
 prefers MACE-OMOL-0's Ni minima, so MH-1 is selectable only (`mace-mh-1`). **MACE-POLAR-1-L** is
-given charge and spin, is DFT-equivalent to OMOL-0 on five of six Ni species and much better on
-the sixth, and as an S → L funnel costs ~0.8× all-OMOL-0 — **whether it becomes the relaxer is
-open**, after stage 5a. OMOL-0 stays until then. The DFT backend is **GPU4PySCF**, built
-(`energy/dft.py`). Whether xTB stays is reopened. Results in `WORKPLAN_energy.md` §3a.
+given charge and spin and, as an S → L funnel, costs ~0.8× all-OMOL-0. **Stage 5a (2026-10-22)**
+does not separate it from OMOL-0 (mean ΔE 0.080 vs 0.084 eV over 9 species each), so **whether
+it becomes the relaxer is still open** and rests on cost; OMOL-0 stays. 5a's finding is
+electronic: MACE + DFT single point matches the DFT minimum for the Ni(II) species and misses by
+0.08–0.24 eV on the deprotonated bis-THQ species, whose DFT minimum carries ~0.9 unpaired
+electrons on Ni (a ligand radical). The DFT backend is **GPU4PySCF**, built (`energy/dft.py`).
+Whether xTB stays is reopened. Results in `WORKPLAN_energy.md` §3a.
 
 ---
 
@@ -595,9 +598,11 @@ exclusive use of the card) before E4 is sized. The escalation unit is the equati
 demo routes escalate as a closed set (~15 species, ~45 DFT jobs).
 
 **Exit gate:**
-- 5a recorded: the stage-2 relaxer's geometries against DFT re-optimisation on ~10 species (RMSD,
-  and ΔE of the single point at the relaxer geometry minus the DFT minimum; proposal < 0.05 eV
-  mean);
+- ✅ 5a recorded (2026-10-22, `WORKPLAN_energy.md` §3a "Stage 5a"): the stage-2 relaxer's
+  geometries against DFT re-optimisation on ~10 species (RMSD, and ΔE of the single point at the
+  relaxer geometry minus the DFT minimum; proposal < 0.05 eV mean). Outcome: 0.084 eV (OMOL-0),
+  0.080 eV (POLAR-L) — within the proposal for the Ni(II) species, not for the ligand-oxidised
+  ones;
 - the two demo routes refined end to end, every term at one recipe (DFT//MACE + SMD +
   qRRHO(MACE)), with the refusal codes (`not_a_minimum`, `oxidation_state_mismatch`) exercised;
 - the E6 calibration fit on the pKa and log β set (acetic acid, phenol, catechol, H₂O/H₃O⁺;
@@ -760,9 +765,12 @@ that would fail if the claim stopped being true.**
 2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). One trajectory-capture
    run, then every pruning, dedup and staging policy is evaluated offline; F3 (stop a relaxation
    when its connectivity changes) now has E1 to stand on.
-3. **Stage 5a on POLAR-L before the relaxer call** — DFT re-optimisation at def2-TZVPD on ~10
-   species, including #132, and the memory measurement for a ~40-atom Ni complex that §3a still
-   lacks. Runs on the GPU exclusively, in parallel with 1–2.
+3. **The spin ladder and the oxidation-state check on the redox-active species (E4).** Stage 5a
+   is done (2026-10-22, `WORKPLAN_energy.md` §3a): the four deprotonated bis-THQ species carry
+   ~0.9 unpaired electrons on Ni at their DFT minimum, not the ~1.8 of a Ni(II) triplet. Before
+   any of them is priced at the refine tier: the next multiplicity (singlet / broken symmetry)
+   for each, and `check_oxidation_state` wired so they are refused rather than mislabelled. The
+   relaxer call (POLAR-L vs OMOL-0) is no longer waiting on 5a; it is a cost call.
 4. **Decide whether xTB stays** before E2 fixes the screening error bar on it.
 5. **Record M7's regression stage 1** — `python scripts/regress_m7.py --refs --json …`, minutes
    on a machine with tblite — and make the C11–C14 / C16–C18 ledger calls (bookkeeping).
