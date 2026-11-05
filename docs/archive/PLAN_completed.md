@@ -310,6 +310,13 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
+  ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
+  on #132). `placer.turn_hydroxyl_h` turns it about its X–O bond until it is ≥ 2.4 Å from every
+  metal; `place_mononuclear` and all four `join` variants call it. `placement` → 4. Replayed on the
+  stored constructs: salt_study_k1 5,480 changed, none left under 2.4 Å, no new clashes, 58 clashes
+  removed; THQ_run 2,828 under 2.0 Å → 0. A QC refusal alone would have left 313 of 1,113
+  salt-study structures with no construct at 2.2 Å. Stored rows are unchanged (they keep `3`).
 - *(rev 59)* **Stage 5a: DFT re-optimisation of MACE minima (`WORKPLAN_energy.md` §3a).** Ten Ni
   species, OMOL-0 and POLAR-L each re-optimised at ωB97M-V/def2-TZVPD (`scripts/dft_reopt.py`).
   MACE geometry + DFT single point is within 0.07 eV for true Ni(II) triplets and misses by

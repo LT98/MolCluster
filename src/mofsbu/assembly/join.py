@@ -43,6 +43,7 @@ from mofsbu._types import AmbiguousSpecError, AtomMap, MofsbuError, NotBuiltYet
 from mofsbu.energy.backends import combined_multiplicity
 from mofsbu.graph._types import EdgeType, TypedGraph
 from mofsbu.geometry.distances import metal_donor_distance, metal_metal_distance
+from mofsbu.geometry.placer import turn_hydroxyl_h
 from mofsbu.geometry.qc import METAL_BOND_TOL as QC_METAL_BOND_TOL
 from mofsbu.geometry._linalg import (
     angle_between as _angle_deg, axis_rotation as _axis_rotation,
@@ -761,6 +762,8 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
             geometry = (np.vstack([coords, metal_coords]) if donor_block is a
                         else np.vstack([metal_coords, coords]))
             symbols = [product.label(i).element for i in product.nodes()]
+            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
+                                       product.metals())
             states = refresh_state(sites, geometry, graph=product, symbols=symbols)
             state = {(s.atom_idx, s.slot): s for s in states}
 
@@ -924,6 +927,8 @@ def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
             geometry = (np.vstack([coords, metal_coords]) if donor_block is a
                         else np.vstack([metal_coords, coords]))
             symbols = [product.label(i).element for i in product.nodes()]
+            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
+                                       product.metals())
             states = refresh_state(sites, geometry, graph=product, symbols=symbols)
             state = {(s.atom_idx, s.slot): s for s in states}
 
@@ -1052,6 +1057,8 @@ def join_bridge(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
             geometry = (np.vstack([coords, metal_coords]) if donor_block is a
                         else np.vstack([metal_coords, coords]))
             symbols = [product.label(i).element for i in product.nodes()]
+            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
+                                       product.metals())
             states = refresh_state(sites, geometry, graph=product, symbols=symbols)
             state = {(s.atom_idx, s.slot): s for s in states}
 
@@ -1467,6 +1474,8 @@ def join_metal_metal(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: S
         if anchor_coords is not None:
             geometry = np.vstack([anchor_coords, coords])
             symbols = [product.label(i).element for i in product.nodes()]
+            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
+                                       product.metals())
             states = refresh_state(sites, geometry, graph=product, symbols=symbols)
             state = {(s.atom_idx, s.slot): s for s in states}
 

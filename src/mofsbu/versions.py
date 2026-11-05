@@ -103,7 +103,9 @@ ALGO_VERSIONS: dict[str, str] = {
     #    centre has two or more vacancies.  A saturated centre, and one with a single
     #    vacancy, have no arrangement to choose and are byte-identical to `2`.  Old rows
     #    keep algo=2 and are never re-labelled (ground rule 6 / D19).
-    "placement":        "3",       # how a ligand is oriented on a coordination vertex
+    # 4: an O–H on an O not bound to a metal is turned away from it (#69), so constructs
+    #    whose O–H pointed into the sphere differ from a `3` one; no other atom moves.
+    "placement":        "4",       # how a ligand is oriented on a coordination vertex
 }
 
 
