@@ -15,7 +15,7 @@ growth are not submittable from the page.
 > degree 2+ = polynuclear / extended growth — not implemented, needs M5 (assembly.join)
 > and M6 (multi-centre placer).
 
-M5 landed, and M6 is partway: `join`, `join_bridge` and now `join_metal_metal` build
+M5 landed, and M6 is partway: `join`, `Bridge` and now `MetalMetal` build
 genuine polynuclear products, and `enumerate_constructions` grows onto them. What is still
 missing is `place_multicentre` (M6/S3 — reconciliation where two determinants fix one
 M···M and disagree) and the S7 wiring that makes a polynuclear node extractable and
@@ -23,7 +23,7 @@ storable. So the cap is real, but its stated reason now under-reports what exist
 
 ## The S4 work is not directly exposed
 
-M6/S4 added a **declared nucleus** (`join_metal_metal`, an M–M distance the caller states)
+M6/S4 added a **declared nucleus** (`MetalMetal`, an M–M distance the caller states)
 and **reserved vertices** (`place_mononuclear(reserve=)`). Neither has a control on the
 builder page:
 

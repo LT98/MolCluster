@@ -12,7 +12,7 @@ import pytest
 from mofsbu._types import AmbiguousSpecError, NotBuiltYet
 from mofsbu.assembly.choice import ChoiceVector
 from mofsbu.assembly.join import (
-    BuildingBlock, IncompatibleJoin, join, join_chelate)
+    BuildingBlock, Chelate, IncompatibleJoin, Mono, join)
 from mofsbu.geometry.embed import coordinates, embed_molecule
 from mofsbu.geometry.placer import site_vectors
 from mofsbu.graph._types import EdgeType, TypedGraph
@@ -55,7 +55,8 @@ def acetate():
 
 
 def first_join(ligand: BuildingBlock, metal: BuildingBlock, **kw):
-    return join(ligand, metal, ligand.open_donors()[0], metal.open_vacancies()[0], **kw)
+    return join(ligand, metal, [ligand.open_donors()[0]], [metal.open_vacancies()[0]],
+                mode=Mono(**kw))
 
 
 # ── the bond is real ─────────────────────────────────────────────────────────
@@ -166,8 +167,8 @@ def test_the_same_product_from_two_orders_is_one_node(aqua):
     """The D2 claim at graph level: identity is on the node, sequence is on the edges."""
     metal = metal_block()
     ligand_first = first_join(aqua, metal).block.graph
-    metal_first = join(metal, aqua, metal.open_vacancies()[0],
-                       aqua.open_donors()[0]).block.graph
+    metal_first = join(metal, aqua, [metal.open_vacancies()[0]], [aqua.open_donors()[0]],
+                       mode=Mono()).block.graph
     assert [metal_first.label(i).element for i in metal_first.nodes()] != \
            [ligand_first.label(i).element for i in ligand_first.nodes()]
     assert l1_graph_hash(ligand_first) == l1_graph_hash(metal_first)
@@ -226,14 +227,14 @@ def test_a_second_metal_completes_the_graph_AND_the_geometry(acetate):
     free_donor = bridging.open_donors()[0]
     second = metal_block("Cu", 2, 4, "square_planar")
 
-    result = join(bridging, second, free_donor, second.open_vacancies()[0])
+    result = join(bridging, second, [free_donor], [second.open_vacancies()[0]], mode=Mono())
     assert len(result.block.graph.metals()) == 2
     assert result.block.geometry is not None
     assert l1_graph_hash(result.block.graph)                 # an identity is derivable
     assert result.choice_vector["op"] == "join"
 
-    graph_only = join(bridging, second, free_donor, second.open_vacancies()[0],
-                      with_geometry=False)
+    graph_only = join(bridging, second, [free_donor], [second.open_vacancies()[0]],
+                      mode=Mono(), with_geometry=False)
     assert graph_only.block.geometry is None
     assert (l1_graph_hash(graph_only.block.graph)
             == l1_graph_hash(result.block.graph))
@@ -243,15 +244,15 @@ def test_a_graph_only_product_refuses_to_call_its_sites_open(acetate):
     """No state means `open` is unknown, and unknown is not the same as everything."""
     bridging = first_join(acetate, metal_block(cn=4, geometry="tetrahedral")).block
     second = metal_block("Cu", 2, 4, "square_planar")
-    product = join(bridging, second, bridging.open_donors()[0],
-                   second.open_vacancies()[0], with_geometry=False).block
+    product = join(bridging, second, [bridging.open_donors()[0]], [second.open_vacancies()[0]],
+                   mode=Mono(), with_geometry=False).block
     with pytest.raises(NotBuiltYet, match="no site state"):
         product.open_sites()
 
 
 def test_two_donors_cannot_be_joined_and_the_verdict_says_why(aqua, acetate):
     with pytest.raises(IncompatibleJoin) as exc:
-        join(aqua, acetate, aqua.open_donors()[0], acetate.open_donors()[0])
+        join(aqua, acetate, [aqua.open_donors()[0]], [acetate.open_donors()[0]], mode=Mono())
     assert "two donors" in str(exc.value)
     assert exc.value.verdict.feasible is False
 
@@ -260,7 +261,7 @@ def test_a_site_passed_with_the_wrong_block_is_refused(aqua):
     """Swapped arguments build an atom map onto the wrong parent, which nothing detects."""
     metal = metal_block()
     with pytest.raises(ValueError, match="not on the block it was passed with"):
-        join(aqua, metal, metal.open_vacancies()[0], aqua.open_donors()[0])
+        join(aqua, metal, [metal.open_vacancies()[0]], [aqua.open_donors()[0]], mode=Mono())
 
 
 def test_a_geometry_in_the_wrong_shape_is_refused(aqua):
@@ -310,8 +311,8 @@ def test_a_chelate_puts_both_donors_at_their_own_pair_distance(catecholate):
     from mofsbu.geometry.distances import metal_donor_distance
 
     metal = metal_block(cn=6)
-    result = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
-                          pocket(catecholate))
+    result = join(metal, catecholate, vertex_pair(metal, trans=False), pocket(catecholate),
+                  mode=Chelate())
     graph, coords = result.block.graph, np.asarray(result.block.geometry)
     centre = graph.metals()[0]
     bonded = [j for i, j, et in graph.edges() if i == centre and et is EdgeType.DATIVE]
@@ -325,8 +326,8 @@ def test_a_chelate_puts_both_donors_at_their_own_pair_distance(catecholate):
 
 def test_both_vertices_are_consumed_and_the_donors_read_as_occupied(catecholate):
     metal = metal_block(cn=6)
-    product = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
-                           pocket(catecholate)).block
+    product = join(metal, catecholate, vertex_pair(metal, trans=False), pocket(catecholate),
+                   mode=Chelate()).block
     assert len(product.open_vacancies()) == len(metal.open_vacancies()) - 2
     bound = [s for s in product.sites if s.donor_type == "phenolate_O"]
     assert len(bound) == 2
@@ -338,8 +339,8 @@ def test_a_chelate_that_cannot_reach_a_trans_pair_says_so(catecholate):
     """D10's case from the assembly side: a pocket that spans cis cannot span trans."""
     metal = metal_block(cn=6)
     with pytest.raises(IncompatibleJoin) as exc:
-        join_chelate(metal, catecholate, vertex_pair(metal, trans=True),
-                     pocket(catecholate))
+        join(metal, catecholate, vertex_pair(metal, trans=True), pocket(catecholate),
+             mode=Chelate())
     assert "cannot reach" in str(exc.value)
     assert exc.value.verdict.strain > 1.0
 
@@ -347,8 +348,8 @@ def test_a_chelate_that_cannot_reach_a_trans_pair_says_so(catecholate):
 def test_the_choice_vector_records_both_ends_and_no_torsion_well(catecholate):
     """The roll is DETERMINED by the second contact, so there is no well to record."""
     metal = metal_block(cn=6)
-    cv = join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
-                      pocket(catecholate)).choice_vector
+    cv = join(metal, catecholate, vertex_pair(metal, trans=False), pocket(catecholate),
+              mode=Chelate()).choice_vector
     assert cv["mode"] == "chelate" and "torsion_well" not in cv
     assert [d["atom"] for d in cv["donors"]] == [s.atom_idx for s in pocket(catecholate)]
     assert len(cv["vacancies"]) == 2 and len(cv["d_ml"]) == 2
@@ -357,10 +358,10 @@ def test_the_choice_vector_records_both_ends_and_no_torsion_well(catecholate):
 def test_a_chelate_join_needs_two_donors_and_two_vertices(catecholate):
     metal = metal_block(cn=6)
     with pytest.raises(IncompatibleJoin, match="two donors from one block"):
-        join_chelate(metal, catecholate, vertex_pair(metal, trans=False),
-                     [pocket(catecholate)[0], metal.open_vacancies()[0]])
+        join(metal, catecholate, vertex_pair(metal, trans=False),
+             [pocket(catecholate)[0], metal.open_vacancies()[0]], mode=Chelate())
     with pytest.raises(ValueError, match="two sites on each block"):
-        join_chelate(metal, catecholate, metal.open_vacancies()[:3], pocket(catecholate))
+        join(metal, catecholate, metal.open_vacancies()[:3], pocket(catecholate), mode=Chelate())
 
 
 def test_either_donor_order_reaches_one_node(catecholate):
@@ -368,6 +369,6 @@ def test_either_donor_order_reaches_one_node(catecholate):
     metal = metal_block(cn=6)
     pair = vertex_pair(metal, trans=False)
     donors = pocket(catecholate)
-    forward = join_chelate(metal, catecholate, pair, donors).block
-    backward = join_chelate(metal, catecholate, pair, donors[::-1]).block
+    forward = join(metal, catecholate, pair, donors, mode=Chelate()).block
+    backward = join(metal, catecholate, pair, donors[::-1], mode=Chelate()).block
     assert l1_graph_hash(forward.graph) == l1_graph_hash(backward.graph)

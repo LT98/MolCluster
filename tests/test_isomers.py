@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from mofsbu.assembly.construct import ligand_block, metal_block
-from mofsbu.assembly.join import join
+from mofsbu.assembly.join import Mono, join
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph._types import EdgeType, TypedGraph
 from mofsbu.graph.from_mol import mol_from_smiles
@@ -43,7 +43,7 @@ def occupy(metal, pairs):
     block = metal
     for slot, ligand in pairs:
         vertex = next(s for s in block.open_vacancies() if s.slot == slot)
-        block = join(block, ligand, vertex, ligand.open_donors()[0]).block
+        block = join(block, ligand, [vertex], [ligand.open_donors()[0]], mode=Mono()).block
     return block
 
 

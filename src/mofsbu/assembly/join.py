@@ -16,7 +16,7 @@ Where the milestone stands:
   within one molecule, generalised to two blocks.
 * `join()` — align, bond, recompute the product's open sites by inheriting through the
   atom map, and emit the choice-vector that regenerates it.  DONE (S3).
-* `join_chelate()` / `chelate_reach()` — the two-point version: one ligand across two
+* `Chelate` / `chelate_reach()` — the two-point version: one ligand across two
   vertices of one centre.  DONE.  The verdict it places under is distance geometry (can a
   rigid ligand reach both vertices at their own bond lengths) rather than the pocket's
   frame-implied bite, and the difference matters — see `chelate_reach`.
@@ -24,10 +24,10 @@ Where the milestone stands:
   determinants fix one M...M and disagree (D20).  Not a prerequisite for a polynuclear
   product: a one-contact join is a rigid move however many metals either block carries,
   so a bridge EMERGES from a sequence of them and its M...M is an output to validate.
-* `bridge_compatible()` / `join_bridge()` — one ligand across vertices of DIFFERENT
+* `bridge_compatible()` / `Bridge` — one ligand across vertices of DIFFERENT
   metals in one move.  DONE (M6/S1).  Its verdict is a DISTANCE where the chelate's is an
   angle, because two vertices on two centres have no common origin to subtend one at.
-* `metal_metal_compatible()` / `join_metal_metal()` — vertex to vertex, no ligand between
+* `metal_metal_compatible()` / `MetalMetal` — vertex to vertex, no ligand between
   them.  DONE (M6/S4).  The one join whose M...M is an INPUT, because a declared nucleus
   has no ligand to derive it from; every other route reports that distance as an output.
 """
@@ -61,8 +61,8 @@ from mofsbu.sites.state import refresh_state
 #: works, and none of them has to care that the definition moved.
 __all__ = ["BuildingBlock", "Compatibility", "IncompatibleJoin", "JoinResult",
            "METAL_METAL_MODE", "NotBuiltYet", "bridge_compatible", "chelate_compatible",
-           "chelate_reach", "compatible", "grow", "join", "join_bridge", "join_chelate",
-           "join_metal_metal", "metal_metal_compatible"]
+           "chelate_reach", "compatible", "grow", "join", "metal_metal_compatible",
+           "Mono", "Chelate", "Bridge", "MetalMetal"]
 
 
 @dataclass(frozen=True)
@@ -306,7 +306,7 @@ def compatible(a: Site, b: Site, *, partner: Any | None = None,
 
     * **Roles.**  A join puts a donor on a vacant coordination vertex.  Donor-to-donor is
       not a bond this model forms; vacancy-to-vacancy is a metal-metal bond, which is
-      formed by `join_metal_metal` under a determinant this function does not have (S4).
+      formed by `MetalMetal` under a determinant this function does not have (S4).
       Both are reported by name rather than as a bare `False`.
     * **Mode.**  The requested mode must be offered by both sites.  A vacancy offers
       `mono` only — a chelate needs two vertices, which is a different call.
@@ -323,7 +323,7 @@ def compatible(a: Site, b: Site, *, partner: Any | None = None,
         kind = "two vacancies" if a.is_vacancy else "two donors"
         what = ("a bond between two coordination vertices is a metal-metal bond, and it "
                 "is a different question: its distance is DECLARED rather than derived "
-                "from a ligand, so it has its own call — `join_metal_metal`"
+                "from a ligand, so it has its own call — `MetalMetal`"
                 if a.is_vacancy else
                 "two donors do not bond to each other; a join needs somewhere to put one, "
                 "and on a metal that somewhere is a vacancy")
@@ -472,7 +472,7 @@ def _bridge_roles(donors: Sequence[Site], vacancies: Sequence[Site],
         return Compatibility(
             False, float("inf"),
             f"both vertices are on metal {vacancies[0].atom_idx}; one ligand across two "
-            "vertices of ONE centre is a chelate, not a bridge — use join_chelate",
+            "vertices of ONE centre is a chelate, not a bridge — use Chelate",
             mode=mode)
     for donor in donors:
         if mode not in donor.binding_modes:
@@ -492,7 +492,7 @@ def bridge_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
 
     The µ2 verdict, and the shape of the question changes with the mechanism.  A chelate
     is judged on an ANGLE — its two vertices share an origin, so "how far apart are they"
-    is something they subtend at their common metal, and `join_chelate` can absorb a
+    is something they subtend at their common metal, and `Chelate` can absorb a
     mismatch by tilting the ligand about that centre while keeping both bonds at length.
 
     A bridge has no common origin.  Its two target points are each fixed outright by their
@@ -641,77 +641,14 @@ def _merged_graph(a: TypedGraph, b: TypedGraph, name: str,
     return TypedGraph.from_dict(merged), map_a, map_b
 
 
-def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
-         mode: str = "mono", torsion_well: int = 0, lone_pair: int = 0, seed: int = 0,
-         roll_deg: float = 0.0, with_geometry: bool = True) -> JoinResult:
-    """Join two blocks at a pair of sites and return the product.
+def _merge_parents(a: BuildingBlock, b: BuildingBlock) -> tuple[TypedGraph, AtomMap, AtomMap]:
+    """`_merged_graph` plus the product's charge and multiplicity.
 
-    Aligns by frame, adds the typed bond, carries both atom maps, inherits the parents'
-    sites minus those consumed, and emits the choice vector that regenerates the result.
-
-    **The ligand moves and the metal stays put.**  The block carrying the vacancy is the
-    anchor: its coordinates, and therefore every frame on it, are untouched, and the block
-    carrying the donor is rigidly transformed onto it.  That is what makes repeated joins
-    cheap and stable — a growing cluster keeps one coordinate system across every addition
-    instead of being re-expressed after each one.
-
-    **What is consumed, and what merely changes status.**  The VACANCY is consumed: a
-    filled vertex is not a vertex, and it is consumed by `(atom_idx, slot)` so the metal's
-    other vertices survive.  The DONOR is not.  §6.3 says "minus sites consumed by the new
-    bond", and the vacancy is unambiguously that; a bound carboxylate oxygen, however, is
-    still a donor site that exists — which is exactly the distinction D5 draws between
-    `site_catalog` (which sites exist, geometry-free) and `site_state` (what they are
-    doing).  So the donor is inherited and `refresh_state` marks it `OCCUPIED` off the
-    dative bond in the product graph.  The open-site count falls by two either way; the
-    difference is that the product can still answer "what bound here, and how easily did
-    it activate", which is what a reaction edge needs to explain itself.
-
-    **Which lone pair the metal binds is a choice, and it is this caller's.**  An sp2
-    donor has two in-plane lobes pointing in genuinely different directions, and for a
-    carboxylate bridging two metals the choice is worth 2.8 A of M...M — anti-anti at
-    5.516, syn-anti at 5.148, syn-syn at 2.673, which is the paddlewheel.  `lone_pair` is
-    an index into the set the donor actually offers, wrapped modulo its size, and it
-    travels in the choice vector so a replay reproduces the lobe rather than the default.
-    A donor whose direction its bonding determines has one lobe and ignores it.
-
-    **A multi-centre product is no longer a stopping point (D20).**  One donor onto one
-    vertex is one contact, and one contact is satisfied by a rigid move of the donor's
-    block whatever either block already contains — so the geometry is determined and the
-    M...M that results is an OUTPUT, which is the whole of the emergence claim.  What
-    still needs `place_multicentre` is the case this function does not do: two contacts
-    that must be satisfied at once across centres whose separation two determinants
-    disagree about.
+    Both are ASKED for, never assumed: `net_charge` raises when a parent never declared
+    one, which is ground rule 5 doing its job one layer up.
     """
-    pair = _roles(site_a, site_b)
-    if pair is None:
-        raise IncompatibleJoin(compatible(site_a, site_b, mode=mode))
-    donor_site, vacancy_site = pair
-    donor_block, metal_block = (a, b) if donor_site is site_a else (b, a)
-    for site, block, which in ((donor_site, donor_block, "donor"),
-                               (vacancy_site, metal_block, "vacancy")):
-        if site not in block.sites:
-            raise ValueError(
-                f"the {which} site is not on the block it was passed with. `join(a, b, "
-                f"site_a, site_b)` reads site_a off a and site_b off b; swapping them "
-                f"builds an atom map onto the wrong parent, which nothing downstream can "
-                f"detect.")
-
-    metal_element = metal_block.graph.label(vacancy_site.atom_idx).element
-    donor_element = donor_block.graph.label(donor_site.atom_idx).element
-    verdict = compatible(site_a, site_b, partner=metal_element, mode=mode,
-                         donor_element=donor_element)
-    if not verdict.feasible:
-        raise IncompatibleJoin(verdict)
-
     product, map_a, map_b = _merged_graph(
         a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
-    map_donor = map_a if donor_block is a else map_b
-    map_metal = map_b if donor_block is a else map_a
-    product.add_bond(map_donor[donor_site.atom_idx], map_metal[vacancy_site.atom_idx],
-                     EdgeType.DATIVE)
-
-    # Charge and multiplicity are ASKED for, never assumed: `net_charge` raises when a
-    # parent never declared one, which is ground rule 5 doing its job one layer up.
     product.charge = a.graph.net_charge() + b.graph.net_charge()
     if a.graph.multiplicity is None or b.graph.multiplicity is None:
         raise AmbiguousSpecError(
@@ -719,48 +656,31 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
             "electrons add (energy.backends.combined_multiplicity) and there is no "
             "default that is not a guess about spin state.")
     product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+    return product, map_a, map_b
 
-    wells = verdict.wells or (0.0,)
-    well_deg = wells[torsion_well % len(wells)]
-    lobe = int(lone_pair) % max(verdict.lone_pairs, 1)
-    d_ml = verdict.d_ml if verdict.d_ml is not None else NOMINAL_D_ML
-    choice_vector = {
-        "op": "join", "mode": mode,
-        "torsion_well": int(torsion_well) % len(wells), "torsion_deg": well_deg,
-        "donor": {"atom": donor_site.atom_idx, "type": donor_site.donor_type,
-                  "element": donor_element, "lone_pair": lobe,
-                  "block": donor_block.structure_id},
-        "vacancy": {"atom": vacancy_site.atom_idx, "slot": vacancy_site.slot,
-                    "metal": metal_element, "block": metal_block.structure_id},
-        "d_ml": round(float(d_ml), 6),
-        "order": "donor-block-first" if donor_block is a else "metal-block-first",
-        "seed": int(seed),
-    }
-    # An offset from the well, for a ligand the well itself drives into its neighbours.
-    # Recorded only when used, so a choice vector that never needed one is unchanged.
-    roll = float(roll_deg) % 360.0
-    if roll:
-        choice_vector["roll_deg"] = round(roll, 6)
 
-    donor_sites = donor_block.sites
-    coords = None
-    if with_geometry:
-        coords, donor_sites = _place_donor_block(
-            donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg + roll,
-            lone_pair=lobe)
+def _finish(a: BuildingBlock, product: TypedGraph, map_a: AtomMap, map_b: AtomMap, *,
+            coords: np.ndarray | None, choice_vector: dict, verdict: Compatibility,
+            moving: BuildingBlock, moved_sites: Sequence[Site], anchor: BuildingBlock,
+            anchor_label: str, consumed_anchor: Sequence[tuple[int, int]],
+            consumed_moving: Sequence[tuple[int, int]] = ()) -> JoinResult:
+    """Inherit the sites, stack the coordinates and build the result: the same for every mode.
 
+    `moving` was rigidly transformed onto `anchor`; rows follow the product graph, `a`'s
+    atoms then `b`'s (`_merged_graph`).
+    """
+    map_moving, map_anchor = (map_a, map_b) if moving is a else (map_b, map_a)
     sites = merge_inherited(
-        inherit_sites(donor_sites, map_donor),
-        inherit_sites(metal_block.sites, map_metal,
-                      consumed=[(vacancy_site.atom_idx, vacancy_site.slot)]),
+        inherit_sites(moved_sites, map_moving, consumed=consumed_moving),
+        inherit_sites(anchor.sites, map_anchor, consumed=consumed_anchor),
     )
 
     geometry, state = None, None
     if coords is not None:
-        metal_coords = _coords_of(metal_block, "the metal block")
-        if metal_coords is not None:
-            geometry = (np.vstack([coords, metal_coords]) if donor_block is a
-                        else np.vstack([metal_coords, coords]))
+        anchor_coords = _coords_of(anchor, anchor_label)
+        if anchor_coords is not None:
+            geometry = (np.vstack([coords, anchor_coords]) if moving is a
+                        else np.vstack([anchor_coords, coords]))
             symbols = [product.label(i).element for i in product.nodes()]
             geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
                                        product.metals())
@@ -772,6 +692,137 @@ def join(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
                             state=state),
         atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
         partner_atom_map=map_b, compatibility=verdict)
+
+
+def join(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+         sites_b: Sequence[Site], *, mode: Mono | Chelate | Bridge | MetalMetal,
+         seed: int = 0, with_geometry: bool = True) -> JoinResult:
+    """Join two blocks at their sites.  `mode` says how: `Mono`, `Chelate`, `Bridge` or
+    `MetalMetal`, each holding only what is particular to it."""
+    if isinstance(sites_a, Site) or isinstance(sites_b, Site):
+        raise TypeError("join takes a sequence of sites per block: pass [site], not site")
+    return mode.build(a, b, tuple(sites_a), tuple(sites_b), seed=seed,
+                      with_geometry=with_geometry)
+
+
+def _one_each(sites_a: Sequence[Site], sites_b: Sequence[Site], kind: str) -> tuple[Site, Site]:
+    if len(sites_a) != 1 or len(sites_b) != 1:
+        raise ValueError(f"a {kind} join takes one site on each block; got "
+                         f"{len(sites_a)} and {len(sites_b)}")
+    return sites_a[0], sites_b[0]
+
+
+@dataclass(frozen=True)
+class Mono:
+    binding_mode: str = "mono"
+    torsion_well: int = 0
+    lone_pair: int = 0
+    roll_deg: float = 0.0
+
+    def build(self, a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+              sites_b: Sequence[Site], *, seed: int = 0,
+              with_geometry: bool = True) -> JoinResult:
+        """Join two blocks at a pair of sites and return the product.
+
+        Aligns by frame, adds the typed bond, carries both atom maps, inherits the parents'
+        sites minus those consumed, and emits the choice vector that regenerates the result.
+
+        **The ligand moves and the metal stays put.**  The block carrying the vacancy is the
+        anchor: its coordinates, and therefore every frame on it, are untouched, and the block
+        carrying the donor is rigidly transformed onto it.  That is what makes repeated joins
+        cheap and stable — a growing cluster keeps one coordinate system across every addition
+        instead of being re-expressed after each one.
+
+        **What is consumed, and what merely changes status.**  The VACANCY is consumed: a
+        filled vertex is not a vertex, and it is consumed by `(atom_idx, slot)` so the metal's
+        other vertices survive.  The DONOR is not.  §6.3 says "minus sites consumed by the new
+        bond", and the vacancy is unambiguously that; a bound carboxylate oxygen, however, is
+        still a donor site that exists — which is exactly the distinction D5 draws between
+        `site_catalog` (which sites exist, geometry-free) and `site_state` (what they are
+        doing).  So the donor is inherited and `refresh_state` marks it `OCCUPIED` off the
+        dative bond in the product graph.  The open-site count falls by two either way; the
+        difference is that the product can still answer "what bound here, and how easily did
+        it activate", which is what a reaction edge needs to explain itself.
+
+        **Which lone pair the metal binds is a choice, and it is this caller's.**  An sp2
+        donor has two in-plane lobes pointing in genuinely different directions, and for a
+        carboxylate bridging two metals the choice is worth 2.8 A of M...M — anti-anti at
+        5.516, syn-anti at 5.148, syn-syn at 2.673, which is the paddlewheel.  `lone_pair` is
+        an index into the set the donor actually offers, wrapped modulo its size, and it
+        travels in the choice vector so a replay reproduces the lobe rather than the default.
+        A donor whose direction its bonding determines has one lobe and ignores it.
+
+        **A multi-centre product is no longer a stopping point (D20).**  One donor onto one
+        vertex is one contact, and one contact is satisfied by a rigid move of the donor's
+        block whatever either block already contains — so the geometry is determined and the
+        M...M that results is an OUTPUT, which is the whole of the emergence claim.  What
+        still needs `place_multicentre` is the case this function does not do: two contacts
+        that must be satisfied at once across centres whose separation two determinants
+        disagree about.
+        """
+        site_a, site_b = _one_each(sites_a, sites_b, "Mono")
+        mode, torsion_well, lone_pair, roll_deg = (self.binding_mode, self.torsion_well,
+                                                   self.lone_pair, self.roll_deg)
+        pair = _roles(site_a, site_b)
+        if pair is None:
+            raise IncompatibleJoin(compatible(site_a, site_b, mode=mode))
+        donor_site, vacancy_site = pair
+        donor_block, metal_block = (a, b) if donor_site is site_a else (b, a)
+        for site, block, which in ((donor_site, donor_block, "donor"),
+                                   (vacancy_site, metal_block, "vacancy")):
+            if site not in block.sites:
+                raise ValueError(
+                    f"the {which} site is not on the block it was passed with. `join(a, b, "
+                    f"sites_a, sites_b)` reads sites_a off a and sites_b off b; swapping them "
+                    f"builds an atom map onto the wrong parent, which nothing downstream can "
+                    f"detect.")
+
+        metal_element = metal_block.graph.label(vacancy_site.atom_idx).element
+        donor_element = donor_block.graph.label(donor_site.atom_idx).element
+        verdict = compatible(site_a, site_b, partner=metal_element, mode=mode,
+                             donor_element=donor_element)
+        if not verdict.feasible:
+            raise IncompatibleJoin(verdict)
+
+        product, map_a, map_b = _merge_parents(a, b)
+        map_donor = map_a if donor_block is a else map_b
+        map_metal = map_b if donor_block is a else map_a
+        product.add_bond(map_donor[donor_site.atom_idx], map_metal[vacancy_site.atom_idx],
+                         EdgeType.DATIVE)
+
+        wells = verdict.wells or (0.0,)
+        well_deg = wells[torsion_well % len(wells)]
+        lobe = int(lone_pair) % max(verdict.lone_pairs, 1)
+        d_ml = verdict.d_ml if verdict.d_ml is not None else NOMINAL_D_ML
+        choice_vector = {
+            "op": "join", "mode": mode,
+            "torsion_well": int(torsion_well) % len(wells), "torsion_deg": well_deg,
+            "donor": {"atom": donor_site.atom_idx, "type": donor_site.donor_type,
+                      "element": donor_element, "lone_pair": lobe,
+                      "block": donor_block.structure_id},
+            "vacancy": {"atom": vacancy_site.atom_idx, "slot": vacancy_site.slot,
+                        "metal": metal_element, "block": metal_block.structure_id},
+            "d_ml": round(float(d_ml), 6),
+            "order": "donor-block-first" if donor_block is a else "metal-block-first",
+            "seed": int(seed),
+        }
+        # An offset from the well, for a ligand the well itself drives into its neighbours.
+        # Recorded only when used, so a choice vector that never needed one is unchanged.
+        roll = float(roll_deg) % 360.0
+        if roll:
+            choice_vector["roll_deg"] = round(roll, 6)
+
+        donor_sites = donor_block.sites
+        coords = None
+        if with_geometry:
+            coords, donor_sites = _place_donor_block(
+                donor_block, donor_site, vacancy_site, d_ml=d_ml, well_deg=well_deg + roll,
+                lone_pair=lobe)
+
+        return _finish(a, product, map_a, map_b, coords=coords, choice_vector=choice_vector,
+                       verdict=verdict, moving=donor_block, moved_sites=donor_sites,
+                       anchor=metal_block, anchor_label="the metal block",
+                       consumed_anchor=[(vacancy_site.atom_idx, vacancy_site.slot)])
 
 
 def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_site: Site,
@@ -819,254 +870,205 @@ def _place_donor_block(donor_block: BuildingBlock, donor_site: Site, vacancy_sit
     return moved, sites
 
 
-def join_chelate(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
-                 sites_b: Sequence[Site], *, seed: int = 0,
-                 with_geometry: bool = True) -> JoinResult:
-    """Join two blocks at TWO points at once — one ligand across two vertices of one metal.
+@dataclass(frozen=True)
+class Chelate:
+    def build(self, a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+              sites_b: Sequence[Site], *, seed: int = 0,
+              with_geometry: bool = True) -> JoinResult:
+        """Join two blocks at TWO points at once — one ligand across two vertices of one metal.
 
-    The same operation as `join` and a different geometry problem.  A single-point join has
-    a free rigid move and therefore no residual strain (`compatible` says so and why); two
-    points at once must satisfy both constraints with one rigid move, so the bite angle the
-    ligand offers and the separation of the vertices it is asked to span have to agree.
-    `chelate_compatible` is the verdict and it is asked first; this places what it passed.
+        The same operation as `join` and a different geometry problem.  A single-point join has
+        a free rigid move and therefore no residual strain (`compatible` says so and why); two
+        points at once must satisfy both constraints with one rigid move, so the bite angle the
+        ligand offers and the separation of the vertices it is asked to span have to agree.
+        `chelate_compatible` is the verdict and it is asked first; this places what it passed.
 
-    **How the mismatch is absorbed.**  The pose is fixed by three things, in this order:
-    the donor-donor line onto the vertex-vertex line, the roll about that line set by
-    requiring the ligand's own donor axes to point back at the metal, and then a push
-    along the bisector so that BOTH donors sit at their metal-donor distance.  The residual
-    goes into the bite angle, which is the quantity `chelate_compatible` already bounded,
-    rather than into the M-D bond lengths, which `geometry.qc` checks and which an
-    optimiser cannot be asked to repair (`QCReport.marginal` excludes bad bonds for exactly
-    this reason).
+        **How the mismatch is absorbed.**  The pose is fixed by three things, in this order:
+        the donor-donor line onto the vertex-vertex line, the roll about that line set by
+        requiring the ligand's own donor axes to point back at the metal, and then a push
+        along the bisector so that BOTH donors sit at their metal-donor distance.  The residual
+        goes into the bite angle, which is the quantity `chelate_compatible` already bounded,
+        rather than into the M-D bond lengths, which `geometry.qc` checks and which an
+        optimiser cannot be asked to repair (`QCReport.marginal` excludes bad bonds for exactly
+        this reason).
 
-    Both vertices are consumed; both donors are inherited and become `OCCUPIED` off the
-    product's dative bonds — the same split `join` documents, for the same reason.
+        Both vertices are consumed; both donors are inherited and become `OCCUPIED` off the
+        product's dative bonds — the same split `join` documents, for the same reason.
 
-    Both vertices are on ONE metal — `chelate_compatible` refuses the other case by name,
-    and that refusal is where a µ2 bridge begins.
-    """
-    if len(sites_a) != 2 or len(sites_b) != 2:
-        raise ValueError(
-            f"a chelate join takes two sites on each block; got {len(sites_a)} and "
-            f"{len(sites_b)}. One donor onto one vertex is `join`; one donor across two "
-            f"METALS is a mu2 bridge and is M6.")
-    # Each side has to be entirely one role: two donors here, two vertices there.  A
-    # mixed pair is refused as a pairing rather than caught later as an atom-map error,
-    # because "one of these four is on the wrong side" is the thing the caller got wrong.
-    a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
-    if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
-        return _refuse_chelate(sites_a, sites_b, "this pairing is not two donors on one "
-                                                 "block and two vertices on the other")
-    donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
-    donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
-    for pair, block, which in ((donors, donor_block, "donor"),
-                               (vacancies, metal_block, "vacancy")):
-        for site in pair:
-            if site not in block.sites:
-                raise ValueError(
-                    f"a {which} site is not on the block it was passed with. "
-                    f"`join_chelate(a, b, sites_a, sites_b)` reads sites_a off a and "
-                    f"sites_b off b; swapping them builds an atom map onto the wrong "
-                    f"parent, which nothing downstream can detect.")
+        Both vertices are on ONE metal — `chelate_compatible` refuses the other case by name,
+        and that refusal is where a µ2 bridge begins.
+        """
+        if len(sites_a) != 2 or len(sites_b) != 2:
+            raise ValueError(
+                f"a chelate join takes two sites on each block; got {len(sites_a)} and "
+                f"{len(sites_b)}. One donor onto one vertex is `join`; one donor across two "
+                f"METALS is a mu2 bridge and is M6.")
+        # Each side has to be entirely one role: two donors here, two vertices there.  A
+        # mixed pair is refused as a pairing rather than caught later as an atom-map error,
+        # because "one of these four is on the wrong side" is the thing the caller got wrong.
+        a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
+        if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
+            return _refuse_chelate(sites_a, sites_b, "this pairing is not two donors on one "
+                                                     "block and two vertices on the other")
+        donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
+        donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
+        for pair, block, which in ((donors, donor_block, "donor"),
+                                   (vacancies, metal_block, "vacancy")):
+            for site in pair:
+                if site not in block.sites:
+                    raise ValueError(
+                        f"a {which} site is not on the block it was passed with. "
+                        f"`join(a, b, sites_a, sites_b)` reads sites_a off a and "
+                        f"sites_b off b; swapping them builds an atom map onto the wrong "
+                        f"parent, which nothing downstream can detect.")
 
-    metal_element = metal_block.graph.label(vacancies[0].atom_idx).element
-    donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
-    verdict = chelate_reach(donors, vacancies, partner=metal_element,
-                            donor_elements=donor_elements)
-    if not verdict.feasible:
-        raise IncompatibleJoin(verdict)
+        metal_element = metal_block.graph.label(vacancies[0].atom_idx).element
+        donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
+        verdict = chelate_reach(donors, vacancies, partner=metal_element,
+                                donor_elements=donor_elements)
+        if not verdict.feasible:
+            raise IncompatibleJoin(verdict)
 
-    product, map_a, map_b = _merged_graph(
-        a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
-    map_donor = map_a if donor_block is a else map_b
-    map_metal = map_b if donor_block is a else map_a
-    for donor in donors:
-        product.add_bond(map_donor[donor.atom_idx], map_metal[vacancies[0].atom_idx],
-                         EdgeType.DATIVE)
+        product, map_a, map_b = _merge_parents(a, b)
+        map_donor = map_a if donor_block is a else map_b
+        map_metal = map_b if donor_block is a else map_a
+        for donor in donors:
+            product.add_bond(map_donor[donor.atom_idx], map_metal[vacancies[0].atom_idx],
+                             EdgeType.DATIVE)
 
-    product.charge = a.graph.net_charge() + b.graph.net_charge()
-    if a.graph.multiplicity is None or b.graph.multiplicity is None:
-        raise AmbiguousSpecError(
-            "a parent has no multiplicity, so the product's is not derivable. Unpaired "
-            "electrons add (energy.backends.combined_multiplicity) and there is no "
-            "default that is not a guess about spin state.")
-    product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+        distances = [metal_donor_distance(metal_element, el).value for el in donor_elements]
+        choice_vector = {
+            "op": "join", "mode": BindingMode.CHELATE.value,
+            # No torsion index: the roll about the new bonds is DETERMINED by the second
+            # contact, so there is no well to choose.  What replaces it as the discrete
+            # choice is which donor went to which vertex, and that is recorded in order.
+            "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
+                        "block": donor_block.structure_id}
+                       for s, el in zip(donors, donor_elements)],
+            "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": metal_element,
+                           "block": metal_block.structure_id} for s in vacancies],
+            "d_ml": [round(float(x), 6) for x in distances],
+            "order": "donor-block-first" if donor_block is a else "metal-block-first",
+            "seed": int(seed),
+        }
 
-    distances = [metal_donor_distance(metal_element, el).value for el in donor_elements]
-    choice_vector = {
-        "op": "join", "mode": BindingMode.CHELATE.value,
-        # No torsion index: the roll about the new bonds is DETERMINED by the second
-        # contact, so there is no well to choose.  What replaces it as the discrete
-        # choice is which donor went to which vertex, and that is recorded in order.
-        "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
-                    "block": donor_block.structure_id}
-                   for s, el in zip(donors, donor_elements)],
-        "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": metal_element,
-                       "block": metal_block.structure_id} for s in vacancies],
-        "d_ml": [round(float(x), 6) for x in distances],
-        "order": "donor-block-first" if donor_block is a else "metal-block-first",
-        "seed": int(seed),
-    }
+        donor_sites = donor_block.sites
+        coords = None
+        if with_geometry:
+            coords, donor_sites = _place_chelating_block(donor_block, donors, vacancies,
+                                                         distances=distances)
 
-    donor_sites = donor_block.sites
-    coords = None
-    if with_geometry:
-        coords, donor_sites = _place_chelating_block(donor_block, donors, vacancies,
-                                                     distances=distances)
-
-    sites = merge_inherited(
-        inherit_sites(donor_sites, map_donor),
-        inherit_sites(metal_block.sites, map_metal,
-                      consumed=[(v.atom_idx, v.slot) for v in vacancies]),
-    )
-
-    geometry, state = None, None
-    if coords is not None:
-        metal_coords = _coords_of(metal_block, "the metal block")
-        if metal_coords is not None:
-            geometry = (np.vstack([coords, metal_coords]) if donor_block is a
-                        else np.vstack([metal_coords, coords]))
-            symbols = [product.label(i).element for i in product.nodes()]
-            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
-                                       product.metals())
-            states = refresh_state(sites, geometry, graph=product, symbols=symbols)
-            state = {(s.atom_idx, s.slot): s for s in states}
-
-    return JoinResult(
-        block=BuildingBlock(graph=product, sites=tuple(sites), geometry=geometry,
-                            state=state),
-        atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
-        partner_atom_map=map_b, compatibility=verdict)
+        return _finish(a, product, map_a, map_b, coords=coords, choice_vector=choice_vector,
+                       verdict=verdict, moving=donor_block, moved_sites=donor_sites,
+                       anchor=metal_block, anchor_label="the metal block",
+                       consumed_anchor=[(v.atom_idx, v.slot) for v in vacancies])
 
 
-def join_bridge(a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
-                sites_b: Sequence[Site], *, lone_pairs: Sequence[int] = (0, 0),
-                seed: int = 0, with_geometry: bool = True) -> JoinResult:
-    """One ligand across two vertices on DIFFERENT metals — the µ2 bridge (M6/S1).
+@dataclass(frozen=True)
+class Bridge:
+    lone_pairs: tuple[int, ...] = (0, 0)
 
-    `join_chelate`'s body with one assumption relaxed, which is the whole of mechanism A:
-    that function binds both donors to `vacancies[0].atom_idx`, and here the two vertices
-    belong to two centres.  Everything else it does is the same operation.
+    def build(self, a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+              sites_b: Sequence[Site], *, seed: int = 0,
+              with_geometry: bool = True) -> JoinResult:
+        """One ligand across two vertices on DIFFERENT metals — the µ2 bridge (M6/S1).
 
-    **What differs is that there is nowhere chosen for the residual to go.**  A chelate's
-    two vertices share an origin, so a span mismatch can be tilted into the bite angle
-    while both M-D bonds keep their length — `_place_chelating_block` slides along the
-    bisector to do exactly that, deliberately, because bond lengths are what QC checks.
-    Two vertices on different metals have no bisector and no common centre: both target
-    points are fixed outright, the fit is the best rigid compromise between them, and
-    which coordinate absorbs the difference falls out of the vertex axes rather than being
-    chosen.  `bridge_compatible` bounds the mismatch beforehand; **qc decides whether the
-    result is a bridge**, and on an unfavourable vertex pair it has to.
+        `Chelate`'s body with one assumption relaxed, which is the whole of mechanism A:
+        that function binds both donors to `vacancies[0].atom_idx`, and here the two vertices
+        belong to two centres.  Everything else it does is the same operation.
 
-    **Which lone pair each donor uses is the caller's choice**, and it is the choice that
-    selects the bridging mode: syn-syn is what holds a paddlewheel together at 2.67 A and
-    anti-anti is an extended chain at 5.52.  Both are recorded in the choice vector.
+        **What differs is that there is nowhere chosen for the residual to go.**  A chelate's
+        two vertices share an origin, so a span mismatch can be tilted into the bite angle
+        while both M-D bonds keep their length — `_place_chelating_block` slides along the
+        bisector to do exactly that, deliberately, because bond lengths are what QC checks.
+        Two vertices on different metals have no bisector and no common centre: both target
+        points are fixed outright, the fit is the best rigid compromise between them, and
+        which coordinate absorbs the difference falls out of the vertex axes rather than being
+        chosen.  `bridge_compatible` bounds the mismatch beforehand; **qc decides whether the
+        result is a bridge**, and on an unfavourable vertex pair it has to.
 
-    The two centres' separation is an OUTPUT here as everywhere else (D20) — this places a
-    ligand across a distance the metals already have; it does not set one.  A route that
-    wants to *declare* the separation is a nucleus-first route and states the number
-    itself (S4).
-    """
-    if len(sites_a) != 2 or len(sites_b) != 2:
-        raise ValueError(
-            f"a bridge join takes two sites on each block; got {len(sites_a)} and "
-            f"{len(sites_b)}. One donor onto one vertex is `join`; one donor onto three "
-            f"or four metals is a single-atom bridge and is mechanism B.")
-    a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
-    if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
-        roles = [("vacancy" if s.is_vacancy else "donor") for s in (*sites_a, *sites_b)]
-        raise IncompatibleJoin(Compatibility(
-            False, float("inf"),
-            f"this pairing is not two donors on one block and two vertices on the other "
-            f"(got {', '.join(roles)}): a bridge join puts two donors from one block on "
-            f"vertices of two DIFFERENT metals on the other",
-            mode=BindingMode.BRIDGE_MU2.value))
-    donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
-    donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
-    for pair, block, which in ((donors, donor_block, "donor"),
-                               (vacancies, metal_block, "vacancy")):
-        for site in pair:
-            if site not in block.sites:
-                raise ValueError(
-                    f"a {which} site is not on the block it was passed with. "
-                    f"`join_bridge(a, b, sites_a, sites_b)` reads sites_a off a and "
-                    f"sites_b off b; swapping them builds an atom map onto the wrong "
-                    f"parent, which nothing downstream can detect.")
+        **Which lone pair each donor uses is the caller's choice**, and it is the choice that
+        selects the bridging mode: syn-syn is what holds a paddlewheel together at 2.67 A and
+        anti-anti is an extended chain at 5.52.  Both are recorded in the choice vector.
 
-    metals = [metal_block.graph.label(s.atom_idx).element for s in vacancies]
-    donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
-    lobes = [int(k) % _lone_pairs(s) for k, s in zip(tuple(lone_pairs) + (0, 0), donors)]
-    verdict = bridge_compatible(donors, vacancies, partner=metals[0],
-                                donor_elements=donor_elements, lone_pairs=lobes)
-    if not verdict.feasible:
-        raise IncompatibleJoin(verdict)
+        The two centres' separation is an OUTPUT here as everywhere else (D20) — this places a
+        ligand across a distance the metals already have; it does not set one.  A route that
+        wants to *declare* the separation is a nucleus-first route and states the number
+        itself (S4).
+        """
+        lone_pairs = self.lone_pairs
+        if len(sites_a) != 2 or len(sites_b) != 2:
+            raise ValueError(
+                f"a bridge join takes two sites on each block; got {len(sites_a)} and "
+                f"{len(sites_b)}. One donor onto one vertex is `join`; one donor onto three "
+                f"or four metals is a single-atom bridge and is mechanism B.")
+        a_vacant, b_vacant = {s.is_vacancy for s in sites_a}, {s.is_vacancy for s in sites_b}
+        if len(a_vacant) != 1 or len(b_vacant) != 1 or a_vacant == b_vacant:
+            roles = [("vacancy" if s.is_vacancy else "donor") for s in (*sites_a, *sites_b)]
+            raise IncompatibleJoin(Compatibility(
+                False, float("inf"),
+                f"this pairing is not two donors on one block and two vertices on the other "
+                f"(got {', '.join(roles)}): a bridge join puts two donors from one block on "
+                f"vertices of two DIFFERENT metals on the other",
+                mode=BindingMode.BRIDGE_MU2.value))
+        donors, vacancies = (sites_b, sites_a) if True in a_vacant else (sites_a, sites_b)
+        donor_block, metal_block = (b, a) if True in a_vacant else (a, b)
+        for pair, block, which in ((donors, donor_block, "donor"),
+                                   (vacancies, metal_block, "vacancy")):
+            for site in pair:
+                if site not in block.sites:
+                    raise ValueError(
+                        f"a {which} site is not on the block it was passed with. "
+                        f"`join(a, b, sites_a, sites_b)` reads sites_a off a and "
+                        f"sites_b off b; swapping them builds an atom map onto the wrong "
+                        f"parent, which nothing downstream can detect.")
 
-    product, map_a, map_b = _merged_graph(
-        a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
-    map_donor = map_a if donor_block is a else map_b
-    map_metal = map_b if donor_block is a else map_a
-    # One donor to ITS OWN vertex's metal — the line `join_chelate` cannot draw, since
-    # there both bonds go to `vacancies[0]`.  µ-ness is then DERIVED from these two edges
-    # rather than labelled (D14).
-    for donor, vacancy in zip(donors, vacancies):
-        product.add_bond(map_donor[donor.atom_idx], map_metal[vacancy.atom_idx],
-                         EdgeType.DATIVE)
+        metals = [metal_block.graph.label(s.atom_idx).element for s in vacancies]
+        donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
+        lobes = [int(k) % _lone_pairs(s) for k, s in zip(tuple(lone_pairs) + (0, 0), donors)]
+        verdict = bridge_compatible(donors, vacancies, partner=metals[0],
+                                    donor_elements=donor_elements, lone_pairs=lobes)
+        if not verdict.feasible:
+            raise IncompatibleJoin(verdict)
 
-    product.charge = a.graph.net_charge() + b.graph.net_charge()
-    if a.graph.multiplicity is None or b.graph.multiplicity is None:
-        raise AmbiguousSpecError(
-            "a parent has no multiplicity, so the product's is not derivable. Unpaired "
-            "electrons add (energy.backends.combined_multiplicity) and there is no "
-            "default that is not a guess about spin state.")
-    product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+        product, map_a, map_b = _merge_parents(a, b)
+        map_donor = map_a if donor_block is a else map_b
+        map_metal = map_b if donor_block is a else map_a
+        # One donor to ITS OWN vertex's metal — the line `Chelate` cannot draw, since
+        # there both bonds go to `vacancies[0]`.  µ-ness is then DERIVED from these two edges
+        # rather than labelled (D14).
+        for donor, vacancy in zip(donors, vacancies):
+            product.add_bond(map_donor[donor.atom_idx], map_metal[vacancy.atom_idx],
+                             EdgeType.DATIVE)
 
-    distances = [metal_donor_distance(m, el).value
-                 for m, el in zip(metals, donor_elements)]
-    choice_vector = {
-        "op": "join", "mode": BindingMode.BRIDGE_MU2.value,
-        # No torsion index, for `join_chelate`'s reason: the second contact determines the
-        # roll.  What branches instead is which LOBE each donor bound through, and that is
-        # the coordinate the three bridging modes differ in.
-        "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
-                    "lone_pair": k, "block": donor_block.structure_id}
-                   for s, el, k in zip(donors, donor_elements, lobes)],
-        "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": m,
-                       "block": metal_block.structure_id}
-                      for s, m in zip(vacancies, metals)],
-        "d_ml": [round(float(x), 6) for x in distances],
-        "order": "donor-block-first" if donor_block is a else "metal-block-first",
-        "seed": int(seed),
-    }
+        distances = [metal_donor_distance(m, el).value
+                     for m, el in zip(metals, donor_elements)]
+        choice_vector = {
+            "op": "join", "mode": BindingMode.BRIDGE_MU2.value,
+            # No torsion index, for `Chelate`'s reason: the second contact determines the
+            # roll.  What branches instead is which LOBE each donor bound through, and that is
+            # the coordinate the three bridging modes differ in.
+            "donors": [{"atom": s.atom_idx, "type": s.donor_type, "element": el,
+                        "lone_pair": k, "block": donor_block.structure_id}
+                       for s, el, k in zip(donors, donor_elements, lobes)],
+            "vacancies": [{"atom": s.atom_idx, "slot": s.slot, "metal": m,
+                           "block": metal_block.structure_id}
+                          for s, m in zip(vacancies, metals)],
+            "d_ml": [round(float(x), 6) for x in distances],
+            "order": "donor-block-first" if donor_block is a else "metal-block-first",
+            "seed": int(seed),
+        }
 
-    donor_sites = donor_block.sites
-    coords = None
-    if with_geometry:
-        coords, donor_sites = _place_bridging_block(
-            donor_block, donors, vacancies, distances=distances, lone_pairs=lobes)
+        donor_sites = donor_block.sites
+        coords = None
+        if with_geometry:
+            coords, donor_sites = _place_bridging_block(
+                donor_block, donors, vacancies, distances=distances, lone_pairs=lobes)
 
-    sites = merge_inherited(
-        inherit_sites(donor_sites, map_donor),
-        inherit_sites(metal_block.sites, map_metal,
-                      consumed=[(v.atom_idx, v.slot) for v in vacancies]),
-    )
-
-    geometry, state = None, None
-    if coords is not None:
-        metal_coords = _coords_of(metal_block, "the metal block")
-        if metal_coords is not None:
-            geometry = (np.vstack([coords, metal_coords]) if donor_block is a
-                        else np.vstack([metal_coords, coords]))
-            symbols = [product.label(i).element for i in product.nodes()]
-            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
-                                       product.metals())
-            states = refresh_state(sites, geometry, graph=product, symbols=symbols)
-            state = {(s.atom_idx, s.slot): s for s in states}
-
-    return JoinResult(
-        block=BuildingBlock(graph=product, sites=tuple(sites), geometry=geometry,
-                            state=state),
-        atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
-        partner_atom_map=map_b, compatibility=verdict)
+        return _finish(a, product, map_a, map_b, coords=coords, choice_vector=choice_vector,
+                       verdict=verdict, moving=donor_block, moved_sites=donor_sites,
+                       anchor=metal_block, anchor_label="the metal block",
+                       consumed_anchor=[(v.atom_idx, v.slot) for v in vacancies])
 
 
 def _place_bridging_block(donor_block: BuildingBlock, donors: Sequence[Site],
@@ -1145,7 +1147,7 @@ def chelate_reach(donors: Sequence[Site], vacancies: Sequence[Site], *,
     whose frames do converge.  The pocket verdict travels in the reason, because "these
     frames say something different" is worth seeing.
 
-    This is the gate `join_chelate` uses, and the one a caller should rank candidate
+    This is the gate `Chelate` uses, and the one a caller should rank candidate
     vertex pairs by — ranking on one criterion and placing under another is how a step
     picks the pair it then cannot build.
     """
@@ -1348,7 +1350,7 @@ def metal_metal_compatible(a: Site, b: Site, *, elements: Sequence[str] | None =
 
     Two sites cannot say whether they are on the same BLOCK — every freshly built metal
     block numbers its metal atom 0, so equal `atom_idx` across two blocks is the normal
-    case and not a self-bond.  `join_metal_metal` holds that check, where the blocks are.
+    case and not a self-bond.  `MetalMetal` holds that check, where the blocks are.
     """
     for site, which in ((a, "first"), (b, "second")):
         if not site.is_vacancy:
@@ -1382,105 +1384,88 @@ def metal_metal_compatible(a: Site, b: Site, *, elements: Sequence[str] | None =
                          wells=(0.0,), d_ml=distance.value)
 
 
-def join_metal_metal(a: BuildingBlock, b: BuildingBlock, site_a: Site, site_b: Site, *,
-                     d_mm: float | None = None, roll_deg: float = 0.0, seed: int = 0,
-                     with_geometry: bool = True) -> JoinResult:
-    """Bond two metals vertex to vertex — the nucleus a later bridge grows onto (M6/S4).
+@dataclass(frozen=True)
+class MetalMetal:
+    d_mm: float | None = None
+    roll_deg: float = 0.0
 
-    `join`'s body with both sites vacancies and a `METAL_METAL` edge in place of the
-    DATIVE one.  Both vacancies are consumed: each metal spends the vertex that faces the
-    other, which is why a Cu2 nucleus declared at CN 6 comes back with five open vertices
-    per metal rather than six.
+    def build(self, a: BuildingBlock, b: BuildingBlock, sites_a: Sequence[Site],
+              sites_b: Sequence[Site], *, seed: int = 0,
+              with_geometry: bool = True) -> JoinResult:
+        """Bond two metals vertex to vertex — the nucleus a later bridge grows onto (M6/S4).
 
-    **`a` is the anchor, as everywhere else** — its coordinates and frames are untouched
-    and `b` is rigidly transformed onto it, so the cluster keeps one coordinate system
-    across every addition and the vertices `b` brings are reported in the DIMER's frame
-    rather than in the one `b` was built in.
+        `join`'s body with both sites vacancies and a `METAL_METAL` edge in place of the
+        DATIVE one.  Both vacancies are consumed: each metal spends the vertex that faces the
+        other, which is why a Cu2 nucleus declared at CN 6 comes back with five open vertices
+        per metal rather than six.
 
-    `roll_deg` rotates `b` about the new M-M axis.  A bare metal has nothing on that axis
-    for it to move, which is why it defaults to zero and why a vacancy declares
-    `TORSION_FREE`; the moment `b` carries ligands it is a real coordinate, so it is an
-    argument and it is recorded rather than left wherever the arithmetic drops it.
+        **`a` is the anchor, as everywhere else** — its coordinates and frames are untouched
+        and `b` is rigidly transformed onto it, so the cluster keeps one coordinate system
+        across every addition and the vertices `b` brings are reported in the DIMER's frame
+        rather than in the one `b` was built in.
 
-    See `metal_metal_compatible` for why `d_mm` is an input and what omitting it buys.
-    """
-    if a is b:
-        raise IncompatibleJoin(Compatibility(
-            False, float("inf"),
-            "both vertices are on the same block, so this is not a bond between two "
-            "centres but a centre bonding to itself. Two vertices of ONE metal are where "
-            "a chelate goes (`join_chelate`); a second metal is a second block.",
-            mode=METAL_METAL_MODE))
-    for site, block, which in ((site_a, a, "first"), (site_b, b, "second")):
-        if site not in block.sites:
-            raise ValueError(
-                f"the {which} site is not on the block it was passed with. "
-                f"`join_metal_metal(a, b, site_a, site_b)` reads site_a off a and site_b "
-                f"off b; swapping them builds an atom map onto the wrong parent, which "
-                f"nothing downstream can detect.")
-    elements = [a.graph.label(site_a.atom_idx).element,
-                b.graph.label(site_b.atom_idx).element]
-    verdict = metal_metal_compatible(site_a, site_b, elements=elements, d_mm=d_mm)
-    if not verdict.feasible:
-        raise IncompatibleJoin(verdict)
+        `roll_deg` rotates `b` about the new M-M axis.  A bare metal has nothing on that axis
+        for it to move, which is why it defaults to zero and why a vacancy declares
+        `TORSION_FREE`; the moment `b` carries ligands it is a real coordinate, so it is an
+        argument and it is recorded rather than left wherever the arithmetic drops it.
 
-    product, map_a, map_b = _merged_graph(
-        a.graph, b.graph, name=f"{a.graph.name or 'a'}+{b.graph.name or 'b'}")
-    # METAL_METAL, not COVALENT: `graph._types` refuses two metals joined COVALENT
-    # precisely so identity sees this edge as what it is.
-    product.add_bond(map_a[site_a.atom_idx], map_b[site_b.atom_idx], EdgeType.METAL_METAL)
+        See `metal_metal_compatible` for why `d_mm` is an input and what omitting it buys.
+        """
+        site_a, site_b = _one_each(sites_a, sites_b, "MetalMetal")
+        d_mm, roll_deg = self.d_mm, self.roll_deg
+        if a is b:
+            raise IncompatibleJoin(Compatibility(
+                False, float("inf"),
+                "both vertices are on the same block, so this is not a bond between two "
+                "centres but a centre bonding to itself. Two vertices of ONE metal are where "
+                "a chelate goes (`Chelate`); a second metal is a second block.",
+                mode=METAL_METAL_MODE))
+        for site, block, which in ((site_a, a, "first"), (site_b, b, "second")):
+            if site not in block.sites:
+                raise ValueError(
+                    f"the {which} site is not on the block it was passed with. "
+                    f"`join(a, b, sites_a, sites_b)` reads sites_a off a and sites_b "
+                    f"off b; swapping them builds an atom map onto the wrong parent, which "
+                    f"nothing downstream can detect.")
+        elements = [a.graph.label(site_a.atom_idx).element,
+                    b.graph.label(site_b.atom_idx).element]
+        verdict = metal_metal_compatible(site_a, site_b, elements=elements, d_mm=d_mm)
+        if not verdict.feasible:
+            raise IncompatibleJoin(verdict)
 
-    product.charge = a.graph.net_charge() + b.graph.net_charge()
-    if a.graph.multiplicity is None or b.graph.multiplicity is None:
-        raise AmbiguousSpecError(
-            "a parent has no multiplicity, so the product's is not derivable. Unpaired "
-            "electrons add (energy.backends.combined_multiplicity) and there is no "
-            "default that is not a guess about spin state.")
-    product.multiplicity = combined_multiplicity(a.graph.multiplicity, b.graph.multiplicity)
+        product, map_a, map_b = _merge_parents(a, b)
+        # METAL_METAL, not COVALENT: `graph._types` refuses two metals joined COVALENT
+        # precisely so identity sees this edge as what it is.
+        product.add_bond(map_a[site_a.atom_idx], map_b[site_b.atom_idx], EdgeType.METAL_METAL)
 
-    d = float(verdict.d_ml)
-    choice_vector = {
-        "op": "join", "mode": METAL_METAL_MODE,
-        "vacancies": [{"atom": site_a.atom_idx, "slot": site_a.slot, "metal": elements[0],
-                       "block": a.structure_id},
-                      {"atom": site_b.atom_idx, "slot": site_b.slot, "metal": elements[1],
-                       "block": b.structure_id}],
-        "d_mm": round(d, 6),
-        # The source travels with the number: a declared nucleus and an estimated one are
-        # different claims, and a QC verdict on the second is evidence about the estimate.
-        "d_mm_source": "override" if d_mm is not None else "covalent-radii",
-        "roll_deg": float(roll_deg),
-        "order": "anchor-first",
-        "seed": int(seed),
-    }
+        d = float(verdict.d_ml)
+        choice_vector = {
+            "op": "join", "mode": METAL_METAL_MODE,
+            "vacancies": [{"atom": site_a.atom_idx, "slot": site_a.slot, "metal": elements[0],
+                           "block": a.structure_id},
+                          {"atom": site_b.atom_idx, "slot": site_b.slot, "metal": elements[1],
+                           "block": b.structure_id}],
+            "d_mm": round(d, 6),
+            # The source travels with the number: a declared nucleus and an estimated one are
+            # different claims, and a QC verdict on the second is evidence about the estimate.
+            "d_mm_source": "override" if d_mm is not None else "covalent-radii",
+            "roll_deg": float(roll_deg),
+            "order": "anchor-first",
+            "seed": int(seed),
+        }
 
-    moved_sites = b.sites
-    coords = None
-    if with_geometry:
-        # The N=1 alignment, unchanged.  The moving block's vertex lands at
-        # `metal_a + d * axis_a` with its own axis antiparallel — and a vacancy frame's
-        # origin IS the metal, so what lands there is the second metal.
-        coords, moved_sites = _place_donor_block(
-            b, site_b, site_a, d_ml=d, well_deg=roll_deg, lone_pair=0)
+        moved_sites = b.sites
+        coords = None
+        if with_geometry:
+            # The N=1 alignment, unchanged.  The moving block's vertex lands at
+            # `metal_a + d * axis_a` with its own axis antiparallel — and a vacancy frame's
+            # origin IS the metal, so what lands there is the second metal.
+            coords, moved_sites = _place_donor_block(
+                b, site_b, site_a, d_ml=d, well_deg=roll_deg, lone_pair=0)
 
-    sites = merge_inherited(
-        inherit_sites(a.sites, map_a, consumed=[(site_a.atom_idx, site_a.slot)]),
-        inherit_sites(moved_sites, map_b, consumed=[(site_b.atom_idx, site_b.slot)]),
-    )
+        return _finish(a, product, map_a, map_b, coords=coords, choice_vector=choice_vector,
+                       verdict=verdict, moving=b, moved_sites=moved_sites, anchor=a,
+                       anchor_label="the anchor block",
+                       consumed_moving=[(site_b.atom_idx, site_b.slot)],
+                       consumed_anchor=[(site_a.atom_idx, site_a.slot)])
 
-    geometry, state = None, None
-    if coords is not None:
-        anchor_coords = _coords_of(a, "the anchor block")
-        if anchor_coords is not None:
-            geometry = np.vstack([anchor_coords, coords])
-            symbols = [product.label(i).element for i in product.nodes()]
-            geometry = turn_hydroxyl_h(symbols, geometry, [(i, j) for i, j, _ in product.edges()],
-                                       product.metals())
-            states = refresh_state(sites, geometry, graph=product, symbols=symbols)
-            state = {(s.atom_idx, s.slot): s for s in states}
-
-    return JoinResult(
-        block=BuildingBlock(graph=product, sites=tuple(sites), geometry=geometry,
-                            state=state),
-        atom_map=map_a, choice_vector=choice_vector, strain=verdict.strain,
-        partner_atom_map=map_b, compatibility=verdict)

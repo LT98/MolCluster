@@ -414,7 +414,7 @@ Do not code against these as though they were real; each currently raises. `NotB
 
 *Built since this list was written, and removed from it:* `l2_isomer_tag` / `l3_conformer_id`
 (`identity/isomers.py`, `identity/conformers.py`), `assembly/choice.py`, `assembly/construct.py`,
-and every join in `assembly/join.py` including `join_bridge` and `join_metal_metal` — see
+and every join in `assembly/join.py` including `Bridge` and `MetalMetal` — see
 `CODE_ARCHITECTURE.md` §2.
 
 ```python
@@ -500,9 +500,9 @@ oxo clusters cannot be built without it. It is one scalar per edge, not a genera
 
 **Work** — ✅ the lone-pair well as a Kind-B branch, ✅ recorded in the choice vector and
 ✅ `join`'s `n_metals > 1` guard lifted, which together make a bridged dimer emerge from two
-one-contact joins at 2.673 Å. Also built since: `bridge_compatible` / `join_bridge` (one ligand
+one-contact joins at 2.673 Å. Also built since: `bridge_compatible` / `Bridge` (one ligand
 across two metals in one move), bridging atoms as centres (`bridging_metal_positions`), and the
-declared nucleus (`metal_metal_compatible` / `join_metal_metal`, with `metal_metal_distance`,
+declared nucleus (`metal_metal_compatible` / `MetalMetal`, with `metal_metal_distance`,
 which refuses a named motif rather than guessing a bond order). **Still to build:**
 reconciliation via `place_multicentre` (S3), `check_intercentre` (S6) and multi-metal
 `to_rdkit` (S7). The first two are stubs that raise `NotBuiltYet`; `to_rdkit` still takes one

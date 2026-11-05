@@ -49,7 +49,7 @@ build A, declare victory on the paddlewheel, and discover B when it reaches the 
 | `site_vectors` / `GEOMETRIES` | `geometry/placer.py` | local geometries — and they are generic over *which atom* sits at the centre, which is mechanism B (§4) |
 | `vacancy_sites(idx, origin, directions)` | `sites/model.py` | already takes a bare index, so a **ligand** atom can carry vertices |
 | the denticity-2 branch of `place_mononuclear` | `geometry/placer.py:526` | law-of-cosines two-point alignment, for donors at two different distances |
-| **`join_chelate` / `chelate_reach`** | `assembly/join.py` | **the two-point join already exists** — one ligand across two vertices of *one* metal, with the mismatch absorbed into the bite angle rather than the M–D bonds. M6's µ2 bridge is this operation with the two vertices on *different* metals, and the function says so itself: *"one donor across two METALS is a mu2 bridge and is M6."* |
+| **`Chelate` / `chelate_reach`** | `assembly/join.py` | **the two-point join already exists** — one ligand across two vertices of *one* metal, with the mismatch absorbed into the bite angle rather than the M–D bonds. M6's µ2 bridge is this operation with the two vertices on *different* metals, and the function says so itself: *"one donor across two METALS is a mu2 bridge and is M6."* |
 | `chelate_compatible`'s verdict shape | `assembly/join.py` | strain = mismatch / tolerance, `feasible ⇔ strain ≤ 1`, one policy number in one named constant |
 | `Distance` with `source` / `estimated` | `geometry/distances.py` | a number that carries where it came from — the pattern M–M distances must follow |
 | `BranchTree.refusals` | `assembly/construct.py` | how a failed route says why, instead of being silently absent |
@@ -185,11 +185,11 @@ non-carboxylate, symmetric and mixed-valence.
 | ~~`sites/model.py::perceive`~~ | ✅ **landed (S1)** — every lone pair is stored, `frame` is still lobe 0 byte for byte, and the rest travel under `frame["lone_pairs"]` with no schema change. `perception` bumped to `3` |
 | ~~`sites/frames.py::torsion_wells`~~ | ✅ **landed (S1)** — `_TWO_POINT_MODES` covers chelate and both bridges: a mode whose roll is an *output* of the fit must not branch over it, or it emits siblings with identical coordinates |
 | `sites/model.py::vacancy_sites` | a vacancy offers `mono` only. **Not blocking** — `bridge_compatible` checks the donors' modes, as `chelate_compatible` does — but `compatible` still refuses `mu2` by blaming the vacancy instead of naming `bridge_compatible` |
-| ~~`assembly/join.py::chelate_compatible`~~ | ✅ **landed (S1)** — `bridge_compatible` exists and refuses the same-metal case back, by name, pointing at `join_chelate`. Its verdict is a **distance**, and it is necessary-not-sufficient: qc stays the arbiter |
-| ~~`assembly/join.py::join_chelate`~~ | ✅ **landed (S1)** — `join_bridge` is that body with the two vertices on different metals: one DATIVE per donor to its OWN metal, no bisector slide, both lobes recorded |
+| ~~`assembly/join.py::chelate_compatible`~~ | ✅ **landed (S1)** — `bridge_compatible` exists and refuses the same-metal case back, by name, pointing at `Chelate`. Its verdict is a **distance**, and it is necessary-not-sufficient: qc stays the arbiter |
+| ~~`assembly/join.py::Chelate`~~ | ✅ **landed (S1)** — `Bridge` is that body with the two vertices on different metals: one DATIVE per donor to its OWN metal, no bisector slide, both lobes recorded |
 | ~~`assembly/join.py::join`~~ | ✅ **landed (S1)** — the `n_metals > 1` guard is gone under D20, and `lone_pair=` is a recorded coordinate. A bridged dimer now builds from two one-contact joins at 2.673 Å. `choice_vector` → `cv2` |
 | ~~`geometry/placer.py::place_mononuclear`~~ | ✅ **landed (S4)** — takes `reserve=`, a set of vertex indices no ligand may claim, and `cis_vertices` names the mutually-cis set to hand it. The trans defect is asserted in both directions: 180° by default, 90° reserved. Absent `reserve`, the choice vector is unchanged |
-| ~~`assembly/join.py::compatible`~~ | ✅ **landed (S4)** — vacancy↔vacancy is `join_metal_metal`, and `compatible` now refuses it *by naming that function* rather than by naming a milestone |
+| ~~`assembly/join.py::compatible`~~ | ✅ **landed (S4)** — vacancy↔vacancy is `MetalMetal`, and `compatible` now refuses it *by naming that function* rather than by naming a milestone |
 | `geometry/placer.py::place_multicentre` | **signature settled, body raises.** `Center` and `InterCentreConstraint` (with `metal_metal_bond` and `window()`) exist; `Center.element` is deliberately not always a metal, because a bridging atom is a centre (§4). **`Join` stays named-but-undefined on purpose** — what the placer receives from the join path is S1's output and therefore S3's call, so guessing it now would settle the wrong end first |
 | ~~`geometry/placer.py::GEOMETRIES`~~ | ✅ **landed (S2)** — `bent` at CN 2, taking `angle_deg` and refusing without it. CN 2 is now a Kind-C branch |
 | `geometry/distances.py` | ✅ **`metal_metal_distance` landed (S4)**, and it is still not a table: a named `motif` is **refused** with the two numbers that make the point, and the fallback is a plain covalent-radii sum marked `estimated` (no `DATIVE_LENGTHENING` — an M–M bond is not dative). The *targets* stay curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
@@ -309,7 +309,7 @@ carries — so nothing about a second centre makes the pose undetermined, and th
 output. `choice_vector` bumped to `cv2`: a key over a larger set of coordinates is a different
 key, and that is true even though lobe 0 replays every `cv1` path byte-identically.
 
-**`bridge_compatible` and `join_bridge` (landed third).** One ligand across two vertices of
+**`bridge_compatible` and `Bridge` (landed third).** One ligand across two vertices of
 *different* metals in one move. The verdict keeps `chelate_compatible`'s shape but compares a
 **distance** — the donors' own separation against the separation the two target points require
 — because two vertices on two centres have no common origin to subtend an angle at.
@@ -343,7 +343,7 @@ it checks the donors' modes, as `chelate_compatible` does — so this is not blo
 `compatible` still refuses `mu2` with "the vacancy does not bind it" where it should say that a
 bridge is two contacts on two metals and name `bridge_compatible`.
 
-**The two-point join is not invented here, it is generalised.** `join_chelate` already places
+**The two-point join is not invented here, it is generalised.** `Chelate` already places
 one ligand across two vertices with one rigid move, absorbing the residual into the bite angle
 rather than the M–D bonds; it merely binds both donors to `vacancies[0].atom_idx`. A µ2 bridge
 is the same body with the two vertices on different metals. So the slice is: relax that
@@ -354,7 +354,7 @@ vertex-to-vertex distance.
 
 *Exit:* ✅ the three bridging modes are separately enumerable and reproduce 2.67 / 5.15 /
 5.52 Å **through the assembly path**, not only from the frames; ✅ replay from the emitted
-vector is bit-identical; ✅ `join_chelate`'s own tests pass unchanged, because a chelate is the
+vector is bit-identical; ✅ `Chelate`'s own tests pass unchanged, because a chelate is the
 case where the two vertices happen to share a metal; ✅ a span that cannot reach the vertices
 refuses **by name and with its number**. Still owed: the **whole** paddlewheel and its benzoate
 analogue QC-clean — two bridges build, four need S4's vertex arrangement.
@@ -464,7 +464,7 @@ Two things the slice turned up that its plan did not predict:
 * **Equal `atom_idx` across two blocks is the normal case, not a self-bond.** Every freshly
   built metal block numbers its metal atom 0, so a same-atom guard inside the two-site
   predicate refuses every legitimate dimer. The self-bond question is about the *block*, and
-  `join_metal_metal` is where the blocks are, so the check lives there.
+  `MetalMetal` is where the blocks are, so the check lives there.
 * **`reserve` is kept out of the choice vector when nothing was reserved.** An argument that
   exists must not re-label structures built before it did (ground rule 6 / D19), so a
   saturated build's vector — and therefore its stored identity — is byte-identical.
@@ -691,10 +691,10 @@ S0 battery + decisions ─┬─► S1 mechanism A ──┬─► S3 reconcilia
                                  ✅                S5 routes · S6 qc
 ```
 
-S0, S2 and S4 are closed. S1 built the lone-pair branch, the join coordinate and `join_bridge`;
+S0, S2 and S4 are closed. S1 built the lone-pair branch, the join coordinate and `Bridge`;
 what it has not reached is the whole four-bridge paddlewheel, which needed S4's vertex
 arrangement — **and that is now in hand**: `place_mononuclear(reserve=cis_vertices(...))` hands
-a centre a cis pair to bridge across, and `join_metal_metal` supplies the declared nucleus the
+a centre a cis pair to bridge across, and `MetalMetal` supplies the declared nucleus the
 other route starts from. **Finishing S1 is the next slice**, with S5 available beside it since
 it only needs both routes running.
 

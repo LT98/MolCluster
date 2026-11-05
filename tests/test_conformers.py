@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from mofsbu.assembly.construct import ligand_block, metal_block
-from mofsbu.assembly.join import join
+from mofsbu.assembly.join import Mono, join
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph.from_mol import mol_from_smiles
 from mofsbu.identity.conformers import (
@@ -40,7 +40,7 @@ def built():
             block = metal_block("Fe", 3, cn=6, spin_class="hs")
             for ligand, vertex_slot in ((aqua, 5), (pyridine, slot)):
                 vertex = next(s for s in block.open_vacancies() if s.slot == vertex_slot)
-                block = join(block, ligand, vertex, ligand.open_donors()[0]).block
+                block = join(block, ligand, [vertex], [ligand.open_donors()[0]], mode=Mono()).block
             out[(label, seed)] = block
     return out
 

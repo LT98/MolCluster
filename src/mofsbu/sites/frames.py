@@ -100,7 +100,7 @@ def binding_modes(donor_type: str) -> tuple[BindingMode, ...]:
 
 #: The modes whose pose is fixed by satisfying two constraints at once, so the roll about
 #: the forming bond is an OUTPUT of the fit rather than a coordinate to branch over.
-#: `join_chelate` states the rule for a chelate — donor-donor line onto vertex-vertex line,
+#: `Chelate` states the rule for a chelate — donor-donor line onto vertex-vertex line,
 #: then the roll set by requiring the donor axes to point back at the metal — and a bridge
 #: is the same fit with the two vertices on different metals.  A mode listed here that
 #: branched anyway would emit siblings whose coordinates are identical.

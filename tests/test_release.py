@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from mofsbu.assembly.construct import ligand_block, metal_block
-from mofsbu.assembly.join import join
+from mofsbu.assembly.join import Mono, join
 from mofsbu.assembly.release import ReleaseRefused, release
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph.from_mol import mol_from_smiles
@@ -22,7 +22,7 @@ def tetraaqua():
     oxygens = []
     for k in range(4):
         lig = _water(11 + k)
-        res = join(lig, block, lig.open_donors()[0], block.open_vacancies()[0])
+        res = join(lig, block, [lig.open_donors()[0]], [block.open_vacancies()[0]], mode=Mono())
         oxygens = [res.partner_atom_map[o] for o in oxygens] + [res.atom_map[0]]
         block = res.block
     return block, oxygens
@@ -52,7 +52,8 @@ def test_release_then_rejoin_is_the_same_node():
     block, oxygens = tetraaqua()
     out = release(block, [oxygens[0]])
     lig = _water(99)
-    back = join(lig, out.block, lig.open_donors()[0], out.block.open_vacancies()[0]).block
+    back = join(lig, out.block, [lig.open_donors()[0]], [out.block.open_vacancies()[0]],
+                mode=Mono()).block
     assert identity(back.graph)["l1"] == identity(block.graph)["l1"]
 
 
@@ -60,10 +61,10 @@ def test_a_bridge_is_refused_by_name():
     lig = ligand_block(embed_molecule(mol_from_smiles("[O-]C=O"), seed=7), charge=-1, name="f")
     d = sorted(lig.open_donors(), key=lambda s: s.atom_idx)
     m1 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    first = join(lig, m1, d[0], m1.open_vacancies()[0], lone_pair=1)
+    first = join(lig, m1, [d[0]], [m1.open_vacancies()[0]], mode=Mono(lone_pair=1))
     free = next(s for s in first.block.open_donors() if s.atom_idx == first.atom_map[d[1].atom_idx])
     m2 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    dimer = join(first.block, m2, free, m2.open_vacancies()[0], lone_pair=1).block
+    dimer = join(first.block, m2, [free], [m2.open_vacancies()[0]], mode=Mono(lone_pair=1)).block
     with pytest.raises(ReleaseRefused, match="bridge"):
         release(dimer, [first.atom_map[d[0].atom_idx]])
 

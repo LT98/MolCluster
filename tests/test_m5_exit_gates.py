@@ -9,7 +9,7 @@ which is where they actually have to hold.
 gate 2, and this file meets it with Pt(OH₂)₂Cl₂ — monodentate, buildable, and a genuine
 cis/trans pair. The claim under test is unchanged: near-degenerate configurational isomers
 persist as separate records carrying different choice vectors, and geometric clustering does
-not merge them. The substitution is no longer *forced* — `join_chelate` places a two-point
+not merge them. The substitution is no longer *forced* — `Chelate` places a two-point
 ligand now (`tests/test_join.py`) — so re-deriving this gate on anthrarufin is available work
 rather than blocked work.
 """
@@ -22,7 +22,7 @@ from mofsbu._types import AmbiguousSpecError
 from mofsbu.assembly.choice import ChoiceVector
 from mofsbu.assembly.construct import (
     construct, enumerate_constructions, ligand_block, metal_block, resolve_geometry)
-from mofsbu.assembly.join import join
+from mofsbu.assembly.join import Mono, join
 from mofsbu.assembly.persist import store_block, store_construction
 from mofsbu.geometry.embed import embed_molecule
 from mofsbu.graph.from_mol import mol_from_smiles
@@ -56,7 +56,7 @@ def occupy(metal, pairs):
     block = metal
     for slot, ligand in pairs:
         vertex = next(s for s in block.open_vacancies() if s.slot == slot)
-        block = join(block, ligand, vertex, ligand.open_donors()[0]).block
+        block = join(block, ligand, [vertex], [ligand.open_donors()[0]], mode=Mono()).block
     return block
 
 
@@ -197,8 +197,8 @@ def test_a_block_without_coordinates_is_not_stored_as_though_it_had_them(reg, pa
     aqua = parts["aqua"]
     mono = occupy(platinum(), [(0, aqua)])
     second = metal_block("Cu", 2, cn=4, geometry="square_planar", spin_class="ls")
-    graph_only = join(mono, second, mono.open_donors()[0] if mono.open_donors() else
-                      next(s for s in mono.sites if not s.is_vacancy),
-                      second.open_vacancies()[0], with_geometry=False).block
+    graph_only = join(mono, second, [mono.open_donors()[0] if mono.open_donors() else
+                      next(s for s in mono.sites if not s.is_vacancy)],
+                      [second.open_vacancies()[0]], mode=Mono(), with_geometry=False).block
     with pytest.raises(ValueError, match="would invent them"):
         store_block(reg, graph_only, choice_vector={"op": "join"})

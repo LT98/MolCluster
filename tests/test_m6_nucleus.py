@@ -26,7 +26,7 @@ from mofsbu._types import AmbiguousSpecError
 from mofsbu.assembly.construct import (
     enumerate_constructions, ligand_block, metal_block)
 from mofsbu.assembly.join import (
-    IncompatibleJoin, compatible, join_metal_metal, metal_metal_compatible)
+    IncompatibleJoin, MetalMetal, compatible, join, metal_metal_compatible)
 from mofsbu.geometry._linalg import angle_between
 from mofsbu.geometry.distances import metal_metal_distance
 from mofsbu.geometry.embed import embed_molecule
@@ -60,8 +60,7 @@ def aqua() -> LigandPlacement:
 def dimer():
     """A declared Cu2 nucleus: two octahedral Cu(II), bonded vertex to vertex."""
     a, b = cu(), cu()
-    return join_metal_metal(a, b, vacancies_of(a)[0], vacancies_of(b)[0],
-                            d_mm=CU_CU).block
+    return join(a, b, [vacancies_of(a)[0]], [vacancies_of(b)[0]], mode=MetalMetal(d_mm=CU_CU)).block
 
 
 # --- the distance is declared, and nothing invents one -----------------------------
@@ -109,7 +108,7 @@ def test_the_monodentate_verdict_refuses_two_vertices_and_names_what_does_join_t
     a, b = cu(), cu()
     verdict = compatible(vacancies_of(a)[0], vacancies_of(b)[0])
     assert not verdict.feasible
-    assert "join_metal_metal" in verdict.reason
+    assert "MetalMetal" in verdict.reason
 
 
 def test_two_vertices_on_two_blocks_are_a_feasible_metal_metal_pair():
@@ -181,11 +180,11 @@ def test_no_vertex_of_the_dimer_is_occluded_by_the_other_metal(dimer):
 
 def test_the_choice_vector_records_the_distance_and_where_the_number_came_from():
     a, b = cu(), cu()
-    declared = join_metal_metal(a, b, vacancies_of(a)[0], vacancies_of(b)[0], d_mm=CU_CU)
+    declared = join(a, b, [vacancies_of(a)[0]], [vacancies_of(b)[0]], mode=MetalMetal(d_mm=CU_CU))
     assert declared.choice_vector["d_mm"] == CU_CU
     assert declared.choice_vector["d_mm_source"] == "override"
     c, d = cu(), cu()
-    estimated = join_metal_metal(c, d, vacancies_of(c)[0], vacancies_of(d)[0])
+    estimated = join(c, d, [vacancies_of(c)[0]], [vacancies_of(d)[0]], mode=MetalMetal())
     assert estimated.choice_vector["d_mm_source"] == "covalent-radii"
 
 
@@ -193,16 +192,16 @@ def test_a_block_cannot_bond_to_itself(dimer):
     a = cu()
     sites = vacancies_of(a)
     with pytest.raises(IncompatibleJoin) as exc:
-        join_metal_metal(a, a, sites[0], sites[1])
+        join(a, a, [sites[0]], [sites[1]], mode=MetalMetal())
     assert "same block" in str(exc.value)
 
 
 def test_a_roll_about_the_new_axis_leaves_the_separation_alone():
     a, b = cu(), cu()
-    straight = join_metal_metal(a, b, vacancies_of(a)[0], vacancies_of(b)[0], d_mm=CU_CU)
+    straight = join(a, b, [vacancies_of(a)[0]], [vacancies_of(b)[0]], mode=MetalMetal(d_mm=CU_CU))
     c, d = cu(), cu()
-    rolled = join_metal_metal(c, d, vacancies_of(c)[0], vacancies_of(d)[0],
-                              d_mm=CU_CU, roll_deg=45.0)
+    rolled = join(c, d, [vacancies_of(c)[0]], [vacancies_of(d)[0]],
+                  mode=MetalMetal(d_mm=CU_CU, roll_deg=45.0))
     for result in (straight, rolled):
         xyz = np.asarray(result.block.geometry)
         assert float(np.linalg.norm(xyz[0] - xyz[1])) == pytest.approx(CU_CU)
