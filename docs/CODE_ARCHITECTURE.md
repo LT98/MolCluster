@@ -37,7 +37,8 @@ charge, spin — travels with it in a `methods` row.
 | ↳ `execute_run` | the only place the worker pool is built — CLI and page share it. `plan_workers` divides the declared workers between the build queue and the relax queue (spawn, never fork: CUDA) | ✅ |
 | ↳ `estimate` | the same enumeration with no registry — what the builder page shows before you submit | ✅ |
 | ↳ `grow` tasks | `spec.pathways`: the rung below each product, and the `join` between them. Under `co_ligand_counts: range` (D26) a co-ligand is a step too (reagent = the `co_ligand` task's free species) and no rung leaves more than `co_ligand_window` vertices empty, so a metal/CN's seeds form one ladder rooted at the lowest in-window co-ligand state — never the bare metal. `MAX_PATHWAY_TASKS` cuts the walk and reports the uncapped size | ✅ |
-| `config.py` | Data root, machine profile, device, ML model — all **declared, never detected** | ✅ |
+| `config.py` | Data root, machine profile, device, ML model, memory floors — all **declared, never detected** | ✅ |
+| `headroom.py` | `shortfall(gpu=)`: free RAM / device memory against the declared floors, asked by `runner.work` before every claim; a shortfall leaves the task pending | ✅ |
 | `versions.py` | `ALGO_VERSIONS` — pinned recipe versions (ground rule 6) | ✅ |
 | **graph/** | | |
 | `graph/_types.py` | `TypedGraph`, `NodeLabel`, `EdgeType{COVALENT,DATIVE,METAL_METAL}` | ✅ |

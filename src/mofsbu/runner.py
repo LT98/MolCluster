@@ -45,8 +45,8 @@ from mofsbu.registry import (
 from mofsbu.registry.jobs import (
     add_task, cancel_requested, claim_task, complete_task, create_run, fail_task,
     finish_run,
-    outcome_summary, set_diagnostics, sweep_interrupted, task_counts, touch_run,
-    release_task, waiting_on_live_work,
+    has_pending, outcome_summary, set_diagnostics, sweep_interrupted, task_counts,
+    touch_run, release_task, waiting_on_live_work,
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
@@ -1685,14 +1685,39 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
     of exiting.  That is what a relax worker needs and a build worker does not — relax
     tasks are queued BY the build tasks as they finish, so an empty relax queue early in
     a run means "not yet", while an empty build queue means "never again".
+
+    Before each claim the worker asks `headroom.shortfall`; while memory is under a
+    declared floor it claims nothing and waits, so the task stays pending rather than
+    failing part-way.
     """
+    from mofsbu.energy.relax import MODE_FIDELITY
+    from mofsbu.headroom import shortfall
+
+    feeds_device = (kinds is None or "relax" in kinds) and MODE_FIDELITY.get(
+        spec.run_mode) in (Fidelity.ML, Fidelity.DFT)
     done = 0
     idle = poll
+    held_back: str | None = None
     while limit is None or done < limit:
         if cancel_requested(reg, run_id):
             # Cooperative: the task in hand has already finished, and nothing new is
             # claimed.  Everything computed so far is in the registry.
             break
+        why = shortfall(gpu=feeds_device)
+        if why is not None and has_pending(reg, run_id, kinds=kinds,
+                                           exclude_kinds=exclude_kinds):
+            if held_back is None:             # once per hold, not once per poll
+                print(f"mofsbu run {run_id}: holding back claims — {why}", flush=True)
+            held_back = why
+            touch_run(reg, run_id)        # nothing is claimed, so the heartbeat is the proof
+            reg.conn.commit()
+            time.sleep(idle)
+            idle = min(idle * 2, MAX_IDLE_POLL)
+            continue
+        if held_back is not None:
+            print(f"mofsbu run {run_id}: memory back above the floor, claiming again",
+                  flush=True)
+            held_back = None
         task = claim_task(reg, run_id, kinds=kinds, exclude_kinds=exclude_kinds)
         if task is None:
             # Waiting backs off: every idle poll is a read on the shared database, and

@@ -150,6 +150,36 @@ def device_note() -> str:
         return "device=cpu  (set MOFSBU_DEVICE=cuda to use a GPU)"
     return f"device={device}"
 
+
+# ── headroom floors: declared, never detected ────────────────────────────────
+# A worker that would start a task with less than this free leaves it pending instead
+# (`headroom.shortfall`, asked before every claim).  Unset or 0: nothing is checked.
+
+
+def _floor_gib(var: str) -> float:
+    value = os.environ.get(var, "").strip()
+    if not value:
+        return 0.0
+    try:
+        floor = float(value)
+    except ValueError:
+        raise ValueError(f"{var}={value!r} is not a number of GiB") from None
+    if not floor >= 0:
+        raise ValueError(f"{var}={value!r} must be >= 0 GiB")
+    return floor
+
+
+def min_free_ram_gib() -> float:
+    """`MOFSBU_MIN_FREE_RAM_GIB`: claim nothing while less system RAM than this is free."""
+    return _floor_gib("MOFSBU_MIN_FREE_RAM_GIB")
+
+
+def min_free_vram_gib() -> float:
+    """`MOFSBU_MIN_FREE_VRAM_GIB`: a worker feeding `compute_device()` claims nothing while
+    less device memory than this is free."""
+    return _floor_gib("MOFSBU_MIN_FREE_VRAM_GIB")
+
+
 # ── which ML potential serves the ML rung: declared, never guessed ───────────
 # There is more than one MACE foundation model and they are NOT interchangeable.
 # MACE-MP-0 is trained on Materials Project relaxations and is blind to formal charge

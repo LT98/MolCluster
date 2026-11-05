@@ -598,5 +598,5 @@ Where the slices touch: `runner._execute_relax` (E1); `energy/backends.backend_f
 | The L0 oxidation state is fiction | spin density disagrees | `oxidation_state_mismatch`, refused, never priced |
 | Hydration comparisons ride on missing entropy | a `hydration_change` step decides a route | caveat until 5d exists |
 | The MACE-MH head is charge-blind | E-MH step 0 | MH relaxes neutral species only; OMOL-0 keeps the charged ones |
-| One GPU, three tenants | a DFT job out of memory while MACE or the local LLM server holds the card | DFT runs exclusively; the queue declares it (architecture invariant 3: declared, never detected) |
+| One GPU, three tenants | a DFT job out of memory while MACE or the local LLM server holds the card | DFT runs exclusively; the queue declares it (architecture invariant 3: declared, never detected). Workers also check declared memory floors (`MOFSBU_MIN_FREE_RAM_GIB`, `MOFSBU_MIN_FREE_VRAM_GIB`) before every claim and leave a task pending rather than start it short of memory |
 | Dropping xTB removes the screening continuum | xTB retired before a replacement is benchmarked | §3a: keep it as the continuum provider until one is |

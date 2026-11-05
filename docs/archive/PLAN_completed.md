@@ -316,6 +316,18 @@ built, and what the building turned up that the diagnosis had not.
   0.08–0.24 eV on four deprotonated bis-THQ species whose DFT minimum is a ligand radical (Ni spin
   ≈ 0.9). The two relaxers are not separated; #132's gap was a bad construct (#69). `dft.py` loads
   cuTENSOR (without it, UKS gradients ran out of 20 GB from ~30 atoms) and `relax` takes `on_step`.
+- *(rev 58)* **A worker short of memory leaves the task pending instead of failing it.**
+  Two declared floors, `MOFSBU_MIN_FREE_RAM_GIB` and `MOFSBU_MIN_FREE_VRAM_GIB` (unset: nothing is
+  read). `headroom.shortfall` compares free RAM (`MemAvailable`) and free memory on
+  `MOFSBU_DEVICE` (plus what this process's torch and CuPy pools hold unused) with them, and
+  `runner.work` asks it before every claim. Under a floor the worker claims nothing, prints the
+  reason once, keeps the run's heartbeat and backs off; the task stays pending for it or another
+  worker. The VRAM floor applies only to workers that relax at ML or DFT fidelity. A floor that is
+  declared but cannot be measured is refused, not skipped. `registry.jobs.has_pending` factored
+  out of `waiting_on_live_work`. Motivation: CUDA out-of-memory failures when relaxation, DFT and
+  the local LLM server share a card (`WORKPLAN_energy.md` risk "One GPU, three tenants"). Not
+  covered: the check is a snapshot, not a reservation, so two workers can both see room for one
+  task, and a floor above the card's total memory holds a worker indefinitely.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
