@@ -20,12 +20,12 @@ contract does not change when `pathways` learns to compose several (workplan M7 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from mofsbu._types import Fidelity, MofsbuError, ReferenceSchemeError
 from mofsbu.energy.reference import (
-    Term, balance_for_terms, check_balance, check_reference_quality, energy_for_terms,
-    quality_for_terms, reaction_balanced_energy, reaction_terms,
+    Term, balance_for_terms, energy_for_terms, quality_for_terms, reaction_terms,
 )
 from mofsbu.identity import hill_formula
 
@@ -70,6 +70,40 @@ def _step(reaction_id: int | None) -> dict[str, Any]:
             "all_converged": None, "terms": [], "can_price": False, "why_not": None}
 
 
+def _price(reg: Any, step: dict[str, Any], terms: Callable[[], tuple[Term, ...]], *,
+           subject: str, min_fidelity: Fidelity, solvent: str | None) -> None:
+    """Fill `step` with the diagnosis and, when the equation allows it, dE.
+
+    The diagnosis comes first, so it is attached whether or not a number follows.
+    `terms` is called inside each `try`, so a failure reading them is a reason, not a raise.
+    """
+    try:
+        quality = quality_for_terms(reg, terms(), medium=solvent)
+        step["isodesmic"] = quality.isodesmic
+        step["caveats"] = [i.code for i in quality.issues]
+    except REPORTABLE:
+        pass
+    try:
+        balance = balance_for_terms(reg, terms())
+        if not balance.balanced:
+            step["why_not"] = balance.describe()
+        else:
+            energy = energy_for_terms(reg, terms(), fidelity=None, solvent=solvent,
+                                      strict=False, subject=subject)
+            if energy.fidelity < min_fidelity:
+                step["why_not"] = (f"best available is {energy.fidelity.name}; needs "
+                                   f"{min_fidelity.name} or better")
+            else:
+                step.update(dE=energy.dE, fidelity=int(energy.fidelity),
+                            fidelity_name=energy.fidelity.name,
+                            method=energy.method.describe(),
+                            isodesmic=energy.quality.isodesmic,
+                            caveats=[i.code for i in energy.quality.issues],
+                            all_converged=energy.all_converged, can_price=True)
+    except REPORTABLE as exc:
+        step["why_not"] = str(exc)
+
+
 def price_reaction(reg: Any, reaction_id: int, *,
                    min_fidelity: Fidelity = Fidelity.ML,
                    solvent: str | None = None) -> dict[str, Any]:
@@ -86,35 +120,8 @@ def price_reaction(reg: Any, reaction_id: int, *,
     step = _step(reaction_id)
     step["terms"] = _terms(reg, reaction_id)
 
-    # The diagnosis first, so it is attached whether or not a number follows.
-    try:
-        quality = check_reference_quality(reg, reaction_id, medium=solvent)
-        step["isodesmic"] = quality.isodesmic
-        step["caveats"] = [i.code for i in quality.issues]
-    except REPORTABLE:
-        pass
-
-    try:
-        balance = check_balance(reg, reaction_id)
-        if not balance.balanced:
-            step["why_not"] = balance.describe()
-        else:
-            energy = reaction_balanced_energy(
-                reg, reaction_id, fidelity=None, solvent=solvent, strict=False)
-            if energy.fidelity < min_fidelity:
-                step["why_not"] = (
-                    f"best available is {energy.fidelity.name}; needs "
-                    f"{min_fidelity.name} or better")
-            else:
-                step.update(
-                    dE=energy.dE, fidelity=int(energy.fidelity),
-                    fidelity_name=energy.fidelity.name,
-                    method=energy.method.describe(),
-                    isodesmic=energy.quality.isodesmic,
-                    caveats=[i.code for i in energy.quality.issues],
-                    all_converged=energy.all_converged, can_price=True)
-    except REPORTABLE as exc:
-        step["why_not"] = str(exc)
+    _price(reg, step, lambda: reaction_terms(reg, reaction_id),
+           subject=f"reaction {reaction_id}", min_fidelity=min_fidelity, solvent=solvent)
 
     return {"reaction_id": reaction_id, "kind": row["kind"], "depth": row["depth"],
             "note": row["note"] or "", "steps": [step],
@@ -232,32 +239,8 @@ def _derived(reg: Any, target: Any, a: Any, b: Any, recorded: int | None, *,
     step["terms"] = [{"structure_id": t.structure_id, "stoich": t.stoich,
                       "role": t.role, "side": t.side, "label": t.label} for t in terms]
     subject = f"{a['display_label']} + {b['display_label']}"
-    try:
-        quality = quality_for_terms(reg, terms, medium=solvent)
-        step["isodesmic"] = quality.isodesmic
-        step["caveats"] = [i.code for i in quality.issues]
-    except REPORTABLE:
-        pass
-    try:
-        balance = balance_for_terms(reg, terms)
-        if not balance.balanced:
-            # The formula index proposed it; the graphs are what decide.
-            step["why_not"] = balance.describe()
-        else:
-            energy = energy_for_terms(reg, terms, fidelity=None, solvent=solvent,
-                                      strict=False, subject=subject)
-            if energy.fidelity < min_fidelity:
-                step["why_not"] = (f"best available is {energy.fidelity.name}; needs "
-                                   f"{min_fidelity.name} or better")
-            else:
-                step.update(dE=energy.dE, fidelity=int(energy.fidelity),
-                            fidelity_name=energy.fidelity.name,
-                            method=energy.method.describe(),
-                            isodesmic=energy.quality.isodesmic,
-                            caveats=[i.code for i in energy.quality.issues],
-                            all_converged=energy.all_converged, can_price=True)
-    except REPORTABLE as exc:
-        step["why_not"] = str(exc)
+    _price(reg, step, lambda: terms, subject=subject, min_fidelity=min_fidelity,
+           solvent=solvent)
 
     return {"origin": "inferred", "recorded_as": recorded,
             "parts": [{"structure_id": int(a["id"]), "stoich": 1,

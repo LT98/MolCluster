@@ -143,7 +143,7 @@ Geometry optimisation — the caller-facing half of the energy layer (M7).
 | `mode_status(ml_model) -> dict[str, dict[str, Any]]`* | `available_modes` plus the reason, for a UI that has to explain a disabled option. | `runner`, `ui.builder` |
 | `ml_model_status() -> dict[str, dict[str, Any]]`* | Both ML foundation models, side by side, for the UI's model picker. | `ui.builder` |
 
-### `routes` (269 lines)
+### `routes` (252 lines)
 
 What one provenance edge costs, and why it sometimes cannot be said.
 
