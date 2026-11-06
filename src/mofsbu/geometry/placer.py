@@ -55,6 +55,7 @@ from mofsbu.geometry._linalg import (
 )
 from mofsbu.geometry.embed import coordinates
 from mofsbu.geometry.qc import QCReport, clash_limit, qc
+from mofsbu.geometry.twist import twist_to_bite
 from mofsbu.sites.frames import BindingMode, SiteFrame, site_frame, torsion_wells
 
 # Ideal metal-donor distances, angstrom.  This table is now the M-O BASE of the model in
@@ -274,6 +275,37 @@ def bridging_metal_positions(mol: Chem.Mol, atom_idx: int, conf=None, *, geometr
 # itself, which is a placement bug that shows up only as a pile of clashes downstream.
 IDEAL_BITE_ANGLE = 82.0
 BITE_ANGLE_RANGE = (55.0, 115.0)
+
+
+def _span(d1: float, d2: float, angle_deg: float) -> float:
+    """Donor-donor distance for two donors at `d1`, `d2` that subtend `angle_deg`."""
+    return math.sqrt(d1 * d1 + d2 * d2 - 2.0 * d1 * d2 * math.cos(math.radians(angle_deg)))
+
+
+def twist_chelate(mol: Chem.Mol, donor_idxs: Sequence[int], d1: float, d2: float,
+                  target: float) -> tuple[Chem.Mol, list[dict]]:
+    """`mol` twisted so its two donors span a bite in `BITE_ANGLE_RANGE`, and the twists.
+
+    The rigid embed decides whether a chelate can reach (#15): en embeds anti and bipy
+    trans, and neither spans a cis pair. When the donors at `d1`, `d2` from the metal
+    already subtend a bite in range, `mol` comes back unchanged with `[]`, so every
+    chelate that fitted is placed exactly as before.  Otherwise `geometry.twist` turns the
+    bonds between the donors toward a donor-donor distance of `target`, and a copy of
+    `mol` with the twisted conformer comes back.  `[]` again if no twist fits.
+    """
+    xyz = coordinates(mol)
+    d_dd = float(np.linalg.norm(xyz[donor_idxs[0]] - xyz[donor_idxs[1]]))
+    lo, hi = (_span(d1, d2, a) for a in BITE_ANGLE_RANGE)
+    if lo <= d_dd <= hi:
+        return mol, []
+    xyz, twists = twist_to_bite(mol, xyz, donor_idxs, target, window=(lo, hi))
+    if not twists:
+        return mol, []
+    out = Chem.Mol(mol)
+    conf = out.GetConformer()
+    for i, position in enumerate(xyz):
+        conf.SetAtomPosition(i, position.tolist())
+    return out, twists
 
 
 # The orientation grids.  These numbers are part of the stored recipe: an index only
@@ -765,6 +797,17 @@ def place_mononuclear(
             p_donors = np.array([f.origin for f in frames])
             d_oo = float(np.linalg.norm(p_donors[1] - p_donors[0]))
             d1, d2 = dists[0].value, dists[1].value
+            # A bite the rigid embed cannot give (en anti, bipy trans) is twisted into
+            # one (#15); a ligand that already fits is left exactly as it was.
+            mol, twists = twist_chelate(mol, lig.donor_idxs, d1, d2,
+                                        float(np.linalg.norm(assigned[0] - assigned[1])))
+            if twists:
+                conf, xyz = mol.GetConformer(), coordinates(mol)
+                frames = [site_frame(mol, idx, dtype, conf, well=0)
+                          for idx, dtype in zip(lig.donor_idxs, lig.donor_types,
+                                                strict=True)]
+                p_donors = np.array([f.origin for f in frames])
+                d_oo = float(np.linalg.norm(p_donors[1] - p_donors[0]))
             bisector = _unit(assigned.mean(axis=0))
             normal = np.cross(_unit(assigned[0]), _unit(assigned[1]))
             if float(np.linalg.norm(normal)) < 1e-6:
@@ -800,6 +843,9 @@ def place_mononuclear(
                             "donors": list(lig.donor_idxs), "bite_angle_deg": round(bite, 1),
                             "donor_donor_A": round(d_oo, 3),
                             "distances": [x.to_dict() for x in dists]})
+            if twists:
+                # Only when twisted, so an untwisted chelate keeps its choice vector.
+                choices[-1]["twist"] = twists
         else:
             p_donors = np.array([f.origin for f in frames])
             centroid = xyz.mean(axis=0)

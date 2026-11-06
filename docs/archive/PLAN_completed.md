@@ -310,6 +310,16 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
+  rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
+  span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the
+  single bonds on the path between the two donors: sp³–sp³ in 120° steps, anything touching an
+  sp² atom in 180° (a 30° grid as fallback), keeping the clash-free twist whose donor–donor
+  distance is closest to the vertices. Only a chelate whose rigid bite is outside
+  `BITE_ANGLE_RANGE` is twisted, and the twists are recorded in its choice vector. Ni/octahedral
+  construct runs: en 1 → 7 complexes, bipy 1 → 6; oxalate gains its 5-ring O,O′ chelate. Not
+  covered: the grow-step `Chelate` join (still rigid), and a third donor (dien, EDTA) that is not
+  bound. `ALGO_VERSIONS["placement"]` 4 → 5.
 - *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
   ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
   on #132). `placer.turn_hydroxyl_h` turns it about its X–O bond until it is ≥ 2.4 Å from every

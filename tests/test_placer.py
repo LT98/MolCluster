@@ -366,3 +366,54 @@ def test_a_hydroxyl_aimed_at_the_metal_is_turned_away():
     assert np.allclose(out[:4], xyz[:4]), "only the H may move"
     # The same H on a metal-bound O (a coordinated water's) is left alone.
     assert np.allclose(turn_hydroxyl_h(sym, xyz, bonds + [(0, 3)], [0]), xyz)
+
+
+# ── a chelate that has to twist to reach (#15) ───────────────────────────────
+
+def _chelate(smiles: str, name: str) -> LigandPlacement:
+    """The first chelate pocket of a free ligand, as embedded."""
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    sites = perceive(mol)
+    by_idx = {s.atom_idx: s for s in sites}
+    pocket = chelate_pockets(mol, sites)[0]
+    return LigandPlacement(mol=mol, donor_idxs=tuple(pocket.donors),
+                           donor_types=tuple(by_idx[i].donor_type for i in pocket.donors),
+                           mode=BindingMode.CHELATE, name=name)
+
+
+@pytest.mark.parametrize("name,smiles", [("en", "NCCN"), ("bipy", "c1ccc(nc1)-c1ccccn1"),
+                                         ("acac", "CC(=O)C=C([O-])C")])
+def test_a_chelate_embedded_out_of_reach_is_twisted_into_it(name, smiles):
+    """en embeds anti and bipy trans: rigid, their donors land the backbone on the metal."""
+    result = place_mononuclear("Ni", [_chelate(smiles, name)] + [aqua() for _ in range(4)],
+                               geometry="octahedral")
+    assert result.ok, str(result.report)
+    assert result.choice_vector["ligands"][0]["twist"], "the fit came from a twist"
+    a, b = result.donor_idxs[:2]
+    m = result.coords[result.metal_idx]
+    v1, v2 = result.coords[a] - m, result.coords[b] - m
+    angle = np.degrees(np.arccos(v1 @ v2 / (np.linalg.norm(v1) * np.linalg.norm(v2))))
+    assert 55 < angle < 115, angle
+
+
+def test_bipy_is_twisted_cis_and_stays_planar():
+    from mofsbu.geometry.embed import coordinates
+    from mofsbu.geometry.twist import twist_to_bite
+
+    lig = _chelate("c1ccc(nc1)-c1ccccn1", "bipy")
+    xyz, twists = twist_to_bite(lig.mol, coordinates(lig.mol), lig.donor_idxs, 2.9,
+                                window=(1.9, 3.5))
+    assert [t["deg"] for t in twists] == [180.0]
+    n1, n2 = lig.donor_idxs
+    c1, c2 = twists[0]["bond"]
+    b1, b2 = xyz[c1] - xyz[n1], xyz[c2] - xyz[c1]
+    b3 = xyz[n2] - xyz[c2]
+    n_a, n_b = np.cross(b1, b2), np.cross(b2, b3)
+    cos = n_a @ n_b / (np.linalg.norm(n_a) * np.linalg.norm(n_b))
+    assert cos > 0.99, "N-C-C-N is syn and planar"
+
+
+def test_a_chelate_that_already_fits_is_not_moved():
+    """THQ's pocket fits as embedded, so its pose and choice vector are what they were."""
+    result = place_mononuclear("Zn", [thq_chelate(), aqua(), aqua()], geometry="tetrahedral")
+    assert "twist" not in result.choice_vector["ligands"][0]
