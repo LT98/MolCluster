@@ -320,7 +320,11 @@ built, and what the building turned up that the diagnosis had not.
   `geometry.wrap`: distance geometry with a stand-in metal bonded to the donors, the other
   vertices as fixed points, the wrong hand discarded, then MMFF with the donors pinned. Every
   arrangement of dien, tren and EDTA κ5/κ6 passes QC on Ni(II)/octahedral; fac terpy is refused
-  (the only fit puckers its rings).
+  (the only fit puckers its rings). Spec v10 adds `max_denticity` (default 6; specs before v10
+  read 2 and plan exactly as before): under `chelate` binding the planner adds each donor set as
+  a kind and queues one `place` per arrangement. Ni/dien: fac and mer both built; Ni/EDTA: all 20
+  arrangements κ3–κ6 built. fac and mer land as two geometries of one structure until B2 tags L2.
+  The builder page posts v1 and so stays at pairs (`gui/04_limits.md`).
 - *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
   rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
   span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the

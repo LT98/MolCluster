@@ -34,6 +34,13 @@ builder page:
   open. That is the S4 capability reaching the GUI **as behaviour rather than as a
   control**, and it is why co-ligand ladder runs stopped producing `chelate_cannot_span`.
 
+## Ligands of three or more donors are spec-file only
+
+A v10 spec's `max_denticity` (default 6) lets a ligand bind one metal through 3+ donors
+(dien, tren, EDTA), each arrangement planned as its own placement (fac and mer are two). The
+builder page posts `spec_version: 1`, which migrates to `max_denticity: 2`, so the page plans
+pairs only and has no control for it. Edit the spec file to use it.
+
 ## Construction routes are spec-file only
 
 A v9 spec can carry `routes` — explicit join-by-join constructions, which is how a

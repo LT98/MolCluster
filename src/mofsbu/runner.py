@@ -35,7 +35,7 @@ from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import (
     GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit,
-    twist_chelate_for)
+    twist_chelate_for, vertex_arrangements)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
@@ -51,7 +51,7 @@ from mofsbu.registry.jobs import (
 )
 from mofsbu.sites.frames import BindingMode
 from mofsbu.sites.model import (
-    find_pockets, perceive, shifting_pocket_donors, vacancy_sites,
+    donor_sets, find_pockets, perceive, shifting_pocket_donors, vacancy_sites,
 )
 from mofsbu.sites.protomers import enumerate_protomers
 from mofsbu.sites.state import refresh_state
@@ -200,6 +200,29 @@ def _parent_payloads(payload: dict[str, Any], co_ligand: str | None = None,
     return out
 
 
+def _n_arrangements(payload: dict[str, Any]) -> int | None:
+    """How many isomers a planned sphere's ligands of 3+ donors give it (#15).
+
+    None when it has no such ligand, so nothing about its tasks changes.  Computed from
+    the payload alone, the same way `_build_sphere` will place it: the same ligands by
+    denticity, rings and donor types, and the same reserved vertices.
+    """
+    ligands = [LigandPlacement(mol=None, donor_idxs=tuple(c["donors"]),
+                               donor_types=tuple(c.get("donor_types", ("",) * c["denticity"])),
+                               mode=BindingMode(c["mode"]), name=f"{c['molecule']}{c['label']}",
+                               rings=tuple(tuple(r) for r in c.get("rings", ())))
+               for c in payload["components"] for _ in range(int(c["count"]))]
+    if not any(lig.denticity >= 3 for lig in ligands):
+        return None
+    ligands += [LigandPlacement(mol=None, donor_idxs=(0,), donor_types=("",), name="co")
+                for _ in range(payload["n_co"])]
+    cn = int(payload["cn"])
+    n_vacant = cn - sum(lig.denticity for lig in ligands)
+    reserve = (reserve_for(payload["geometry"], cn, n_vacant, ligands)
+               if n_vacant >= 2 else None)
+    return vertex_arrangements(payload["geometry"], cn, ligands, reserve=reserve)
+
+
 def _co_component(smiles: str) -> dict[str, Any]:
     """The co-ligand as the component a `grow` step adds: one monodentate copy."""
     return {"co_ligand": smiles, "denticity": 1, "count": 1,
@@ -259,6 +282,18 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
                     "donors": list(donors), "mode": mode,
                     "denticity": len(donors),
                 })
+            if "chelate" in spec.binding:
+                # Three or more donors (#15); `rings` and `donor_types` are what the
+                # placer needs to tell one arrangement from another.
+                for s in donor_sets(mol, sites, max_denticity=spec.max_denticity):
+                    pos = {a: i for i, a in enumerate(s.donors)}
+                    kinds.append({
+                        "molecule": mol_ix, "selection": list(proto.representative),
+                        "charge": proto.charge, "label": proto.label,
+                        "donors": list(s.donors), "mode": BindingMode.CHELATE.value,
+                        "denticity": s.denticity, "donor_types": list(s.donor_types),
+                        "rings": [[pos[a], pos[b]] for a, b in s.rings],
+                    })
 
     # Under `range` the co-ligand is a reagent a step consumes, so it is built and
     # relaxed like a free ligand — without it a co-ligand step balances one water short.
@@ -326,11 +361,19 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
                 co_counts = range(n_co, lowest - 1, -1) if vary_co else (n_co,)
                 for geometry in candidates:
                     for k in co_counts:
-                        requested.append(place({
-                            "metal": metal_ix, "components": combo,
-                            "n_co": k, "cn": cn, "geometry": geometry,
-                            "n_vacant": n_vacant + n_co - k,
-                        }))
+                        payload = {"metal": metal_ix, "components": combo,
+                                   "n_co": k, "cn": cn, "geometry": geometry,
+                                   "n_vacant": n_vacant + n_co - k}
+                        n_arr = _n_arrangements(payload)
+                        if n_arr is None:
+                            requested.append(place(payload))
+                        elif not n_arr:
+                            skip(f"no arrangement on {geometry} keeps every chelate ring cis",
+                                 "a ligand of three or more donors cannot sit on this "
+                                 "polyhedron with the vertices it leaves")
+                        for a in range(n_arr or 0):
+                            # One task per isomer (fac, mer, Delta, Lambda), #15.
+                            requested.append(place({**payload, "arrangement": a}))
 
     if spec.pathways and spec.metals:
         step_co = spec.co_ligand if vary_co else None
@@ -941,7 +984,8 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
             lone_pair=int(comp.get("lone_pair", 0)),
             # The placer's own pose coordinates (its choice vector); absent = search.
             torsion_well=int(comp.get("torsion_well", 0)),
-            azimuth_step=comp.get("azimuth_step"), oop_step=comp.get("oop_step"))
+            azimuth_step=comp.get("azimuth_step"), oop_step=comp.get("oop_step"),
+            rings=tuple(tuple(r) for r in comp.get("rings", ())))
             for _ in range(int(comp["count"]))]
     name = "+".join(parts)
     molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
@@ -984,7 +1028,8 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
         # rebuilt as a smaller, differently-shaped complex.
         result = place_mononuclear(metal.symbol, ligands,
                                    geometry=payload["geometry"],
-                                   cn=cn_asked, reserve=reserve)
+                                   cn=cn_asked, reserve=reserve,
+                                   arrangement=int(payload.get("arrangement", 0)))
     except ValueError as exc:
         # The placer refusing a request is an ANSWER, not a breakage: a bidentate
         # ligand cannot span a linear two-coordinate centre, and saying so is the

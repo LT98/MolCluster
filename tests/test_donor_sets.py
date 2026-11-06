@@ -56,3 +56,54 @@ def test_a_carboxylate_contributes_one_oxygen():
 def test_the_cap_caps():
     assert sizes(EDTA, k=4) == {3: 2, 4: 2}
     assert sizes(EDTA, k=2) == {}
+
+
+# ── planned and built ────────────────────────────────────────────────────────
+
+def _dien_spec(**over):
+    from mofsbu.spec import BuildSpec, MetalSpec, MoleculeSpec
+
+    base = dict(molecules=(MoleculeSpec("dien", "NCCNCCN", 1, 0),),
+                metals=(MetalSpec("Ni", 2, "hs"),), coordination="6", ligands_per_metal="1",
+                binding=("chelate",), co_ligand="O", geometries=("octahedral",), seed=7,
+                co_ligand_counts="fill")
+    base.update(over)
+    return BuildSpec(**base)
+
+
+def _arrangements_planned(spec) -> list:
+    from mofsbu.runner import enumerate_plan
+
+    return sorted(t.payload.get("arrangement", -1) for t in enumerate_plan(spec).tasks
+                  if t.kind == "place"
+                  and any(c["denticity"] == 3 for c in t.payload["components"]))
+
+
+def test_fac_and_mer_are_planned_as_two_placements():
+    assert _arrangements_planned(_dien_spec()) == [0, 1]
+
+
+def test_a_spec_from_before_v10_plans_pairs_only():
+    from mofsbu.spec import BuildSpec
+
+    old_dict = _dien_spec().to_dict()
+    old_dict.pop("max_denticity")
+    old = BuildSpec.from_dict({**old_dict, "spec_version": 9})
+    assert old.max_denticity == 2
+    assert _arrangements_planned(old) == []
+    assert _arrangements_planned(_dien_spec(max_denticity=2)) == []
+
+
+def test_both_dien_isomers_are_built(tmp_path):
+    from mofsbu.registry import BlobStore, Registry
+    from mofsbu.runner import run
+
+    with Registry(tmp_path / "r.db", BlobStore(tmp_path / "s")) as reg:
+        reg.migrate()
+        run(reg, _dien_spec(run_mode="construct"))
+        rows = reg.conn.execute(
+            "SELECT status, payload_json FROM tasks WHERE kind = 'place'").fetchall()
+    import json
+    built = sorted(json.loads(r["payload_json"]).get("arrangement", -1)
+                   for r in rows if r["status"] == "done")
+    assert built[-2:] == [0, 1], built

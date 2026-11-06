@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 9
+SPEC_VERSION = 10
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -294,6 +294,10 @@ class BuildSpec:
     # this is the knob that decides how large a run is, and it is set deliberately rather
     # than discovered when the queue has 40,000 tasks in it.
     max_distinct_ligands: int = 1
+    # The most donors one ligand may bind a single metal through (#15).  2 is pairs only;
+    # 3 and up add `sites.model.donor_sets` (dien, tren, EDTA) under `chelate` binding,
+    # each placed in every arrangement it has (fac and mer are two placements).
+    max_denticity: int = 6
     # Record how the products of this run reach each other, not just that they exist.
     #
     # A run that sweeps a RANGE of ligand copies builds a ladder — M(L), M(L)2, M(L)3 —
@@ -344,6 +348,11 @@ class BuildSpec:
             raise ValueError(
                 f"co_ligand_window must be a whole number >= 0 (how many vertices a rung "
                 f"may leave empty), got {self.co_ligand_window!r}")
+        if (isinstance(self.max_denticity, bool) or not isinstance(self.max_denticity, int)
+                or self.max_denticity < 2):
+            raise ValueError(
+                f"max_denticity must be a whole number >= 2 (2 binds pairs only), got "
+                f"{self.max_denticity!r}")
         if self.max_distinct_ligands < 1:
             raise ValueError(
                 f"max_distinct_ligands must be at least 1, got {self.max_distinct_ligands}; "
@@ -434,6 +443,10 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 9:
+            # v9 -> v10 adds `max_denticity` (#15).  2 is what every earlier spec planned:
+            # pockets only, no donor set of three or more.
+            d.setdefault("max_denticity", 2)
         if version <= 8:
             # v8 -> v9 adds `routes`, `relax_fmax` and `relax_steps`.  No routes and the
             # relax defaults are what every earlier spec ran.
