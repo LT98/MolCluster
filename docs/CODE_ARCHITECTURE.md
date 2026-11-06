@@ -6,7 +6,7 @@
 |---|---|
 | `PLAN_implementation.md` | what is **left to build** — remaining milestones, exit gates, open decision gates |
 | `DESIGN_registry_assembly.md` | the **reasoning** — decision ledger, subsystems, open checkpoints |
-| `BUGS.md` | what is **built and behaving wrongly**, filed before 2026-10-19. Open only. New bugs are GitHub issues labelled `bug` |
+| `BUGS.md` | what is **built and behaving wrongly**: a checklist, one line per bug, details in `BUGS_details.md`. New bugs are GitHub issues labelled `bug` |
 | `archive/` | finished milestones, resolved bugs, and the full changelogs |
 
 Rule for keeping this file useful: if something here needs a paragraph, it belongs in one of
@@ -198,12 +198,12 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 ## 6. Known seams
 
 Two places where the code is internally consistent and still reports something misleading.
-Full diagnosis and current measurements in `BUGS.md`; one line each here.
+Full diagnosis and current measurements in `BUGS_details.md`; one line each here.
 
 | | Seam | Bites when |
 |---|---|---|
-| [B2](BUGS.md#b2) | `l2_isomer_tag` is `''` on every stored row, so cis and trans are one `structures` row | the classifier exists and `store_block` derives a tag where it has coordinates, but the run pipeline passes `l2=""` **on purpose** (D22) so its products land on the node every other route reaches. Both paths tag together or neither |
-| [B3](BUGS.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
+| [B2](BUGS_details.md#b2) | `l2_isomer_tag` is `''` on every stored row, so cis and trans are one `structures` row | the classifier exists and `store_block` derives a tag where it has coordinates, but the run pipeline passes `l2=""` **on purpose** (D22) so its products land on the node every other route reaches. Both paths tag together or neither |
+| [B3](BUGS_details.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
 
 *Closed, and both worth reading before touching perception: `site_catalog` was not a pure
 function of identity, and a coordinated donor was perceived as no donor at all —
@@ -220,4 +220,4 @@ function of identity, and a coordinated donor was perceived as no donor at all �
 | energies | `energy/reference.py` docstring — it explains what it refuses and why |
 | the build pipeline | `runner.execute`, top to bottom |
 | anything stored | `registry/api.py` — it is the only writer |
-| the web UI | `docs/BUGS.md` — B4/B5/B6 are the open ones, already diagnosed |
+| the web UI | `docs/BUGS_details.md` — B5/B6 are the open ones, already diagnosed |

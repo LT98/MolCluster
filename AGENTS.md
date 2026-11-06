@@ -22,7 +22,7 @@ Four active documents, each with one job. Nothing finished stays in an active do
 | | |
 |---|---|
 | `docs/CODE_ARCHITECTURE.md` | the map — read first |
-| `docs/BUGS.md` | **open** defects filed before 2026-10-19, IDs `B1…B29`. Fixing one means *moving* its entry to `docs/archive/BUGS_resolved.md`, not striking it through. **New bugs are GitHub issues** with the `bug` label (`gh issue create --label bug`), so they are visible from every branch; give severity and module in the body. A fix closes its issue from the PR (`Fixes #N`) |
+| `docs/BUGS.md` | the bug **checklist**, one line per bug: ledger entries `B1…B29` (filed before 2026-10-19, details in `docs/BUGS_details.md`) and open `bug` issues. Fixing one means ticking its line and adding a one-line `**Fixed (rev N, PR #M).**` note under its `BUGS_details.md` heading; nothing is moved. **New bugs are GitHub issues** with the `bug` label (`gh issue create --label bug`), so they are visible from every branch; give severity and module in the body. A fix closes its issue from the PR (`Fixes #N`) |
 | `docs/PLAN_implementation.md` | **remaining** milestones and open decision gates. A milestone that meets its exit gate moves to `docs/archive/PLAN_completed.md` |
 | `docs/DESIGN_registry_assembly.md` | current reasoning — decision ledger D1…, open checkpoints C…. Revisions move to `docs/archive/DESIGN_history.md` |
 
@@ -45,7 +45,7 @@ old behaviour got wrong, or a re-argument of a decision the ledger already recor
 
 Existing comments predate this rule and several modules still carry the long form. **Fix them
 opportunistically** — when a task already has you editing a file, cut its bug narratives down
-to the one-line form and move anything worth keeping to `docs/archive/BUGS_resolved.md`. Do not
+to the one-line form and move anything worth keeping to the bug's entry in `docs/BUGS_details.md`. Do not
 open a file solely to trim it, and do not bundle a trim into a change that is otherwise about
 behaviour without saying so in the summary.
 
@@ -64,8 +64,9 @@ is not finished until each of these that applies is done:
 2. **`docs/PLAN_implementation.md`** loses what the change finished: the item in §7 (or its
    backlog), the "Where the work stands" row if a milestone moved, and any reminder whose trigger
    landed. A milestone that met its exit gate moves to `PLAN_completed.md` §1.
-3. **Bugs:** a fixed `B…` entry moves from `BUGS.md` to `archive/BUGS_resolved.md`; a fixed issue
-   is closed from the PR (`Fixes #N`).
+3. **Bugs:** a fixed bug's line is ticked `[x]` in `BUGS.md`; a `B…` entry also gets a one-line
+   `**Fixed (rev N, PR #M).**` note under its heading in `BUGS_details.md`, in place, never moved;
+   a fixed issue is closed from the PR (`Fixes #N`).
 4. **Decisions:** a called checkpoint becomes a ledger line in `DESIGN_registry_assembly.md`, and
    a revised one moves its old text to `archive/DESIGN_history.md`.
 5. **The WORKPLAN the work belongs to** (`WORKPLAN_energy.md`, `_M6`, `_M7`, `_solvation`) marks

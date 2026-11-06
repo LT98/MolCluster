@@ -46,7 +46,7 @@ you are about to reverse one and need to know what it cost last time.
     measured under different bindings.
   * **A second, independent cause** made the 2026-10-07 in-memory re-test agree with the old
     refusal: `join(torsion_well=0)` put the two syn formates on opposite faces, because the
-    vacancy reference direction flips sign between cis vertices ([B27](../BUGS.md#b27)); their
+    vacancy reference direction flips sign between cis vertices ([B27](../BUGS_details.md#b27)); their
     implied sites were 5.33 Å apart.
   * **Built from the ground up** (placer-made reagents, both formates syn and on one face, water
     released before each formate), the route builds QC-clean and relaxes onto Route A's product

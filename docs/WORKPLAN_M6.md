@@ -170,8 +170,8 @@ defect cannot leave a row waiting for it.
 | Cr₂ / Rh₂ / Mo₂ paddlewheels | 2 | A ×4 + M–M | M–M is not a two-point table; Rh and Mo are absent from `BASE_MO` | rows ✅, no fixture by design |
 | Zn₂(µ-O₂CH)₂ | 2 | A ×2 | under-bridged dimer; route discrimination | fixture + row ✅ (`zn2_bridged_formate`); `d_mm` deliberately absent — nobody has measured it, and absent is not zero |
 | Cu₂(µ-O₂C–Ph)₄ | 2 | A ×4 | ligand-dependence of the span (2.46 vs 2.67 Å) | row ✅, no fixture; benzoate perceives ✅ |
-| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | row ✅, `blocked_on` [B14](BUGS.md#b14) |
-| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | row ✅, `blocked_on` [B13](BUGS.md#b13) + no bent CN-2 |
+| Cu₂(µ-pyrazolate)₂ | 2 | A, N,N | mechanism A beyond carboxylate | row ✅, `blocked_on` [B14](BUGS_details.md#b14) |
+| Cu₂(µ-OH)₂ | 2 | B ×2 | bent bridging centre | row ✅, `blocked_on` [B13](archive/BUGS_resolved.md#b13--a-bare-hydroxide-perceived-zero-donors-) + no bent CN-2 |
 
 Between them: both mechanisms, nuclearity 2/3/4, with and without an M–M bond, carboxylate and
 non-carboxylate, symmetric and mixed-valence.
@@ -195,8 +195,8 @@ non-carboxylate, symmetric and mixed-valence.
 | `geometry/distances.py` | ✅ **`metal_metal_distance` landed (S4)**, and it is still not a table: a named `motif` is **refused** with the two numbers that make the point, and the fallback is a plain covalent-radii sum marked `estimated` (no `DATIVE_LENGTHENING` — an M–M bond is not dative). The *targets* stay curated in `data/reference/node_cases.tsv`, and Rh/Mo are deliberately absent from `BASE_MO` |
 | `geometry/qc.py::check_intercentre` | **signature settled, body raises** — `BadIntercentre` exists |
 | `geometry/placer.py::to_rdkit` | hardcodes one metal at index 0 and never writes an M–M bond. The fix is a **widening of this function, not a second one** — one conversion means one place to be wrong, which is its own docstring's argument (S7) |
-| ~~`sites/perception.py`~~ | ✅ **fixed (S2)** — `[OH-]` perceives `hydroxide_O`; [B13 archived](archive/BUGS_resolved.md). Turned up [B15](BUGS.md#b15): `[O-2]` types as a hydroxide |
-| `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS.md#b14) |
+| ~~`sites/perception.py`~~ | ✅ **fixed (S2)** — `[OH-]` perceives `hydroxide_O`; [B13 archived](archive/BUGS_resolved.md). Turned up [B15](BUGS_details.md#b15): `[O-2]` types as a hydroxide |
+| `sites/perception.py` | pyrazolate's two equivalent N type differently — filed as [B14](BUGS_details.md#b14) |
 | ~~`assembly/construct.py`~~ | ✅ **fixed (S0)** — `metal_block` writes `formal_charge=0`; [B12 archived](archive/BUGS_resolved.md) |
 | ~~`examples.py`~~ | ✅ Zn₄O landed; `examples.ALL` holds 17 and `PLAN_implementation.md` §6 now says so |
 
@@ -368,7 +368,7 @@ deprotonated", which is true of every donor it recovers except the one this slic
 hydroxide is anionic **and** still carries its proton, so the guard dropped it. The giveaway
 was that the function already had an unreachable `hydroxide_O` branch. It also turned up a
 separate defect — `[O-2]` types as `hydroxide_O` too, so an oxo reports a hydroxide's pKa —
-filed as [B15](BUGS.md#b15) rather than folded in, because giving oxo its own type is a change
+filed as [B15](BUGS_details.md#b15) rather than folded in, because giving oxo its own type is a change
 to `donor_descriptors.tsv`.
 
 **`bent` added to `GEOMETRIES`, and it is the one entry whose name does not fix its vertices**,
@@ -513,7 +513,7 @@ free oxygen's lone pair:
 | *anti*, compact dimers only (< 3.5 Å) | 6.76 Å | — |
 | *syn* (lone pair 1, Cu–O–C–O 0–45°), compact | 0.07 Å | 3.16 Å |
 | *syn*, upright, same face (the placer, both at azimuth +86.4°) | 0.44 Å | 2.673 Å |
-| *syn*, upright, opposite faces (`join(torsion_well=0)` on cis vertices, [B27](BUGS.md#b27)) | 5.33 Å | 2.673 Å |
+| *syn*, upright, opposite faces (`join(torsion_well=0)` on cis vertices, [B27](BUGS_details.md#b27)) | 5.33 Å | 2.673 Å |
 
 So the 1.464 Å was the *anti* binding, and the 2026-10-07 in-memory re-test that seemed to
 confirm it put the two syn formates on opposite faces.

@@ -219,7 +219,7 @@ defaulting.
 = 0.15 Å (**D21**), calibrated on xTB-relaxed geometries because RAW constructs turned out to
 have *no* stochastic spread to calibrate against — a join is a deterministic function of its
 choice vector. The energy window is deliberately unset: the only measurement available is
-contaminated by the rigid-core defect ([B9](../BUGS.md#b9)), and a window set from it would
+contaminated by the rigid-core defect ([B9](../BUGS_details.md#b9)), and a window set from it would
 bake that defect into a stored threshold.
 
 **Its bookkeeping landed late, at M6/S0** — D21, D22 and D23 written up, and
@@ -352,6 +352,10 @@ built, and what the building turned up that the diagnosis had not.
   skip and the `co_ligand_charged` refusal are removed, so charged co-ligands get ladder steps.
   No re-derivation: existing rows built with a charged co-ligand keep the wrong charge, and those
   registries have to be rebuilt.
+- *(rev 63)* **Bugs: a checklist, and details that stay in place.** `docs/BUGS.md` is one line
+  per bug (ledger entries, open `bug` issues, resolved entries); the detail sections are renamed
+  to `BUGS_details.md`, where a fix adds a `**Fixed (rev N, PR #M).**` note instead of moving
+  the entry. `archive/BUGS_resolved.md` keeps what was fixed before this and takes no new entries.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
