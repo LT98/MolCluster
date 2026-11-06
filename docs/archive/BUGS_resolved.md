@@ -1,5 +1,7 @@
 # Resolved issues
 
+**Closed to new entries (rev 63).** New fixes are not moved here: they are ticked in [`../BUGS.md`](../BUGS.md) and noted in place in [`../BUGS_details.md`](../BUGS_details.md).
+
 **Archive.** `../BUGS.md` is the active tracker and holds only what is still open. An entry
 moves here when it is fixed and covered by a test.
 
