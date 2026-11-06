@@ -355,12 +355,12 @@ def test_the_choice_vector_records_both_ends_and_no_torsion_well(catecholate):
     assert len(cv["vacancies"]) == 2 and len(cv["d_ml"]) == 2
 
 
-def test_a_chelate_join_needs_two_donors_and_two_vertices(catecholate):
+def test_a_chelate_join_needs_as_many_donors_as_vertices(catecholate):
     metal = metal_block(cn=6)
     with pytest.raises(IncompatibleJoin, match="two donors from one block"):
         join(metal, catecholate, vertex_pair(metal, trans=False),
              [pocket(catecholate)[0], metal.open_vacancies()[0]], mode=Chelate())
-    with pytest.raises(ValueError, match="two sites on each block"):
+    with pytest.raises(ValueError, match="same number of sites, two or more"):
         join(metal, catecholate, metal.open_vacancies()[:3], pocket(catecholate), mode=Chelate())
 
 
