@@ -251,3 +251,25 @@ def test_the_estimate_writes_nothing(reg, tmp_path):
     before = reg.count("structures"), reg.count("runs")
     estimate(ladder_spec())
     assert (reg.count("structures"), reg.count("runs")) == before
+
+
+def test_a_chelate_step_twists_a_ligand_that_cannot_reach_as_embedded(reg):
+    """#15: oxalate embeds trans, so of its O,O' 5-ring pockets only the syn pair fits.
+
+    `place` twists it (placer); the step that joins it onto the rung below has to as well,
+    or the ladder has a rung with no way up to it.
+    """
+    import json
+
+    spec = ladder_spec(molecules=(MoleculeSpec("oxalate", "[O-]C(=O)C(=O)[O-]", 1),),
+                       metals=(MetalSpec("Ni", 2, "hs"),), coordination="6",
+                       geometries=("octahedral",), pocket=PocketPredicate(ring_size=5),
+                       co_ligand="O")
+    assert run(reg, spec)["status"] == "done"
+    steps = [(r["status"], r["error_code"], json.loads(r["detail_json"] or "{}"))
+             for r in reg.conn.execute(
+                 "SELECT status, error_code, payload_json, detail_json FROM tasks "
+                 "WHERE kind = 'grow'")
+             if "co_ligand" not in json.loads(r["payload_json"])["component"]]
+    assert steps and all(s == "done" for s, _, _ in steps), [(s, c) for s, c, _ in steps]
+    assert any(d["step"].get("twist") for _, _, d in steps), "the anti pair was twisted"

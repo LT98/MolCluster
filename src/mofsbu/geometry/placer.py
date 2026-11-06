@@ -308,6 +308,18 @@ def twist_chelate(mol: Chem.Mol, donor_idxs: Sequence[int], d1: float, d2: float
     return out, twists
 
 
+def twist_chelate_for(metal: str, mol: Chem.Mol,
+                      donor_idxs: Sequence[int]) -> tuple[Chem.Mol, list[dict]]:
+    """`twist_chelate` before the vertices are known: aim for `IDEAL_BITE_ANGLE`.
+
+    For a grow step's `Chelate` join, whose ligand block is built before the vertex pair
+    is chosen.  The donors sit at their own distances from `metal`.
+    """
+    d1, d2 = (metal_donor_distance(metal, el).value
+              for el in donor_elements(mol, donor_idxs))
+    return twist_chelate(mol, donor_idxs, d1, d2, _span(d1, d2, IDEAL_BITE_ANGLE))
+
+
 # The orientation grids.  These numbers are part of the stored recipe: an index only
 # means something against a grid of a known size, so changing either is an
 # `ALGO_VERSIONS['placement']` bump, not a tweak.

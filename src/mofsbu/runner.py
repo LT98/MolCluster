@@ -34,7 +34,8 @@ from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicit
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import (
-    GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit)
+    GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit,
+    twist_chelate_for)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
 from mofsbu.naming import decompose
@@ -1109,11 +1110,19 @@ def _sphere_block(built: _Built, structure_id: int | None = None):
                          structure_id=structure_id)
 
 
-def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None = None):
-    """The component as a joinable block, plus the donor sites the plan chose."""
+def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None = None,
+                *, metal: str | None = None):
+    """The component as a joinable block, the donor sites the plan chose, and any twist.
+
+    A two-donor component joining `metal` is twisted first if its embedded shape cannot
+    span a bite (#15), the same as `place` does: `Chelate` moves the block rigidly.
+    """
     from mofsbu.assembly.construct import ligand_block
 
     cmol, cmolecule, embed_report = _protomer_mol(spec, comp)
+    twists: list[dict] = []
+    if metal is not None and len(comp["donors"]) == 2:
+        cmol, twists = twist_chelate_for(metal, cmol, tuple(comp["donors"]))
     name = f"{cmolecule.name}{comp['label'] if comp['selection'] else ''}"
     block = ligand_block(cmol, charge=int(comp["charge"]), name=name,
                          multiplicity=cmolecule.multiplicity)
@@ -1131,7 +1140,7 @@ def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None 
             f"and this executor disagree about the molecule",
             code="donor_index_stale",
             detail={"component": comp, "perceived": sorted(by_idx)})
-    return block, [by_idx[i] for i in comp["donors"]], name
+    return block, [by_idx[i] for i in comp["donors"]], name, twists
 
 
 def _co_ligand_for(smiles: str, structure_id: int | None = None):
@@ -1284,15 +1293,19 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     parent = _build_sphere(spec, parent_payload)
     block = _sphere_block(parent, structure_id=parent_sid)
     comp = payload["component"]
+    twists: list[dict] = []
     if "co_ligand" in comp:
         ligand, donors, name = _co_ligand_for(comp["co_ligand"], structure_id=ligand_sid)
     else:
-        ligand, donors, name = _ligand_for(spec, comp, structure_id=ligand_sid)
+        ligand, donors, name, twists = _ligand_for(spec, comp, structure_id=ligand_sid,
+                                                   metal=parent.metal.symbol)
     metal = parent.metal
     elements = [ligand.graph.label(s.atom_idx).element for s in donors]
     detail: dict[str, Any] = {"step": {
         "adds": name, "mode": comp["mode"], "from_structure": parent_sid,
         "from_task": payload.get("parent_task"), "ligand_structure": ligand_sid}}
+    if twists:
+        detail["step"]["twist"] = twists
 
     vacancies = sorted(block.open_vacancies(), key=lambda s: s.slot)
     if len(vacancies) < len(donors):

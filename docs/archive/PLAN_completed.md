@@ -317,9 +317,11 @@ built, and what the building turned up that the diagnosis had not.
   sp² atom in 180° (a 30° grid as fallback), keeping the clash-free twist whose donor–donor
   distance is closest to the vertices. Only a chelate whose rigid bite is outside
   `BITE_ANGLE_RANGE` is twisted, and the twists are recorded in its choice vector. Ni/octahedral
-  construct runs: en 1 → 7 complexes, bipy 1 → 6; oxalate gains its 5-ring O,O′ chelate. Not
-  covered: the grow-step `Chelate` join (still rigid), and a third donor (dien, EDTA) that is not
-  bound. `ALGO_VERSIONS["placement"]` 4 → 5.
+  construct runs: en 1 → 7 complexes, bipy 1 → 6; oxalate gains its 5-ring O,O′ chelate. A
+  grow step's ligand is twisted the same way before `Chelate` joins it (`twist_chelate_for`, aimed
+  at `IDEAL_BITE_ANGLE`; the twist is in the task detail): oxalate's chelate steps 12 → 18 done,
+  none refused. Not covered: a third donor (dien, EDTA) that is not bound.
+  `ALGO_VERSIONS["placement"]` 4 → 5.
 - *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
   ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
   on #132). `placer.turn_hydroxyl_h` turns it about its X–O bond until it is ≥ 2.4 Å from every
