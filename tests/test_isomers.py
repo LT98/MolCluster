@@ -4,10 +4,8 @@ The structures under test are BUILT, not hand-written — S4's enumerator puts l
 named vertices, so "cis" here means two ligands that really are 90 degrees apart in real
 coordinates rather than a fixture asserting its own label.
 
-Amine ligands are conspicuously absent and that is not an oversight: `occlusion` currently
-reports every sp3 amine as sterically blocked, so `open_donors()` excludes them and the
-classic Pt(NH3)2Cl2 pair cannot be assembled at all. Aqua and chloride stand in. See the
-note in the M5 work plan.
+Aqua and chloride stand in for the classic Pt(NH3)2Cl2 pair: these tests were written while
+`occlusion` read every sp3 amine as blocked (B8, since fixed).
 """
 from __future__ import annotations
 

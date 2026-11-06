@@ -356,6 +356,12 @@ built, and what the building turned up that the diagnosis had not.
   per bug (ledger entries, open `bug` issues, resolved entries); the detail sections are renamed
   to `BUGS_details.md`, where a fix adds a `**Fixed (rev N, PR #M).**` note instead of moving
   the entry. `archive/BUGS_resolved.md` keeps what was fixed before this and takes no new entries.
+- *(rev 64)* **B8: a donor is not blocked by its own bonded atoms.** `occlusion` casts its rays
+  from the donor's centre, which lies inside a bonded H's sphere, so each bonded atom blocked a
+  ~73° wedge wherever it pointed and every amine read BLOCKED (ammonia 0.86). `buried_volume`
+  now passes the donor's covalent neighbours to `occlusion` as `exclude`. Ammonia, methylamine
+  and ethylenediamine become OPEN (0.00–0.16); water reads 0.00, as the threshold note always
+  said it should. `ALGO_VERSIONS["site_state"]` "1" → "2"; stored rows are not re-derived.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF

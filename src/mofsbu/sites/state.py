@@ -78,7 +78,8 @@ class SiteState:
 
 
 def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
-                  symbols: Sequence[str] | None = None) -> float:
+                  symbols: Sequence[str] | None = None,
+                  graph: TypedGraph | None = None) -> float:
     """Blocked fraction of this site's approach cone, in [0, 1].
 
     Named `buried_volume` because that is the name §6.4 and the `site_state.buried_vol`
@@ -92,8 +93,10 @@ def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
         # No frame means no direction to ask about.  A sphere-average would be a
         # different quantity wearing this one's name, so the answer is "unknown".
         return None                                              # type: ignore[return-value]
+    bonded = (graph.neighbors(site.atom_idx, EdgeType.COVALENT)
+              if graph is not None and site.atom_idx < len(graph) else ())
     return occlusion(coords, site.atom_idx, frame["axis"], radius=radius,
-                     elements=symbols)
+                     elements=symbols, exclude=bonded)
 
 
 def _occupied(graph: TypedGraph | None, atom_idx: int) -> bool:
@@ -127,7 +130,7 @@ def refresh_state(
     """
     out: list[SiteState] = []
     for site in sites:
-        occluded = buried_volume(coords, site, symbols=symbols)
+        occluded = buried_volume(coords, site, symbols=symbols, graph=graph)
         role = getattr(site, "role", "donor")
         vacancy = role == "vacancy"
         in_pocket = (not vacancy) and site.atom_idx in pocket_donors
