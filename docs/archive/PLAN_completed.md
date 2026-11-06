@@ -362,6 +362,8 @@ built, and what the building turned up that the diagnosis had not.
   now passes the donor's covalent neighbours to `occlusion` as `exclude`. Ammonia, methylamine
   and ethylenediamine become OPEN (0.00–0.16); water reads 0.00, as the threshold note always
   said it should. `ALGO_VERSIONS["site_state"]` "1" → "2"; stored rows are not re-derived.
+  `BLOCKED_OCCLUSION` stays 0.80; its note now carries the re-measured panel (#14), including
+  that hindered bases (2,6-di-tBu-pyridine, proton sponge) now read OPEN.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
