@@ -352,6 +352,118 @@ def find_pocket(mol: Chem.Mol, sites: list[Site], **predicate) -> Pocket | None:
 INTERGROUP_RING = 5
 
 
+@dataclass(frozen=True)
+class DonorSet:
+    """Three or more donors that can wrap one metal together (#15).
+
+    Built from pockets, not searched for: each donor closes a chelate ring of at least
+    `INTERGROUP_RING` atoms with at least one other donor in the set, so the set is
+    connected through rings the pocket layer already accepted.  At most one donor per
+    group: a carboxylate's two oxygens, which only close a 4-ring with each other, never
+    both appear, because that would be the group biting through itself inside a larger
+    chelate.  Like `Pocket`, described by what it is and never named.
+    """
+
+    donors: tuple[int, ...]
+    donor_types: tuple[str, ...]
+    rings: tuple[tuple[int, int], ...]   # donor pairs whose pocket ties the set together
+    n_anionic: int
+
+    @property
+    def denticity(self) -> int:
+        return len(self.donors)
+
+
+def _automorphisms(mol: Chem.Mol, by_idx: dict[int, Site]) -> list[dict[int, int]]:
+    """The ligand's heavy-atom symmetries, bond order ignored (D15).
+
+    Atoms are told apart by element, hydrogen count and donor type, so a carboxylate's
+    two oxygens are equivalent while an enol O and a carbonyl O are not.
+    """
+    import networkx as nx
+    from networkx.algorithms.isomorphism import GraphMatcher
+
+    g = nx.Graph()
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() > 1:
+            i = atom.GetIdx()
+            site = by_idx.get(i)
+            g.add_node(i, label=(atom.GetSymbol(), atom.GetTotalNumHs(),
+                                 site.donor_type if site else None))
+    for bond in mol.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if a in g and b in g:
+            g.add_edge(a, b)
+    matcher = GraphMatcher(g, g, node_match=lambda x, y: x["label"] == y["label"])
+    return list(itertools.islice(matcher.isomorphisms_iter(), 100000))
+
+
+def donor_sets(mol: Chem.Mol, sites: list[Site], *, max_denticity: int,
+               pockets: list[Pocket] | None = None) -> list[DonorSet]:
+    """Every connected donor set of 3 to `max_denticity` donors, one per symmetry class.
+
+    Pairs stay `chelate_pockets`' job; this starts at three.  Two sets that the ligand's
+    own symmetry maps onto each other (EDTA's choice of oxygen on each carboxylate) are
+    one set, so a run does not build the same complex sixteen times.
+    """
+    if max_denticity < 3:
+        return []
+    by_idx = {s.atom_idx: s for s in sites}
+    pockets = chelate_pockets(mol, sites) if pockets is None else pockets
+    group = {i: i for i in by_idx}                 # one group per 4-ring-sharing donors
+    for p in pockets:
+        if p.ring_size < INTERGROUP_RING:
+            a, b = p.donors
+            ga, gb = group[a], group[b]
+            for i, g in group.items():
+                if g == gb:
+                    group[i] = ga
+    near: dict[int, set[int]] = {i: set() for i in by_idx}
+    for p in pockets:
+        if p.ring_size >= INTERGROUP_RING:
+            a, b = p.donors
+            near[a].add(b)
+            near[b].add(a)
+
+    accepted = {frozenset(p.donors) for p in pockets}
+
+    def wraps(s: frozenset[int], j: int) -> bool:
+        # Two donors on a RIGID path cannot turn toward one metal, so they must already
+        # be a pocket; tHQ's meta oxygens are not, and no set may hold both.
+        for i in s:
+            path = Chem.GetShortestPath(mol, i, j)
+            if _rotatable_on_path(mol, path) == 0 and frozenset((i, j)) not in accepted:
+                return False
+        return True
+
+    found: set[frozenset[int]] = set()
+    frontier = {frozenset(p.donors) for p in pockets if p.ring_size >= INTERGROUP_RING}
+    for _ in range(3, max_denticity + 1):
+        grown = set()
+        for s in frontier:
+            groups = {group[i] for i in s}
+            for i in s:
+                for j in near[i]:
+                    if j not in s and group[j] not in groups and wraps(s, j):
+                        grown.add(s | {j})
+        found |= grown
+        frontier = grown
+
+    out, seen = [], set()
+    autos = _automorphisms(mol, by_idx)
+    for s in sorted(found, key=lambda x: (len(x), sorted(x))):
+        if s in seen:
+            continue
+        seen |= {frozenset(auto[i] for i in s) for auto in autos}
+        donors = tuple(sorted(s))
+        rings = tuple(sorted((a, b) for a, b in itertools.combinations(donors, 2)
+                             if b in near[a]))
+        out.append(DonorSet(donors, tuple(by_idx[i].donor_type for i in donors), rings,
+                            sum(1 for i in donors
+                                if mol.GetAtomWithIdx(i).GetFormalCharge() < 0)))
+    return out
+
+
 def shifting_pocket_donors(mol: Chem.Mol, sites: list[Site]) -> frozenset[int]:
     """Donors whose pKa a NEIGHBOURING group plausibly shifts.  D18's provisional rule.
 

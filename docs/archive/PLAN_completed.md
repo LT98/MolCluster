@@ -310,6 +310,11 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 66)* **Ligands bind through more than two donors (#15).** `sites.model.donor_sets` builds
+  sets of 3+ donors from the pockets: connected through chelate rings of ≥ 5, one donor per group
+  (one O per carboxylate), no two donors a rigid path keeps apart (so tHQ's ring gets none), one
+  set per symmetry class (bond order ignored, D15). dien and terpy offer κ3, tren κ3/κ4, EDTA two
+  κ3, two κ4, one κ5, one κ6.
 - *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
   rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
   span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the
