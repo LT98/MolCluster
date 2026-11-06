@@ -335,6 +335,18 @@ built, and what the building turned up that the diagnosis had not.
   the local LLM server share a card (`WORKPLAN_energy.md` risk "One GPU, three tenants"). Not
   covered: the check is a snapshot, not a reservation, so two workers can both see room for one
   task, and a floor above the card's total memory holds a worker indefinitely.
+- *(rev 61)* **One `join`, with the special cases as mode objects.** `join`, `join_chelate`,
+  `join_bridge` and `join_metal_metal` each repeated the merge, charge/multiplicity, site
+  inheritance and coordinate stacking (#74's O–H turn had to go in four places). Now
+  `join(a, b, sites_a, sites_b, mode=)` does those once, and `Mono`, `Chelate`, `Bridge` and
+  `MetalMetal` hold only what differs: the verdict, the bonds, the choice vector and the
+  placement. The three variant functions are gone; callers pass a mode. Behaviour-neutral:
+  construct builds of the Ni/tHQ/Cl slice (2,616 geometries) and the M6/S5 enumerate route (127)
+  reproduce identical L1 hashes, choice-vector digests and coordinate hashes. Likewise in
+  `energy/routes.py`: `price_reaction` (recorded edges) and `_derived` (inferred splits) repeated
+  the quality → balance → energy → fidelity-gate sequence; both now call `_price`, so the two
+  cannot be priced by different rules. `price_reaction` and `decompositions` give identical
+  output over all 1,089 edges of `mvp_ni_thq_cl.db`.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF

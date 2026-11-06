@@ -91,7 +91,7 @@ class CallRecorder:
 def scenario_bridge() -> str:
     """Two ordinary joins into a bridged dimer, then a mu2 bridge across it."""
     from mofsbu.assembly.construct import ligand_block, metal_block
-    from mofsbu.assembly.join import bridge_compatible, join, join_bridge
+    from mofsbu.assembly.join import Bridge, Mono, bridge_compatible, join
     from mofsbu.geometry.embed import embed_molecule
     from mofsbu.graph.from_mol import mol_from_smiles
 
@@ -106,11 +106,11 @@ def scenario_bridge() -> str:
     lig = formate("bridge1")
     donors = carbox(lig)
     m1 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    first = join(lig, m1, donors[0], m1.open_vacancies()[0], lone_pair=1)
+    first = join(lig, m1, [donors[0]], [m1.open_vacancies()[0]], mode=Mono(lone_pair=1))
     free = next(s for s in first.block.open_donors()
                 if s.atom_idx == first.atom_map[donors[1].atom_idx])
     m2 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    dimer = join(first.block, m2, free, m2.open_vacancies()[0], lone_pair=1).block
+    dimer = join(first.block, m2, [free], [m2.open_vacancies()[0]], mode=Mono(lone_pair=1)).block
 
     lig2 = formate("bridge2")
     d2 = carbox(lig2)
@@ -121,8 +121,8 @@ def scenario_bridge() -> str:
     pairs = [(va, vb) for va in per[m_a] for vb in per[m_b]]
     best = min(pairs, key=lambda vs: bridge_compatible(
         d2, list(vs), partner="Cu", donor_elements=["O", "O"]).strain)
-    join_bridge(lig2, dimer, d2, list(best), lone_pairs=(0, 0))
-    return "join x2 -> bridged dimer, then join_bridge"
+    join(lig2, dimer, d2, list(best), mode=Bridge(lone_pairs=(0, 0)))
+    return "join x2 -> bridged dimer, then a Bridge join"
 
 
 def scenario_identity() -> str:
@@ -156,7 +156,7 @@ SCENARIOS = {
 # ── rendering ────────────────────────────────────────────────────────────────
 
 def _short(name: str) -> str:
-    """`mofsbu.assembly.join.join_bridge` -> `join.join_bridge`."""
+    """`mofsbu.assembly.join.bridge_compatible` -> `join.bridge_compatible`."""
     if name == "<entry>":
         return name
     parts = name.split(".")

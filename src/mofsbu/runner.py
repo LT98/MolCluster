@@ -1230,7 +1230,7 @@ def _first_clear_join(block, ligand, vacancies, donor, *, mode: str, metal: str,
     """
     import numpy as np
 
-    from mofsbu.assembly.join import IncompatibleJoin, compatible, join
+    from mofsbu.assembly.join import IncompatibleJoin, Mono, compatible, join
 
     verdicts = [(v, compatible(donor, v, partner=metal, mode=mode, donor_element=element))
                 for v in vacancies]
@@ -1243,8 +1243,9 @@ def _first_clear_join(block, ligand, vacancies, donor, *, mode: str, metal: str,
         for vacancy, verdict in open_:
             for lobe, well in itertools.product(range(max(verdict.lone_pairs, 1)),
                                                 range(max(len(verdict.wells or ()), 1))):
-                result = join(block, ligand, vacancy, donor, mode=mode, torsion_well=well,
-                              lone_pair=lobe, seed=seed, roll_deg=roll)
+                result = join(block, ligand, [vacancy], [donor], seed=seed,
+                              mode=Mono(binding_mode=mode, torsion_well=well,
+                                        lone_pair=lobe, roll_deg=roll))
                 tried += 1
                 graph = result.block.graph
                 report = _clash_qc(graph, [graph.label(i).element for i in graph.nodes()],
@@ -1274,7 +1275,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     """
     import numpy as np
 
-    from mofsbu.assembly.join import IncompatibleJoin, join_chelate
+    from mofsbu.assembly.join import Chelate, IncompatibleJoin, join
     from mofsbu.assembly.persist import store_block
 
     payload = task.payload
@@ -1327,7 +1328,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
             if pair is None:
                 raise _Rejected(verdict.reason, code="chelate_cannot_span",
                                 detail={**detail, "strain": round(verdict.strain, 4)})
-            result = join_chelate(block, ligand, list(pair), donors, seed=spec.seed)
+            result = join(block, ligand, list(pair), donors, mode=Chelate(), seed=spec.seed)
             report = None
         elif len(donors) == 1:
             result, report, tried = _first_clear_join(
@@ -1336,8 +1337,8 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
             detail["join_choices_tried"] = tried
         else:
             raise _Rejected(
-                f"{len(donors)} donors at once: one donor is `join`, two are "
-                f"`join_chelate`, and three (fac/mer tridentate) is not built",
+                f"{len(donors)} donors at once: one donor is `Mono`, two are "
+                f"`Chelate`, and three (fac/mer tridentate) is not built",
                 code="pathway_denticity_unbuilt", detail=detail)
     except IncompatibleJoin as exc:
         # A refusal from the site pair is an ANSWER about the chemistry, the same way the

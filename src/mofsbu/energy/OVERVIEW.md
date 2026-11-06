@@ -120,7 +120,7 @@ Reaction-balanced energies — the fix for the charged-ion reference problem (M7
 | `class BalanceReport`* | Why an equation is or is not usable. Returned, not raised, so a UI can show it. |  |
 | `class ReactionEnergy`* | A reaction energy that knows what it is allowed to claim. |  |
 | `reaction_terms(reg, reaction_id) -> tuple[Term, ...]`* | Every species in the reaction, each on the side its role puts it. |  |
-| `check_balance(reg, reaction_id) -> BalanceReport`* | Does this equation conserve atoms and charge? |  |
+| `check_balance(reg, reaction_id) -> BalanceReport`* | Does this equation conserve atoms and charge? | `assembly.derive` |
 | `balance_for_terms(reg, terms) -> BalanceReport` | `check_balance` for an equation that is not (yet) a row. | `pathways.route` |
 | `class QualityIssue`* |  |  |
 | `class ReferenceQuality`* | Whether the equation's two sides are comparable enough to subtract. |  |
@@ -143,7 +143,7 @@ Geometry optimisation — the caller-facing half of the energy layer (M7).
 | `mode_status(ml_model) -> dict[str, dict[str, Any]]`* | `available_modes` plus the reason, for a UI that has to explain a disabled option. | `runner`, `ui.builder` |
 | `ml_model_status() -> dict[str, dict[str, Any]]`* | Both ML foundation models, side by side, for the UI's model picker. | `ui.builder` |
 
-### `routes` (269 lines)
+### `routes` (252 lines)
 
 What one provenance edge costs, and why it sometimes cannot be said.
 

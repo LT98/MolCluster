@@ -26,7 +26,7 @@ import pytest
 from mofsbu.assembly.construct import construct, ligand_block, metal_block
 from mofsbu.assembly.join import (
     MAX_BRIDGE_SPAN_MISMATCH_A, IncompatibleJoin, _transform_frame, bridge_compatible,
-    compatible, join, join_bridge)
+    Bridge, Mono, compatible, join)
 from mofsbu.geometry._linalg import axis_rotation
 from mofsbu.geometry.distances import metal_donor_distance
 from mofsbu.geometry.embed import embed_molecule
@@ -195,14 +195,14 @@ def bridged_dimer(lobe_a: int, lobe_b: int, smiles: str = "[O-]C=O", *,
     donors = sorted((s for s in ligand.open_donors()
                      if s.donor_type == "carboxylate_O"), key=lambda s: s.atom_idx)
     first_metal = metal_block("Cu", 2, cn=cn, geometry=geom)
-    first = join(ligand, first_metal, donors[0], first_metal.open_vacancies()[0],
-                 lone_pair=lobe_a)
+    first = join(ligand, first_metal, [donors[0]], [first_metal.open_vacancies()[0]],
+                 mode=Mono(lone_pair=lobe_a))
 
     free = next(s for s in first.block.open_donors()
                 if s.atom_idx == first.atom_map[donors[1].atom_idx])
     second_metal = metal_block("Cu", 2, cn=cn, geometry=geom)
-    return join(first.block, second_metal, free, second_metal.open_vacancies()[0],
-                lone_pair=lobe_b)
+    return join(first.block, second_metal, [free], [second_metal.open_vacancies()[0]],
+                mode=Mono(lone_pair=lobe_b))
 
 
 def metal_separation(block) -> float:
@@ -251,13 +251,14 @@ def test_the_lobe_is_recorded_so_a_replay_reproduces_it_rather_than_the_default(
     metal = metal_block("Cu", 2, cn=4, geometry="square_planar")
     donor = sorted((s for s in ligand.open_donors()
                     if s.donor_type == "carboxylate_O"), key=lambda s: s.atom_idx)[0]
-    step = dict(join(ligand, metal, donor, metal.open_vacancies()[0],
-                     lone_pair=1).choice_vector, partner=0)
+    step = dict(join(ligand, metal, [donor], [metal.open_vacancies()[0]],
+                     mode=Mono(lone_pair=1)).choice_vector, partner=0)
     again = construct(ligand, [metal], [step])
     assert again.steps[0]["donor"]["lone_pair"] == 1
     assert np.array_equal(
         again.block.geometry,
-        join(ligand, metal, donor, metal.open_vacancies()[0], lone_pair=1).block.geometry)
+        join(ligand, metal, [donor], [metal.open_vacancies()[0]],
+             mode=Mono(lone_pair=1)).block.geometry)
 
 
 def test_a_donor_with_one_lobe_ignores_the_index_rather_than_failing():
@@ -270,8 +271,8 @@ def test_a_donor_with_one_lobe_ignores_the_index_rather_than_failing():
                          name="aqua")
     donor = water.open_donors()[0]
     metal = metal_block("Zn", 2, cn=4, geometry="tetrahedral")
-    a = join(water, metal, donor, metal.open_vacancies()[0], lone_pair=0)
-    b = join(water, metal, donor, metal.open_vacancies()[0], lone_pair=1)
+    a = join(water, metal, [donor], [metal.open_vacancies()[0]], mode=Mono(lone_pair=0))
+    b = join(water, metal, [donor], [metal.open_vacancies()[0]], mode=Mono(lone_pair=1))
     assert np.array_equal(a.block.geometry, b.block.geometry)
     assert b.choice_vector["donor"]["lone_pair"] == 0
     assert a.compatibility.lone_pairs == 1
@@ -289,7 +290,7 @@ def test_the_verdict_says_a_choice_is_being_made():
     assert "lone_pair" in verdict.reason
 
 
-# ── join_bridge: one ligand, two metals, one move ────────────────────────────
+# ── Bridge: one ligand, two metals, one move ────────────────────────────
 
 
 def cross_metal_vertices(dimer_block):
@@ -322,14 +323,14 @@ def second_bridge_onto(dimer_block, slots=None):
 
 
 def test_a_bridge_binds_each_donor_to_its_OWN_metal():
-    """The line `join_chelate` cannot draw: its two bonds both go to `vacancies[0]`.
+    """The line `Chelate` cannot draw: its two bonds both go to `vacancies[0]`.
 
     µ-ness is then derived from the two dative edges rather than labelled (D14), so the
     product reporting two mu2 fragments is the graph agreeing with the operation.
     """
     dimer = bridged_dimer(1, 1).block
     lig, donors, pair = second_bridge_onto(dimer)
-    result = join_bridge(lig, dimer, donors, pair, lone_pairs=(0, 0))
+    result = join(lig, dimer, donors, pair, mode=Bridge(lone_pairs=(0, 0)))
 
     g = result.block.graph
     assert len(g.metals()) == 2
@@ -347,7 +348,7 @@ def test_two_vertices_on_ONE_metal_are_refused_and_named_as_a_chelate():
     lig, donors, _ = second_bridge_onto(dimer)
     verdict = bridge_compatible(donors, same, partner="Cu", donor_elements=["O", "O"])
     assert not verdict.feasible
-    assert "chelate" in verdict.reason and "join_chelate" in verdict.reason
+    assert "chelate" in verdict.reason and "Chelate" in verdict.reason
 
 
 def test_one_atom_on_two_metals_is_refused_as_the_other_mechanism():
@@ -382,7 +383,7 @@ def test_the_verdict_is_necessary_and_not_sufficient_and_qc_is_the_arbiter():
     better than the square-pyramidal case that builds cleanly — places the ligand's carbon
     1.4 Å from the far metal. The span test cannot see that, because where a mismatch goes
     depends on the vertex axes and not on its size. So a caller ranks on this verdict and
-    then *checks*, which is what `join_chelate`'s own docstring says one layer down.
+    then *checks*, which is what `Chelate`'s own docstring says one layer down.
     """
     dimer = bridged_dimer(1, 1, cn=6, geom="octahedral").block
     lig, donors, pair = second_bridge_onto(dimer)      # the BEST-ranked pair
@@ -390,7 +391,7 @@ def test_the_verdict_is_necessary_and_not_sufficient_and_qc_is_the_arbiter():
     assert verdict.feasible, verdict.reason
     assert "Necessary and not sufficient" in verdict.reason
 
-    result = join_bridge(lig, dimer, donors, pair)
+    result = join(lig, dimer, donors, pair, mode=Bridge())
     g, coords = result.block.graph, result.block.geometry
     rows = {node: k for k, node in enumerate(g.nodes())}
     symbols = [g.label(i).element for i in g.nodes()]
@@ -414,7 +415,7 @@ def test_a_span_nothing_can_absorb_is_refused_with_its_number():
     assert f"{worst.strain * MAX_BRIDGE_SPAN_MISMATCH_A:.3f} A of span mismatch" in worst.reason
 
     with pytest.raises(IncompatibleJoin) as exc:
-        join_bridge(lig, dimer, donors, list(vs))
+        join(lig, dimer, donors, list(vs), mode=Bridge())
     assert "cannot reach" in str(exc.value)
 
 
@@ -423,7 +424,7 @@ def test_the_lobes_are_recorded_for_both_donors():
     to record, because the second contact determines the roll."""
     dimer = bridged_dimer(1, 1).block
     lig, donors, pair = second_bridge_onto(dimer)
-    cv = join_bridge(lig, dimer, donors, pair, lone_pairs=(1, 0)).choice_vector
+    cv = join(lig, dimer, donors, pair, mode=Bridge(lone_pairs=(1, 0))).choice_vector
     assert [d["lone_pair"] for d in cv["donors"]] == [1, 0]
     assert "torsion_well" not in cv
 
@@ -435,7 +436,7 @@ def test_the_lobes_are_recorded_for_both_donors():
 def test_a_two_point_mode_has_one_torsion_well(mode):
     """The fit sets the roll, so branching it would emit identical siblings.
 
-    `join_chelate` spells the rule out: the donor-donor line onto the vertex-vertex line,
+    `Chelate` spells the rule out: the donor-donor line onto the vertex-vertex line,
     then the roll fixed by requiring the donor axes to point back at the metal.  A bridge
     is that same fit with the two vertices on different metals, so it inherits the rule.
     """

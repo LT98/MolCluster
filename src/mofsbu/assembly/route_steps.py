@@ -2,7 +2,7 @@
 
 A route is how a polynuclear node is written down as data (D20: a node is what a sequence
 of joins produces).  Every step goes through the same assembly calls a hand-written build
-uses — `join`, `join_bridge`, `bridge_compatible` — so a route replays bit-identically
+uses — `join` (`Mono`, `Bridge`), `bridge_compatible` — so a route replays bit-identically
 from its spec, and nothing here places an atom the assembly layer did not.
 
 Labels, never indices.  A step names atoms by label and the executor carries every label
@@ -253,7 +253,7 @@ def _torsion_well(ws: _Workspace, a: int, b: int, donor: Any, vac: Any, kw: dict
     this picks the well that puts the `bring` atoms closest to the `toward` atoms.  Ties go to
     the lower well.
     """
-    from mofsbu.assembly.join import join
+    from mofsbu.assembly.join import Mono, join
     from mofsbu.sites.frames import BindingMode, torsion_wells
 
     if not isinstance(spec_t, dict) or set(spec_t) != {"bring", "toward"}:
@@ -265,7 +265,7 @@ def _torsion_well(ws: _Workspace, a: int, b: int, donor: Any, vac: Any, kw: dict
                          f"blocks being joined")
     best = None
     for w in range(len(torsion_wells(donor.donor_type, BindingMode("mono")))):
-        res = join(ws.blocks[a], ws.blocks[b], donor, vac, **kw, torsion_well=w)
+        res = join(ws.blocks[a], ws.blocks[b], [donor], [vac], mode=Mono(**kw, torsion_well=w))
         moved = {a: res.atom_map, b: res.partner_atom_map}
         order = {n: k for k, n in enumerate(res.block.graph.nodes())}
         xyz = np.asarray(res.block.geometry, dtype=float)
@@ -333,7 +333,7 @@ def _donor_site(ws: _Workspace, ref: str, step: int):
 def _do(ws: _Workspace, spec: Any, i: int, s: dict[str, Any], reg: Any,
         stored_cb: Any) -> None:
     from mofsbu.assembly.construct import metal_block
-    from mofsbu.assembly.join import bridge_compatible, join, join_bridge
+    from mofsbu.assembly.join import Bridge, Mono, bridge_compatible, join
 
     op = s["op"]
     if op in ("sphere", "free_ligand"):
@@ -404,7 +404,7 @@ def _do(ws: _Workspace, spec: Any, i: int, s: dict[str, Any], reg: Any,
             kw["torsion_well"] = int(s["torsion"])
         elif s.get("torsion") is not None:
             kw["torsion_well"] = _torsion_well(ws, a, b, donor, vac, kw, s["torsion"], i)
-        ws.merge(a, b, join(ws.blocks[a], ws.blocks[b], donor, vac, **kw))
+        ws.merge(a, b, join(ws.blocks[a], ws.blocks[b], [donor], [vac], mode=Mono(**kw)))
     elif op == "reserve":
         if "for" in s:
             lig_bid, _ = ws.atoms(s["for"], i)
@@ -461,7 +461,7 @@ def _do(ws: _Workspace, spec: Any, i: int, s: dict[str, Any], reg: Any,
             tag = f"{metal_label.get(v.atom_idx, 'metal')}.cap"
             tmp = f"__cap{lb}"
             ws.where[tmp] = (lb, list(lig.graph.nodes()))
-            bid = ws.merge(lb, bid, join(lig, blk, donor, v))
+            bid = ws.merge(lb, bid, join(lig, blk, [donor], [v], mode=Mono()))
             prev = ws.where.get(tag, (bid, []))[1]
             ws.where[tag] = (bid, prev + ws.where.pop(tmp)[1])
     elif op == "bridge":
@@ -478,8 +478,8 @@ def _do(ws: _Workspace, spec: Any, i: int, s: dict[str, Any], reg: Any,
             raise RouteError(f"route {ws.route!r} step {i}: reserved vertices span blocks")
         del ws.reserved[s["vacancies"]]
         lps = tuple(int(x) for x in s.get("lone_pairs", (0, 0)))
-        ws.merge(lig_bid, bid, join_bridge(ws.blocks[lig_bid], ws.blocks[bid], donors,
-                                           [t[1] for t in target], lone_pairs=lps))
+        ws.merge(lig_bid, bid, join(ws.blocks[lig_bid], ws.blocks[bid], donors,
+                                    [t[1] for t in target], mode=Bridge(lone_pairs=lps)))
     elif op == "store":
         bid, _ = ws.atoms(s["block"], i)
         sp = stored_cb(ws, i, s, bid)

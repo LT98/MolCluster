@@ -33,7 +33,7 @@ import numpy as np
 
 from mofsbu._types import AmbiguousSpecError
 from mofsbu.assembly.choice import ChoiceVector, digest_of
-from mofsbu.assembly.join import BuildingBlock, IncompatibleJoin, JoinResult, join
+from mofsbu.assembly.join import BuildingBlock, IncompatibleJoin, JoinResult, Mono, join
 from mofsbu.geometry.placer import GEOMETRIES, site_vectors
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit
@@ -320,8 +320,8 @@ def enumerate_constructions(
                 refusals[reason] = refusals.get(reason, 0) + n
             for p, site_a, site_b, mode, well in candidates:
                 try:
-                    result = join(node.block, partners[p], site_a, site_b,
-                                  mode=mode, torsion_well=well,
+                    result = join(node.block, partners[p], [site_a], [site_b],
+                                  mode=Mono(binding_mode=mode, torsion_well=well),
                                   with_geometry=with_geometry)
                 except IncompatibleJoin as exc:
                     refusals[exc.verdict.reason] = refusals.get(exc.verdict.reason, 0) + 1
@@ -396,10 +396,10 @@ def construct(seed: BuildingBlock, partners: Sequence[BuildingBlock],
         # `lone_pair` defaults to 0 rather than raising on an older path, and that is safe
         # for the one reason a replay default ever is: 0 IS what those paths did — it is
         # the stored `frame`, and the lobes were not selectable when they were written.
-        result = join(block, partner, site_a, site_b,
-                      mode=step.get("mode", BindingMode.MONODENTATE.value),
-                      torsion_well=int(step.get("torsion_well", 0)),
-                      lone_pair=int(donor_spec.get("lone_pair", 0)),
+        result = join(block, partner, [site_a], [site_b],
+                      mode=Mono(binding_mode=step.get("mode", BindingMode.MONODENTATE.value),
+                                torsion_well=int(step.get("torsion_well", 0)),
+                                lone_pair=int(donor_spec.get("lone_pair", 0))),
                       seed=int(step.get("seed", 0)), with_geometry=with_geometry)
         block, strain = result.block, max(strain, result.strain)
         taken.append(dict(result.choice_vector, partner=p))

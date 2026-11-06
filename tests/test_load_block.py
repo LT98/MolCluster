@@ -6,7 +6,7 @@ import pytest
 
 from mofsbu._types import Fidelity, NotBuiltYet
 from mofsbu.assembly.construct import ligand_block, metal_block
-from mofsbu.assembly.join import bridge_compatible, join, join_bridge
+from mofsbu.assembly.join import Bridge, Mono, bridge_compatible, join
 from mofsbu.assembly.persist import CONSTRUCT, load_block, store_block, to_xyz
 from mofsbu.geometry._linalg import axis_rotation
 from mofsbu.geometry.embed import embed_molecule
@@ -29,10 +29,10 @@ def _formate():
 def proto_dimer():
     lig, d = _formate()
     m1 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    first = join(lig, m1, d[0], m1.open_vacancies()[0], lone_pair=1)
+    first = join(lig, m1, [d[0]], [m1.open_vacancies()[0]], mode=Mono(lone_pair=1))
     free = next(s for s in first.block.open_donors() if s.atom_idx == first.atom_map[d[1].atom_idx])
     m2 = metal_block("Cu", 2, cn=4, geometry="square_planar")
-    return join(first.block, m2, free, m2.open_vacancies()[0], lone_pair=1).block
+    return join(first.block, m2, [free], [m2.open_vacancies()[0]], mode=Mono(lone_pair=1)).block
 
 
 def _second_bridge(block):
@@ -43,7 +43,7 @@ def _second_bridge(block):
     pair = min(pairs, key=lambda pq: (bridge_compatible(d, pq, partner="Cu",
                                                         donor_elements=["O", "O"]).strain,
                                       [(v.atom_idx, v.slot) for v in pq]))
-    return join_bridge(lig, block, d, pair, lone_pairs=(0, 0)).block
+    return join(lig, block, d, pair, mode=Bridge(lone_pairs=(0, 0))).block
 
 
 def test_a_stored_block_loads_back_as_itself(reg):
