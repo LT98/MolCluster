@@ -1,41 +1,12 @@
-# Bug tracker — open only
+# Bug details
 
-> **New bugs are filed as GitHub issues** (`gh issue create --label bug`), not added here: an
-> issue is visible from every branch, a section in this file only from the branches that have
-> it. Put the severity and the module in the issue body, using the vocabulary below. This file
-> keeps the entries filed before 2026-10-19 until each is fixed or moved to an issue. First
-> filed that way: [#69](https://github.com/LT98/MolCluster/issues/69) (was drafted as B30).
+The diagnosis and fix direction for each ledger entry `B…` filed before 2026-10-19. The
+checklist, severities and scope are in [`BUGS.md`](BUGS.md); new bugs are GitHub issues.
 
-Everything here is **unresolved**. When something is fixed and has a test, move the entry to
-[`archive/BUGS_resolved.md`](archive/BUGS_resolved.md) — do not leave it here struck through.
-The point of this file is that its length is the size of the problem.
-
-Scope: things that behave wrongly or report wrongly. *Unbuilt* functionality is not a bug —
-that is a milestone, and it lives in [`PLAN_implementation.md`](PLAN_implementation.md).
-A stub that raises loudly is working as designed (ground rule 8).
-
-**Severity** — `correctness` a stored value or a claim is wrong · `honesty` the code is right
-but what it reports is misleading · `cosmetic` it looks wrong and misleads nobody ·
-`undecided` known behaviour that nobody has explicitly chosen.
-
-| # | Severity | Where | One line |
-|---|---|---|---|
-| [B2](#b2) | honesty | `runner.py` | Every stored row's `l2_isomer_tag` is `''`, so cis and trans are one row. The classifier exists; the run pipeline declines to use it (**D19**, **D22**) |
-| [B3](#b3) | honesty | registry data | 16 structures have no `site_state`; `n_open_sites` is NULL, not 0. **Self-healing (D19)** |
-| [B5](#b5) | undecided | `ui/static/builder.html` | The builder posts `spec_version: 1` and no test covers the migration it relies on |
-| [B6](#b6) | undecided | `ui/static/index.html` | The registry page never refreshes, so its counts go stale silently |
-| [B7](#b7) | blocked | `scripts/ingest.py` | The legacy `.xyz` corpus cannot be ingested: no charge, no multiplicity |
-| [B8](#b8) | correctness | `descriptors/ease.py` | Every sp3 amine donor reads as sterically blocked, so no amine can be joined |
-| [B9](#b9) | correctness | `identity/conformers.py` | The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable |
-| [B10](#b10) | undecided | `identity/isomers.py` | Δ/Λ is self-consistent but its absolute assignment is unverified |
-| [B11](#b11) | cosmetic | `sites/model.py` | `vacancy_sites` normalises by hand, differently from `_linalg.unit` |
-| [B14](#b14) | correctness | `sites/perception.py` | Pyrazolate's two equivalent N type differently, and one of them cannot bridge |
-| [B15](#b15) | correctness | `sites/perception.py` | A bare oxide `[O-2]` types as `hydroxide_O`, so an oxo reports a hydroxide's pKa |
-| [B16](#b16) | correctness | `scripts/run_spec.py` | `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store |
-| [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
-| [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
-| [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
-| [B29](#b29) | correctness | `identity/isomers.py` | `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) |
+**Entries stay here permanently, in place.** When one is fixed, tick it in `BUGS.md` and add a
+one-line `**Fixed (rev N, PR #M).** …` note directly under its heading. Never move or delete an
+entry, and keep its `## Bn` heading so its anchor does not change. Entries fixed before this
+layout are in [`archive/BUGS_resolved.md`](archive/BUGS_resolved.md).
 
 ---
 
