@@ -162,11 +162,14 @@ def test_two_vertices_on_different_metals_are_a_bridge_not_a_chelate(acetate_don
     assert "mu2 bridge" in verdict.reason
 
 
-def test_a_donor_type_that_does_not_chelate_is_refused(acetate_donors):
-    pyridyls = [donor("pyridyl_N", atom_idx=i, frame=acetate_donors[0].frame)
-                for i in (1, 2)]
-    verdict = chelate_compatible(pyridyls, vertices(*CIS))
-    assert not verdict.feasible and "does not chelate" in verdict.reason
+def test_a_donor_types_own_modes_do_not_gate_a_chelate(acetate_donors):
+    """#15: pyridyl N lists only "mono", and bipy chelates. The pair's geometry decides."""
+    pyridyls = [donor("pyridyl_N", atom_idx=s.atom_idx, frame=s.frame)
+                for s in acetate_donors]
+    assert pyridyls[0].binding_modes == ("mono",)
+    as_pyridyl = chelate_compatible(pyridyls, vertices(*CIS))
+    as_acetate = chelate_compatible(acetate_donors, vertices(*CIS))
+    assert (as_pyridyl.feasible, as_pyridyl.strain) == (as_acetate.feasible, as_acetate.strain)
 
 
 def test_one_atom_cannot_chelate_by_itself(acetate_donors):

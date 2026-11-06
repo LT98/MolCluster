@@ -310,6 +310,40 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 66)* **Ligands bind through more than two donors (#15).** `sites.model.donor_sets` builds
+  sets of 3+ donors from the pockets: connected through chelate rings of ≥ 5, one donor per group
+  (one O per carboxylate), no two donors a rigid path keeps apart (so tHQ's ring gets none), one
+  set per symmetry class (bond order ignored, D15). dien and terpy offer κ3, tren κ3/κ4, EDTA two
+  κ3, two κ4, one κ5, one κ6. The placer serves 3+-donor ligands first by `arrangement`, one per
+  isomer (`vertex_arrangements`: proper rotations, so Δ and Λ stay two; only ring-closing pairs
+  must be cis, so mer exists): dien 2 (fac, mer), tren 1, EDTA κ6 2. Such a ligand is wrapped by
+  `geometry.wrap`: distance geometry with a stand-in metal bonded to the donors, the other
+  vertices as fixed points, the wrong hand discarded, then MMFF with the donors pinned. Every
+  arrangement of dien, tren and EDTA κ5/κ6 passes QC on Ni(II)/octahedral; fac terpy is refused
+  (the only fit puckers its rings). Spec v10 adds `max_denticity` (default 6; specs before v10
+  read 2 and plan exactly as before): under `chelate` binding the planner adds each donor set as
+  a kind and queues one `place` per arrangement. Ni/dien: fac and mer both built; Ni/EDTA: all 20
+  arrangements κ3–κ6 built. fac and mer land as two geometries of one structure until B2 tags L2.
+  The builder page posts v1 and so stays at pairs (`gui/04_limits.md`). A grow step adding such a
+  ligand maps its donors onto the rung below's open vertices (ring pairs cis), wraps it there
+  clear of every heavy atom already on the rung, and joins it with `Chelate`, which takes 3+ sites
+  (a rigid fit of donors onto vertices, refused beyond 0.3 Å). Ni/water ladders (window 6): dien
+  κ3 steps 12/12 done; EDTA κ3 34, κ4 21 (3 refused `chelate_cannot_wrap`), κ5 10, κ6 2.
+- *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
+  rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
+  span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the
+  single bonds on the path between the two donors: sp³–sp³ in 120° steps, anything touching an
+  sp² atom in 180° (a 30° grid as fallback), keeping the clash-free twist whose donor–donor
+  distance is closest to the vertices. Only a chelate whose rigid bite is outside
+  `BITE_ANGLE_RANGE` is twisted, and the twists are recorded in its choice vector. Ni/octahedral
+  construct runs: en 1 → 7 complexes, bipy 1 → 6; oxalate gains its 5-ring O,O′ chelate. A
+  grow step's ligand is twisted the same way before `Chelate` joins it (`twist_chelate_for`, aimed
+  at `IDEAL_BITE_ANGLE`; the twist is in the task detail): oxalate's chelate steps 12 → 18 done,
+  none refused. `chelate_compatible` no longer requires each donor type's own modes to list
+  "chelate" (amine and pyridyl N list only "mono"), the rule `chelate_pockets` already follows:
+  en's chelate steps now fail only as marginal clashes (built under a relaxing run mode), bipy
+  gets 2. Not covered: a third donor (dien, EDTA) that is not bound.
+  `ALGO_VERSIONS["placement"]` 4 → 5.
 - *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
   ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
   on #132). `placer.turn_hydroxyl_h` turns it about its X–O bond until it is ≥ 2.4 Å from every

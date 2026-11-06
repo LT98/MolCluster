@@ -77,7 +77,7 @@ def built(tmp_path_factory):
 
 def test_the_s5_spec_loads_at_the_current_version():
     spec = BuildSpec.load(S5)
-    assert spec.to_dict()["spec_version"] == SPEC_VERSION == 9
+    assert spec.to_dict()["spec_version"] == SPEC_VERSION == 10
     assert [r.name for r in spec.routes] == ["A_sequential", "B_two_on_one"]
     assert (spec.relax_fmax, spec.relax_steps) == (0.05, 2000)
 
