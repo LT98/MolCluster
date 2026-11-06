@@ -31,7 +31,7 @@ M ≈ a week of focused evenings, L ≈ multi-week / headline cost).
    M7 screen (WORKPLAN_M7, E1, E-MH, E2) ─► M7R refine (E3–E6, GPU4PySCF) ─────┘
 ```
 
-**Open decision gates:** C2's energy window (blocked on [B9](BUGS.md#b9)), C6 and C7 (forced by
+**Open decision gates:** C2's energy window (blocked on [B9](BUGS_details.md#b9)), C6 and C7 (forced by
 M8), C11–C14 (M7), C16–C21 (solvation, partly called), whether xTB stays. See §3. C9, C10 and
 C15 are called — D24, D25, D29.
 
@@ -519,7 +519,7 @@ window it must land in. It is the interface for adding a case — add a row, no 
 and `tests/test_m6_battery.py` checks the rows against each other, against the fixture graphs,
 and against the code's own `site_vectors`, so a typo in a target is not discovered as a clash
 out of a placer that is working correctly. One row carries `blocked_on` rather than numbers —
-[B14](BUGS.md#b14) for the pyrazolate bridge ([B13](archive/BUGS_resolved.md), the hydroxide
+[B14](BUGS_details.md#b14) for the pyrazolate bridge ([B13](archive/BUGS_resolved.md), the hydroxide
 one, is fixed and its row now has targets) — and the blockers themselves are asserted, so the battery cannot claim to be waiting on a defect
 that has been fixed. **Its numbers are typical of the named compound class, not a refinement of
 a deposited structure**: no CIF was consulted, which is why every row carries a window and why
@@ -536,7 +536,7 @@ each reaching the node in at least one QC-clean variant, with every other varian
 its number. *Called 2026-10-08,* replacing "the failed route `Cu(HCOO)₂ + Cu` is refused with
 its measurement (1.46 Å)": built from the ground up both routes reach the product, and the
 1.46 Å was the *anti* binding the code was limited to before S1 (WORKPLAN_M6 §S5,
-[B27](BUGS.md#b27)). M6 says which routes *can* reach a node; which is favoured is an energy
+[B27](BUGS_details.md#b27)). M6 says which routes *can* reach a node; which is favoured is an energy
 question for M7/M8.
 
 **Plan B, declared in advance (see §4):** `geometry/templates.py` — place from a stored
@@ -663,7 +663,7 @@ milestone lands, not as a block at the end.
 
 | Gate | Milestone | Forced by | What you need in hand to decide |
 |---|---|---|---|
-| **C2** — L3 thresholds (θ_geom **called**, energy window open) | **M7**, at stage-2 pruning (`WORKPLAN_energy.md` stage 2 proposes 0.25 eV within an identity) | conformer pruning can't run without the window | θ_geom = 0.15 Å, calibrated. The window waits on [B9](BUGS.md#b9) — the measurement available today is contaminated by the rigid-core defect — and on the E-MH relaxer, since it is a window in that model's energies |
+| **C2** — L3 thresholds (θ_geom **called**, energy window open) | **M7**, at stage-2 pruning (`WORKPLAN_energy.md` stage 2 proposes 0.25 eV within an identity) | conformer pruning can't run without the window | θ_geom = 0.15 Å, calibrated. The window waits on [B9](BUGS_details.md#b9) — the measurement available today is contaminated by the rigid-core defect — and on the E-MH relaxer, since it is a window in that model's energies |
 | **C6** — barrier proxy | **M8**, before the first path score | `PathScore.max_barrier` needs a definition | whether the paddlewheel A-vs-B ordering is stable under the cheap proxies alone |
 | **C7** — partner dependence | **M8**, alongside C6 | `ease(site, partner)` is called at query time | how many (site, partner) pairs you actually intend to screen — the factorization only pays off if that number is large |
 | **C11–C14** — how a policy is named, what a verdict records, which archived duplicate is the reference, what the calculator check means | **M7**, WORKPLAN_M7 S0 | the first seam | recommendations in `WORKPLAN_M7.md` §7; none has a ledger entry yet |
@@ -684,7 +684,7 @@ energy workplans). Numbers are taken in merge order from **D30**; a plan never r
 advance, because two branches reserving the same number is how the ledger collides.
 
 One further call was open and is **not** a milestone gate — the L2 backfill-versus-version
-decision ([B2](BUGS.md#b2)). Called as **D22**: no backfill in either direction, and the run
+decision ([B2](BUGS_details.md#b2)). Called as **D22**: no backfill in either direction, and the run
 pipeline passes `l2=""` on purpose so its products land on the node every other route reaches.
 B2 stays open as the *reported* seam until both paths tag together.
 
@@ -781,7 +781,7 @@ that would fail if the claim stopped being true.**
    reconciliation (`place_multicentre`) and `check_intercentre`, both stubs, plus widening
    `to_rdkit` past one metal. They serve M6's oxo-centred clusters (Fe₃O, Zn₄O); the paddlewheel
    M7 needs builds without them (D20). The plan-B trigger is **2026-10-14** (§4).
-7. **L2 (B2), as one piece:** a numbering-stable centre key ([B29](BUGS.md#b29)), an
+7. **L2 (B2), as one piece:** a numbering-stable centre key ([B29](BUGS_details.md#b29)), an
    arrangement-changed-after-relax check (L2's analogue of E1), and the call on the existing
    all-`''` registries (rebuild, or accept untagged and tagged rows side by side under D19).
 

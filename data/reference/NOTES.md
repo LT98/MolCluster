@@ -43,8 +43,8 @@ For every dataset added, note what it is and anything the OTHER machine must cha
   Under **D20** the M···M distance is an output to *validate*, not an input to impose, so these
   are what gate 4 measures a built node against — not what drives a placer.  The exception is a
   declared nucleus (S4), where the caller states the distance on purpose.
-  Rows with `blocked_on` set cannot build yet ([B13](../../docs/BUGS.md#b13) for the hydroxide
-  bridge, [B14](../../docs/BUGS.md#b14) for the pyrazolate one, and the missing bent CN-2
+  Rows with `blocked_on` set cannot build yet ([B13](../../docs/archive/BUGS_resolved.md#b13--a-bare-hydroxide-perceived-zero-donors-) for the hydroxide
+  bridge, [B14](../../docs/BUGS_details.md#b14) for the pyrazolate one, and the missing bent CN-2
   geometry); a test checks each stated blocker is still real, so the table cannot claim to be
   waiting on something already fixed.  Three rows (Cr/Rh/Mo paddlewheels) are not battery rows
   at all — they are there for S4's `metal_metal_distance` table, and Rh and Mo are deliberately

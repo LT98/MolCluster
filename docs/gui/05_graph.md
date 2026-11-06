@@ -129,7 +129,7 @@ so the shed multiset alone decides it. It is reported per node as `basis`, and t
 a route whose basis differs from the others. An assembly step sheds nothing and a deprotonation
 sheds `n H3O+`, so what this catches in practice is a protonated route set beside a deprotonated
 one — where the vertical gap between the curves is not a comparison of anything. See
-[B19](../BUGS.md#b19) for a worked case and for what the chart still does not say well.
+[B19](../BUGS_details.md#b19) for a worked case and for what the chart still does not say well.
 
 A node with no number gets a **dashed column** and the words *no number*, not a position:
 everything to the left of an unpriceable step has no `y`, and putting it at the last known

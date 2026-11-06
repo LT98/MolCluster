@@ -130,7 +130,7 @@ explicitly scheduled for M8, at the point where the code first forces the call. 
 pre-empting them would be answering a question nobody has decided how to ask.
 
 What the page will say instead is when two routes *cannot* be compared: it tracks what each has
-shed and badges a route whose accounting differs from the others'. [B19](../BUGS.md#b19) records
+shed and badges a route whose accounting differs from the others'. [B19](../BUGS_details.md#b19) records
 where that warning is still in the wrong place.
 
 **Derived splits are two-part only.** `decompositions` finds pairs of existing structures whose
