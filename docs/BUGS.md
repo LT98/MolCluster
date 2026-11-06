@@ -25,7 +25,7 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 - [ ] **B5** · undecided · `ui/static/builder.html` — The builder posts `spec_version: 1` and no test covers the migration it relies on ([details](BUGS_details.md#b5))
 - [ ] **B6** · undecided · `ui/static/index.html` — The registry page never refreshes, so its counts go stale silently ([details](BUGS_details.md#b6))
 - [ ] **B7** · blocked · `scripts/ingest.py` — The legacy `.xyz` corpus cannot be ingested: no charge, no multiplicity ([details](BUGS_details.md#b7))
-- [ ] **B8** · correctness · `descriptors/ease.py` — Every sp3 amine donor reads as sterically blocked, so no amine can be joined ([details](BUGS_details.md#b8), #13)
+- [x] **B8** · correctness · `descriptors/ease.py` — Every sp3 amine donor reads as sterically blocked, so no amine can be joined ([details](BUGS_details.md#b8), #13)
 - [ ] **B9** · correctness · `identity/conformers.py` — The rigid-core rule cuts a delocalised carboxylate C–O as if it were rotatable ([details](BUGS_details.md#b9), #20)
 - [ ] **B10** · undecided · `identity/isomers.py` — Δ/Λ is self-consistent but its absolute assignment is unverified ([details](BUGS_details.md#b10), #17)
 - [ ] **B11** · cosmetic · `sites/model.py` — `vacancy_sites` normalises by hand, differently from `_linalg.unit` ([details](BUGS_details.md#b11), #22)

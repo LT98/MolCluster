@@ -80,7 +80,7 @@ ALGO_VERSIONS: dict[str, str] = {
     #    their own answer and are rewritten the next time anything touches the structure
     #    (D19), which is how the `2` bump behaved too.
     "perception":       "3",       # which atoms are donors, of what type, and their lobes
-    "site_state":       "1",       # status rule + buried-volume convention (M4)
+    "site_state":       "2",       # status rule + buried-volume convention (M4)
     # E1: which distances count as a broken graph edge or a formed non-edge
     # (`geometry.connectivity.BROKEN` / `FORMED`).  Stored in each verdict.
     "connectivity":     "conn1",

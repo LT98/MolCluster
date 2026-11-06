@@ -182,6 +182,8 @@ worth having — does not exist.
 
 ## B8
 
+**Fixed (rev 64).** `occlusion` excludes the donor's bonded atoms; amines read OPEN (ammonia 0.00). Threshold note re-measured (#14); 0.80 kept.
+
 **Every sp3 amine donor reads as sterically blocked, so no amine can be joined.**
 `correctness` · `descriptors/ease.py`
 

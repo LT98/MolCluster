@@ -41,8 +41,12 @@ class SiteStatus(str, Enum):
 #: Above this fraction of the approach cone blocked, a donor with no metal on it is
 #: reported as sterically BLOCKED rather than open.  Chosen so that a donor whose entire
 #: hemisphere of approach is walled off reads as blocked while ordinary substituent
-#: crowding does not: a bare aqua O sits near 0.0, a carboxylate O in an open carboxylate
-#: near 0.2-0.4, and a donor pointing into its own ring system above 0.8.
+#: crowding does not.  Measured with the donor's bonded atoms excluded (B8, #14), free
+#: ligand, one embed: aqua O and ammonia N 0.00, acetate O 0.05-0.08, pyridine N 0.11,
+#: tHQ O 0.11-0.28, PtBu3 P 0.52, 2,6-di-tBu-pyridine N 0.70, proton sponge N 0.70-0.72,
+#: tBu3N 0.78.  So the hindered bases read OPEN at this value.  Lowering it to 0.6 would
+#: block them, and also 54 of 8,455 unbound donors in the Ni/tHQ/Cl slice's complexes
+#: (104 score >= 0.6, 50 >= 0.8): not chosen yet.  Vacancies use the same value.
 BLOCKED_OCCLUSION = 0.80
 
 STATE_METHOD = MethodSpec(
@@ -78,7 +82,8 @@ class SiteState:
 
 
 def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
-                  symbols: Sequence[str] | None = None) -> float:
+                  symbols: Sequence[str] | None = None,
+                  graph: TypedGraph | None = None) -> float:
     """Blocked fraction of this site's approach cone, in [0, 1].
 
     Named `buried_volume` because that is the name §6.4 and the `site_state.buried_vol`
@@ -92,8 +97,10 @@ def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
         # No frame means no direction to ask about.  A sphere-average would be a
         # different quantity wearing this one's name, so the answer is "unknown".
         return None                                              # type: ignore[return-value]
+    bonded = (graph.neighbors(site.atom_idx, EdgeType.COVALENT)
+              if graph is not None and site.atom_idx < len(graph) else ())
     return occlusion(coords, site.atom_idx, frame["axis"], radius=radius,
-                     elements=symbols)
+                     elements=symbols, exclude=bonded)
 
 
 def _occupied(graph: TypedGraph | None, atom_idx: int) -> bool:
@@ -127,7 +134,7 @@ def refresh_state(
     """
     out: list[SiteState] = []
     for site in sites:
-        occluded = buried_volume(coords, site, symbols=symbols)
+        occluded = buried_volume(coords, site, symbols=symbols, graph=graph)
         role = getattr(site, "role", "donor")
         vacancy = role == "vacancy"
         in_pocket = (not vacancy) and site.atom_idx in pocket_donors
