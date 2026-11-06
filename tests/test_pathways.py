@@ -273,3 +273,22 @@ def test_a_chelate_step_twists_a_ligand_that_cannot_reach_as_embedded(reg):
              if "co_ligand" not in json.loads(r["payload_json"])["component"]]
     assert steps and all(s == "done" for s, _, _ in steps), [(s, c) for s, c, _ in steps]
     assert any(d["step"].get("twist") for _, _, d in steps), "the anti pair was twisted"
+
+
+def test_a_step_adding_a_tridentate_ligand_lands_on_the_placed_structure(reg):
+    """#15: dien is wrapped onto three open vertices of the rung below, not refused."""
+    import json
+
+    spec = ladder_spec(molecules=(MoleculeSpec("dien", "NCCNCCN", 1),),
+                       metals=(MetalSpec("Ni", 2, "hs"),), coordination="6",
+                       ligands_per_metal="1", geometries=("octahedral",),
+                       pocket=PocketPredicate(), co_ligand="O", co_ligand_window=3)
+    assert run(reg, spec)["status"] == "done"
+    rows = reg.conn.execute(
+        "SELECT kind, status, structure_id, payload_json FROM tasks "
+        "WHERE kind IN ('place', 'grow')").fetchall()
+    placed = {r["structure_id"] for r in rows if r["kind"] == "place" and r["status"] == "done"}
+    steps = [r for r in rows if r["kind"] == "grow"
+             and json.loads(r["payload_json"])["component"].get("denticity") == 3]
+    assert steps and all(r["status"] == "done" for r in steps)
+    assert {r["structure_id"] for r in steps} <= placed

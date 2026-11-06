@@ -324,7 +324,11 @@ built, and what the building turned up that the diagnosis had not.
   read 2 and plan exactly as before): under `chelate` binding the planner adds each donor set as
   a kind and queues one `place` per arrangement. Ni/dien: fac and mer both built; Ni/EDTA: all 20
   arrangements κ3–κ6 built. fac and mer land as two geometries of one structure until B2 tags L2.
-  The builder page posts v1 and so stays at pairs (`gui/04_limits.md`).
+  The builder page posts v1 and so stays at pairs (`gui/04_limits.md`). A grow step adding such a
+  ligand maps its donors onto the rung below's open vertices (ring pairs cis), wraps it there
+  clear of every heavy atom already on the rung, and joins it with `Chelate`, which takes 3+ sites
+  (a rigid fit of donors onto vertices, refused beyond 0.3 Å). Ni/water ladders (window 6): dien
+  κ3 steps 12/12 done; EDTA κ3 34, κ4 21 (3 refused `chelate_cannot_wrap`), κ5 10, κ6 2.
 - *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
   rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
   span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the

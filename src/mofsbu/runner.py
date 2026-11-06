@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import sqlite3
 import time
 import traceback
@@ -1156,7 +1157,7 @@ def _sphere_block(built: _Built, structure_id: int | None = None):
 
 
 def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None = None,
-                *, metal: str | None = None):
+                *, metal: str | None = None, mol: Any = None):
     """The component as a joinable block, the donor sites the plan chose, and any twist.
 
     A two-donor component joining `metal` is twisted first if its embedded shape cannot
@@ -1165,6 +1166,7 @@ def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None 
     from mofsbu.assembly.construct import ligand_block
 
     cmol, cmolecule, embed_report = _protomer_mol(spec, comp)
+    cmol = cmol if mol is None else mol            # already shaped by the caller (#15)
     twists: list[dict] = []
     if metal is not None and len(comp["donors"]) == 2:
         cmol, twists = twist_chelate_for(metal, cmol, tuple(comp["donors"]))
@@ -1186,6 +1188,58 @@ def _ligand_for(spec: BuildSpec, comp: dict[str, Any], structure_id: int | None 
             code="donor_index_stale",
             detail={"component": comp, "perceived": sorted(by_idx)})
     return block, [by_idx[i] for i in comp["donors"]], name, twists
+
+
+def _wrap_onto(spec: BuildSpec, comp: dict[str, Any], block, vacancies, metal: str):
+    """The ligand wrapped onto open vertices of `block`, and those vertices in donor order.
+
+    For a step adding a ligand of three or more donors (#15).  Mappings of donors onto
+    vertices are tried in slot order, ring pairs cis only; the first that
+    `geometry.wrap` can shape, clear of every heavy atom already on the rung, wins.
+    (None, None) if none can.
+    """
+    import numpy as np
+
+    from mofsbu.geometry.distances import metal_donor_distance
+    from mofsbu.geometry.placer import BITE_ANGLE_RANGE
+    from mofsbu.geometry.wrap import wrap_conformer
+
+    cmol, _molecule, _report = _protomer_mol(spec, comp)
+    donors = list(comp["donors"])
+    rings = [tuple(r) for r in comp.get("rings", ())]
+    frames = {id(v): v.frame for v in vacancies}
+    origin = np.asarray(vacancies[0].frame["origin"], dtype=float)
+    axes = {id(v): np.asarray(frames[id(v)]["axis"], dtype=float) for v in vacancies}
+    dists = [metal_donor_distance(metal, cmol.GetAtomWithIdx(d).GetSymbol()).value
+             for d in donors]
+    coords = np.asarray(getattr(block.geometry, "coords", block.geometry), dtype=float)
+    heavy = [i for i, node in enumerate(block.graph.nodes())
+             if block.graph.label(node).element != "H" and not block.graph.is_metal(node)]
+    clear = coords[heavy] - origin
+
+    def cis(v, w) -> bool:
+        cos = float(axes[id(v)] @ axes[id(w)] / (np.linalg.norm(axes[id(v)])
+                                                  * np.linalg.norm(axes[id(w)])))
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+        return BITE_ANGLE_RANGE[0] <= angle <= BITE_ANGLE_RANGE[1]
+
+    for pick in itertools.permutations(sorted(vacancies, key=lambda s: s.slot), len(donors)):
+        if not all(cis(pick[a], pick[b]) for a, b in rings):
+            continue
+        targets = np.array([d * axes[id(v)] / np.linalg.norm(axes[id(v)])
+                            for d, v in zip(dists, pick, strict=True)])
+        spare = [axes[id(v)] / np.linalg.norm(axes[id(v)]) * 2.05
+                 for v in vacancies if v not in pick]
+        xyz = wrap_conformer(cmol, donors, targets,
+                             vertices=np.vstack([clear, *spare]) if spare else clear)
+        if xyz is None:
+            continue
+        out = Chem.Mol(cmol)
+        conf = out.GetConformer()
+        for i, p in enumerate(xyz + origin):
+            conf.SetAtomPosition(i, p.tolist())
+        return out, pick
+    return None, None
 
 
 def _co_ligand_for(smiles: str, structure_id: int | None = None):
@@ -1374,10 +1428,16 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                 metal=metal.symbol, element=elements[0], seed=spec.seed)
             detail["join_choices_tried"] = tried
         else:
-            raise _Rejected(
-                f"{len(donors)} donors at once: one donor is `Mono`, two are "
-                f"`Chelate`, and three (fac/mer tridentate) is not built",
-                code="pathway_denticity_unbuilt", detail=detail)
+            wrapped, pick = _wrap_onto(spec, comp, block, vacancies, metal.symbol)
+            if wrapped is None:
+                raise _Rejected(
+                    f"no way to wrap {len(donors)} donors onto the {len(vacancies)} open "
+                    f"vertices keeps every chelate ring cis and the ligand clear",
+                    code="chelate_cannot_wrap", detail=detail)
+            ligand, donors, name, _ = _ligand_for(spec, comp, structure_id=ligand_sid,
+                                                  mol=wrapped)
+            result = join(block, ligand, list(pick), donors, mode=Chelate(), seed=spec.seed)
+            report = None
     except IncompatibleJoin as exc:
         # A refusal from the site pair is an ANSWER about the chemistry, the same way the
         # placer's is, and it is reported as a rejection rather than a failure.
