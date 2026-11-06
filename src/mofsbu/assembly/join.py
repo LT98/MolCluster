@@ -409,12 +409,11 @@ def chelate_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
             f"the two vertices are on different metals ({vacancies[0].atom_idx} and "
             f"{vacancies[1].atom_idx}); one ligand across two centres is a mu2 bridge, "
             "not a chelate", mode=mode)
-    for donor in donors:
-        if mode not in donor.binding_modes:
-            return Compatibility(
-                False, float("inf"),
-                f"{donor.donor_type} does not chelate; it offers "
-                f"{', '.join(donor.binding_modes)}", mode=mode)
+    # No check that each donor's `binding_modes` lists "chelate" (#15).  That table is per
+    # donor type, and whether two donors chelate is a property of the PAIR: an amine or a
+    # pyridyl N lists only "mono", so the gate refused every en and bipy step that
+    # `sites.model.chelate_pockets` had already found a pocket for.  The geometry below
+    # decides.
 
     frames = [_frame_of(s) for s in (*donors, *vacancies)]
     if any(f is None for f in frames):

@@ -320,7 +320,10 @@ built, and what the building turned up that the diagnosis had not.
   construct runs: en 1 → 7 complexes, bipy 1 → 6; oxalate gains its 5-ring O,O′ chelate. A
   grow step's ligand is twisted the same way before `Chelate` joins it (`twist_chelate_for`, aimed
   at `IDEAL_BITE_ANGLE`; the twist is in the task detail): oxalate's chelate steps 12 → 18 done,
-  none refused. Not covered: a third donor (dien, EDTA) that is not bound.
+  none refused. `chelate_compatible` no longer requires each donor type's own modes to list
+  "chelate" (amine and pyridyl N list only "mono"), the rule `chelate_pockets` already follows:
+  en's chelate steps now fail only as marginal clashes (built under a relaxing run mode), bipy
+  gets 2. Not covered: a third donor (dien, EDTA) that is not bound.
   `ALGO_VERSIONS["placement"]` 4 → 5.
 - *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
   ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
