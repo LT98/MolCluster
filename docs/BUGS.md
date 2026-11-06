@@ -34,7 +34,6 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 | [B16](#b16) | correctness | `scripts/run_spec.py` | `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store |
 | [B17](#b17) | honesty | `ui/static/index.html` | Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale |
 | [B19](#b19) | honesty | `ui/static/graph.html` | One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend |
-| [B20](#b20) | correctness | `runner._build_sphere` | A charged co-ligand's charge is left out of the complex's net charge: Ni(II) + 3 `[Cl-]` is stored q+2, not q−1 |
 | [B27](#b27) | correctness | `sites/model.py` | A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces |
 | [B29](#b29) | correctness | `identity/isomers.py` | `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) |
 
@@ -426,30 +425,6 @@ geometry-scoped row would.
 
 **Fix direction:** have `onchange` re-render the panel rather than only the viewer, or move the
 geometry-scoped rows into `showGeometry` so there is one writer for them.
-
----
-
-## B20
-
-**A charged co-ligand's charge is not counted in the complex's net charge.** `correctness` ·
-`runner._build_sphere`
-
-`charge = metal.oxidation_state + ligand_charge`, where `ligand_charge` sums the spec's
-molecule components only; the `n_co` co-ligand copies contribute nothing. For water that is
-invisible. For `[Cl-]` it is wrong: measured on a construct run (Ni(II) hs, catechol, CN 4,
-`co_ligand: "[Cl-]"`), `place` stored Ni[Cl]3 and Ni[Cl]3[catechol] as **q+2**; the true net
-charges are −1 and −1. The co-ligand's own graph (`[Cl] q-1`) is right.
-
-It surfaced through D26: a co-ligand `grow` joins the free `[Cl-]` block onto the rung below,
-and `join` sums block charges, so the step's product came out q+1 — a different identity from
-the q+2 node `place` built — and the ladder forked (12 structures where 8 were expected). The
-planner now **does not queue co-ligand steps for a charged co-ligand** and records a diagnostic
-naming this entry; `_execute_grow` refuses a hand-built one with `co_ligand_charged`.
-
-**Fix direction** — add `formal_charge(co_ligand) × n_co` to the charge in `_build_sphere`.
-That changes the L0 identity of every stored complex built with a charged co-ligand, so it is a
-registry decision (a versioned re-derivation, D19) and not a one-line patch; once it lands, the
-planner guard and the executor refusal come out together.
 
 ---
 

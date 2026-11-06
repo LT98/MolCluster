@@ -694,7 +694,7 @@ coordinates.
   `spec_version ≤ 7` reads `co_ligand_counts: fill` (window 2, inert under `fill`) and plans
   byte-identical tasks — pinned against the pre-v8 planner by digest
   (`tests/test_co_ligand_counts.py`), not by comparing the migration with itself. A charged
-  co-ligand is not stepped until B20 is fixed; the planner says so.
+  co-ligand is stepped like any other since B20 was fixed (rev 62).
 
 - **D27** **A species is entered in the form it exists in the study's medium, and its
   charge is read off that form.** `max_deprotonations` says how far below the entered form

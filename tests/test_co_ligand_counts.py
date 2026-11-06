@@ -16,6 +16,7 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -228,16 +229,12 @@ def test_a_window_of_zero_plans_no_step_and_says_so():
     assert any("window 0" in d["reason"] for d in planned.diagnostics)
 
 
-def test_a_charged_co_ligand_is_not_stepped_and_says_why():
-    """B20: `place` leaves a co-ligand's charge out, so a join-built step would fork the
-    node. The planner says so instead of queueing steps that land somewhere else."""
+def test_a_charged_co_ligand_is_stepped_like_any_other():
+    """B20: `place` now counts a co-ligand's charge, so its steps are planned too."""
     planned = enumerate_plan(aqua_spec(co_ligand="[Cl-]"))
-    assert not [t for t in planned.tasks
-                if t.kind == "grow" and "co_ligand" in t.payload["component"]]
-    assert any("charged" in d["reason"] and "B20" in d["hint"]
-               for d in planned.diagnostics), planned.diagnostics
-    lower = {p["n_co"] for p in places(planned) if p["components"]}
-    assert lower == {1, 2, 3}, "the lower counts are still built"
+    assert [t for t in planned.tasks
+            if t.kind == "grow" and "co_ligand" in t.payload["component"]]
+    assert not any("charged" in d["reason"] for d in planned.diagnostics)
 
 
 # ── the cap says it bit ──────────────────────────────────────────────────────
@@ -339,3 +336,21 @@ def test_the_co_ligand_ladder_is_built_and_connected(reg):
             seen.add(j)
             todo += list(near[j])
     assert seen == complexes
+
+
+def test_a_charged_co_ligand_counts_in_the_net_charge_and_the_ladder_does_not_fork(reg):
+    """B20: Ni(II) + catechol + n [Cl-] is q = 2 - n, whether `place` or a step built it."""
+    summary = run(reg, aqua_spec(co_ligand="[Cl-]"))
+    assert summary["status"] == "done" and not summary["counts"].get("failed")
+    codes = {r["error_code"] for r in reg.conn.execute(
+        "SELECT error_code FROM tasks WHERE status = 'rejected'")}
+    assert all(c.startswith("qc_") for c in codes), codes   # a clash, not the charge
+
+    rows = [dict(r) for r in find(reg, limit=200)]
+    complexes = [r for r in rows if r["n_metals"]]
+    for r in complexes:
+        m = re.search(r"Cl(\d*)", r["formula"])
+        n_cl = int(m.group(1) or 1) if m else 0
+        assert r["net_charge"] == 2 - n_cl, (r["formula"], r["net_charge"])
+    # Ni(Cl)2, Ni(Cl)3, Ni(cat)(Cl)1..3: one node each, as with water — no step forks one.
+    assert len(complexes) == 5, sorted((r["formula"], r["net_charge"]) for r in complexes)

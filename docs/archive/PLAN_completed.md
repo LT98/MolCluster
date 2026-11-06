@@ -347,6 +347,11 @@ built, and what the building turned up that the diagnosis had not.
   the quality → balance → energy → fidelity-gate sequence; both now call `_price`, so the two
   cannot be priced by different rules. `price_reaction` and `decompositions` give identical
   output over all 1,089 edges of `mvp_ni_thq_cl.db`.
+- *(rev 62)* **B20: a charged co-ligand counts in the complex's net charge.** `_build_sphere`
+  adds its formal charge × `n_co`, so Ni(II) + catechol + 3 `[Cl-]` is q−1, not q+2. The planner
+  skip and the `co_ligand_charged` refusal are removed, so charged co-ligands get ladder steps.
+  No re-derivation: existing rows built with a charged co-ligand keep the wrong charge, and those
+  registries have to be rebuilt.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF

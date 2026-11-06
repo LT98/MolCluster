@@ -199,18 +199,6 @@ def _parent_payloads(payload: dict[str, Any], co_ligand: str | None = None,
     return out
 
 
-#: Why a charged co-ligand is not stepped (see `_charged`).
-CO_LIGAND_CHARGED = ("B20: `place` leaves a co-ligand's charge out of the complex's net "
-                     "charge, so a join-built co-ligand step would land on a different "
-                     "identity from the rung it should reach")
-
-
-def _charged(smiles: str) -> bool:
-    """A co-ligand carrying a formal charge — which `place` does not count (B20)."""
-    mol = Chem.MolFromSmiles(smiles)
-    return mol is not None and Chem.GetFormalCharge(mol) != 0
-
-
 def _co_component(smiles: str) -> dict[str, Any]:
     """The co-ligand as the component a `grow` step adds: one monodentate copy."""
     return {"co_ligand": smiles, "denticity": 1, "count": 1,
@@ -345,11 +333,6 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
 
     if spec.pathways and spec.metals:
         step_co = spec.co_ligand if vary_co else None
-        if step_co and _charged(step_co):
-            skip(f"co-ligand steps not planned: {step_co!r} is charged",
-                 CO_LIGAND_CHARGED + ". The lower counts are still built; they are not "
-                 "linked to each other by co-ligand steps")
-            step_co = None
         if vary_co and spec.co_ligand_window == 0:
             skip("co_ligand_window 0 plans no pathway step",
                  "every step adds onto an empty vertex, and a window of 0 allows no rung "
@@ -973,6 +956,7 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
                                     donor_types=(co_site.donor_type,),
                                     name=spec.co_ligand)
                     for _ in range(payload["n_co"])]
+        ligand_charge += Chem.GetFormalCharge(co) * payload["n_co"]   # [Cl-] counts (B20)
 
     # A rung's vacancies are what the NEXT rung binds to, so their arrangement is this
     # step's business: left to fill order they come back trans, and a ~90 deg chelate is
@@ -1301,10 +1285,6 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     block = _sphere_block(parent, structure_id=parent_sid)
     comp = payload["component"]
     if "co_ligand" in comp:
-        if _charged(comp["co_ligand"]):
-            # The planner does not queue this; a hand-built or older queued task is refused.
-            raise _Rejected(f"co-ligand {comp['co_ligand']!r} is charged: {CO_LIGAND_CHARGED}",
-                            code="co_ligand_charged", detail={"co_ligand": comp["co_ligand"]})
         ligand, donors, name = _co_ligand_for(comp["co_ligand"], structure_id=ligand_sid)
     else:
         ligand, donors, name = _ligand_for(spec, comp, structure_id=ligand_sid)

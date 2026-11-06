@@ -12,6 +12,39 @@ file is specifically *things that behaved wrongly*.
 
 ---
 
+## B20 — a charged co-ligand's charge was left out of the complex's net charge ✅
+
+
+**A charged co-ligand's charge is not counted in the complex's net charge.** `correctness` ·
+`runner._build_sphere`
+
+`charge = metal.oxidation_state + ligand_charge`, where `ligand_charge` sums the spec's
+molecule components only; the `n_co` co-ligand copies contribute nothing. For water that is
+invisible. For `[Cl-]` it is wrong: measured on a construct run (Ni(II) hs, catechol, CN 4,
+`co_ligand: "[Cl-]"`), `place` stored Ni[Cl]3 and Ni[Cl]3[catechol] as **q+2**; the true net
+charges are −1 and −1. The co-ligand's own graph (`[Cl] q-1`) is right.
+
+It surfaced through D26: a co-ligand `grow` joins the free `[Cl-]` block onto the rung below,
+and `join` sums block charges, so the step's product came out q+1 — a different identity from
+the q+2 node `place` built — and the ladder forked (12 structures where 8 were expected). The
+planner now **does not queue co-ligand steps for a charged co-ligand** and records a diagnostic
+naming this entry; `_execute_grow` refuses a hand-built one with `co_ligand_charged`.
+
+**Fix direction** — add `formal_charge(co_ligand) × n_co` to the charge in `_build_sphere`.
+That changes the L0 identity of every stored complex built with a charged co-ligand, so it is a
+registry decision (a versioned re-derivation, D19) and not a one-line patch; once it lands, the
+planner guard and the executor refusal come out together.
+
+**Fixed (rev 62).** `_build_sphere` adds the co-ligand's formal charge × `n_co`, so Ni(II) +
+catechol + 3 `[Cl-]` is stored q−1. Both guards came out with it: the planner queues co-ligand
+steps for a charged co-ligand, and `_execute_grow` no longer refuses one. Rows already stored
+with the old charge are **not** re-derived (no version bump); a registry built before rev 62
+with a charged co-ligand has to be rebuilt. Test:
+`test_co_ligand_counts.py::test_a_charged_co_ligand_counts_in_the_net_charge_and_the_ladder_does_not_fork`
+(5 complexes, each q = 2 − n(Cl), no forked node).
+
+---
+
 ## B28 — a later build's rows read through the first build's numbering ✅
 
 **A geometry is stored in the atom order of whatever built it, not the order of the graph it is
