@@ -314,7 +314,13 @@ built, and what the building turned up that the diagnosis had not.
   sets of 3+ donors from the pockets: connected through chelate rings of ≥ 5, one donor per group
   (one O per carboxylate), no two donors a rigid path keeps apart (so tHQ's ring gets none), one
   set per symmetry class (bond order ignored, D15). dien and terpy offer κ3, tren κ3/κ4, EDTA two
-  κ3, two κ4, one κ5, one κ6.
+  κ3, two κ4, one κ5, one κ6. The placer serves 3+-donor ligands first by `arrangement`, one per
+  isomer (`vertex_arrangements`: proper rotations, so Δ and Λ stay two; only ring-closing pairs
+  must be cis, so mer exists): dien 2 (fac, mer), tren 1, EDTA κ6 2. Such a ligand is wrapped by
+  `geometry.wrap`: distance geometry with a stand-in metal bonded to the donors, the other
+  vertices as fixed points, the wrong hand discarded, then MMFF with the donors pinned. Every
+  arrangement of dien, tren and EDTA κ5/κ6 passes QC on Ni(II)/octahedral; fac terpy is refused
+  (the only fit puckers its rings).
 - *(rev 65)* **A chelate twists to reach its two vertices (#15).** The placer moved each ligand
   rigidly in its embedded shape, so en (anti, N···N 3.77 Å) and bipy (trans, 3.65 Å) could not
   span a cis pair and every build clashed the backbone onto the metal. `geometry.twist` turns the

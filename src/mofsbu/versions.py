@@ -108,6 +108,8 @@ ALGO_VERSIONS: dict[str, str] = {
     # 5: a chelate whose embedded shape cannot span two vertices (bite outside
     #    BITE_ANGLE_RANGE) is twisted about the single bonds between its donors (#15).
     #    Only those builds move; a chelate that already fitted is byte-identical to `4`.
+    #    A ligand of three or more donors is placed by arrangement and wrapped
+    #    (`geometry.wrap`); no such sphere was built at `4`.
     "placement":        "5",       # how a ligand is oriented on a coordination vertex
 }
 

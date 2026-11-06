@@ -417,3 +417,60 @@ def test_a_chelate_that_already_fits_is_not_moved():
     """THQ's pocket fits as embedded, so its pose and choice vector are what they were."""
     result = place_mononuclear("Zn", [thq_chelate(), aqua(), aqua()], geometry="tetrahedral")
     assert "twist" not in result.choice_vector["ligands"][0]
+
+
+# ── three or more donors: arrangements, and a ligand wrapped to fit (#15) ─────
+
+EDTA = "[O-]C(=O)CN(CC(=O)[O-])CCN(CC(=O)[O-])CC(=O)[O-]"
+
+
+def _poly(smiles: str, name: str, k: int) -> LigandPlacement:
+    from mofsbu.sites.model import donor_sets
+
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    s = next(d for d in donor_sets(mol, perceive(mol), max_denticity=6) if d.denticity == k)
+    pos = {a: i for i, a in enumerate(s.donors)}
+    return LigandPlacement(mol=mol, donor_idxs=s.donors, donor_types=s.donor_types,
+                           mode=BindingMode.CHELATE, name=name,
+                           rings=tuple((pos[a], pos[b]) for a, b in s.rings))
+
+
+def _sphere(lig: LigandPlacement) -> list[LigandPlacement]:
+    return [lig] + [aqua() for _ in range(6 - lig.denticity)]
+
+
+@pytest.mark.parametrize("smiles,name,k,n", [
+    ("NCCNCCN", "dien", 3, 2),              # fac, mer
+    ("NCCN(CCN)CCN", "tren", 4, 1),
+    (EDTA, "EDTA", 6, 2),                   # Delta, Lambda
+])
+def test_a_polydentate_ligand_has_one_arrangement_per_isomer(smiles, name, k, n):
+    from mofsbu.geometry.placer import vertex_arrangements
+
+    assert vertex_arrangements("octahedral", 6, _sphere(_poly(smiles, name, k))) == n
+
+
+@pytest.mark.parametrize("smiles,name,k", [("NCCNCCN", "dien", 3), (EDTA, "EDTA", 6)])
+def test_every_arrangement_of_a_flexible_ligand_is_built_clean(smiles, name, k):
+    from mofsbu.geometry.placer import vertex_arrangements
+
+    ligands = _sphere(_poly(smiles, name, k))
+    for a in range(vertex_arrangements("octahedral", 6, ligands)):
+        result = place_mononuclear("Ni", ligands, geometry="octahedral", arrangement=a)
+        assert result.ok, (a, str(result.report))
+        assert result.choice_vector["arrangement"] == a
+        assert result.choice_vector["ligands"][0]["wrapped"]
+
+
+def test_a_planar_ligand_is_not_bent_into_an_arrangement_it_cannot_reach():
+    """terpy sits mer; fac would pucker its rings, so it is not wrapped and QC refuses it."""
+    ligands = _sphere(_poly("c1ccnc(c1)-c1cccc(n1)-c1ccccn1", "terpy", 3))
+    built = [place_mononuclear("Ni", ligands, geometry="octahedral", arrangement=a)
+             for a in range(2)]
+    assert [r.ok for r in built] == [True, False]
+    assert not built[1].choice_vector["ligands"][0]["wrapped"]
+
+
+def test_a_sphere_without_a_polydentate_ligand_records_no_arrangement():
+    result = place_mononuclear("Zn", [thq_chelate(), aqua(), aqua()], geometry="tetrahedral")
+    assert "arrangement" not in result.choice_vector

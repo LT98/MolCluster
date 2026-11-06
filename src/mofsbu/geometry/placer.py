@@ -34,6 +34,7 @@ calls a don't-care has one well, hence a full turn of azimuthal freedom — whic
 """
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ from mofsbu.geometry._linalg import (
 from mofsbu.geometry.embed import coordinates
 from mofsbu.geometry.qc import QCReport, clash_limit, qc
 from mofsbu.geometry.twist import twist_to_bite
+from mofsbu.geometry.wrap import wrap_conformer
 from mofsbu.sites.frames import BindingMode, SiteFrame, site_frame, torsion_wells
 
 # Ideal metal-donor distances, angstrom.  This table is now the M-O BASE of the model in
@@ -277,6 +279,10 @@ IDEAL_BITE_ANGLE = 82.0
 BITE_ANGLE_RANGE = (55.0, 115.0)
 
 
+def _unit_rows(x: np.ndarray) -> np.ndarray:
+    return x / np.linalg.norm(x, axis=1, keepdims=True)
+
+
 def _span(d1: float, d2: float, angle_deg: float) -> float:
     """Donor-donor distance for two donors at `d1`, `d2` that subtend `angle_deg`."""
     return math.sqrt(d1 * d1 + d2 * d2 - 2.0 * d1 * d2 * math.cos(math.radians(angle_deg)))
@@ -443,8 +449,142 @@ def _clearance_scorer(symbols: list[str], other_symbols: list[str],
     return score
 
 
+def _rotations(units: np.ndarray) -> list[tuple[int, ...]]:
+    """Vertex permutations made by the polyhedron's PROPER rotations.
+
+    Reflections are left out on purpose: they turn one enantiomer (Delta) into the other
+    (Lambda), and those are two isomers, not one.
+    """
+    u = np.array([_unit(x) for x in units])
+    n = len(u)
+
+    def frame(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        e2 = _unit(y - float(x @ y) * x)
+        return np.array([x, e2, np.cross(x, e2)])
+
+    a = 0
+    b = next(j for j in range(1, n) if abs(float(u[0] @ u[j])) < 0.99)
+    ref = float(u[a] @ u[b])
+    out = {tuple(range(n))}
+    for i in range(n):
+        for j in range(n):
+            if i == j or abs(float(u[i] @ u[j]) - ref) > 1e-3:
+                continue
+            rot = frame(u[i], u[j]).T @ frame(u[a], u[b])
+            moved = u @ rot.T
+            perm = [int(np.argmin(np.linalg.norm(u - m, axis=1))) for m in moved]
+            if len(set(perm)) == n and np.allclose(u[perm], moved, atol=1e-3):
+                out.add(tuple(perm))
+    return sorted(out)
+
+
+def _ring_pairs(lig: LigandPlacement) -> list[tuple[int, int]]:
+    from itertools import combinations
+    return list(lig.rings) or list(combinations(range(lig.denticity), 2))
+
+
+def _ligand_symmetries(ligs: Sequence[LigandPlacement]) -> list[list[tuple[int, int]]]:
+    """Relabellings of the polydentate donors that leave the sphere the same molecule.
+
+    Within a ligand, a permutation of its donors that keeps donor types and ring pairs;
+    across ligands, swapping two identical ones.  Each relabelling maps (ligand, donor)
+    to (ligand, donor).
+    """
+    from itertools import permutations
+
+    own: list[list[tuple[int, ...]]] = []
+    for lig in ligs:
+        rings = {frozenset(r) for r in _ring_pairs(lig)}
+        own.append([p for p in permutations(range(lig.denticity))
+                    if all(lig.donor_types[p[i]] == lig.donor_types[i]
+                           for i in range(lig.denticity))
+                    and {frozenset((p[x], p[y])) for x, y in rings} == rings])
+    key = [(lig.name, lig.donor_types, tuple(sorted(map(tuple, map(sorted, lig.rings)))))
+           for lig in ligs]
+    out = []
+    for order in permutations(range(len(ligs))):
+        if any(key[order[i]] != key[i] for i in range(len(ligs))):
+            continue
+        for inner in itertools.product(*(own[i] for i in range(len(ligs)))):
+            out.append([(order[i], inner[i][d]) for i in range(len(ligs))
+                        for d in range(ligs[i].denticity)])
+    return out
+
+
+def _arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
+                  free: Sequence[int], held: set[int]) -> list[tuple[tuple[int, ...], ...]]:
+    """Every distinct way the polydentate ligands can sit, one per isomer, in a fixed order.
+
+    An arrangement gives each ligand its vertices in donor order.  Donors that close a
+    chelate ring must be cis (inside `BITE_ANGLE_RANGE`); other pairs may be trans.  Two
+    arrangements are the same isomer if a proper rotation that keeps the reserved
+    vertices reserved, together with a relabelling from `_ligand_symmetries`, maps one
+    onto the other; the smallest member of each class represents it.
+    """
+    slots = [(li, d) for li, lig in enumerate(ligs) for d in range(lig.denticity)]
+    partners: dict[tuple[int, int], list[tuple[int, int]]] = {s: [] for s in slots}
+    for li, lig in enumerate(ligs):
+        for x, y in _ring_pairs(lig):
+            partners[(li, x)].append((li, y))
+            partners[(li, y)].append((li, x))
+    cis = {(v, w) for v in free for w in free if v != w
+           and BITE_ANGLE_RANGE[0] <= _angle_between(targets[v], targets[w])
+           <= BITE_ANGLE_RANGE[1]}
+
+    found: list[dict[tuple[int, int], int]] = []
+
+    def place(k: int, chosen: dict[tuple[int, int], int]) -> None:
+        if k == len(slots):
+            found.append(dict(chosen))
+            return
+        slot = slots[k]
+        used = set(chosen.values())
+        for v in free:
+            if v in used:
+                continue
+            if all((v, chosen[p]) in cis for p in partners[slot] if p in chosen):
+                chosen[slot] = v
+                place(k + 1, chosen)
+                del chosen[slot]
+
+    place(0, {})
+    rotations = [r for r in _rotations(targets) if {r[h] for h in held} == held]
+    relabels = _ligand_symmetries(ligs)
+
+    def shaped(a: dict[tuple[int, int], int]) -> tuple[tuple[int, ...], ...]:
+        return tuple(tuple(a[(li, d)] for d in range(lig.denticity))
+                     for li, lig in enumerate(ligs))
+
+    classes = set()
+    for a in found:
+        images = []
+        for rot in rotations:
+            for rel in relabels:
+                images.append(shaped({rel[k]: rot[a[s]] for k, s in enumerate(slots)}))
+        classes.add(min(images))
+    return sorted(classes)
+
+
+def vertex_arrangements(geometry: str, cn: int, ligands: Sequence[LigandPlacement], *,
+                        reserve: Sequence[int] | None = None) -> int:
+    """How many distinct arrangements a sphere's polydentate ligands have (#15).
+
+    `place_mononuclear(arrangement=i)` builds the i-th, for i below this.  Zero when the
+    sphere has no ligand of three or more donors (there is nothing to arrange), and zero
+    when no arrangement keeps every chelate ring cis.  Monodentate and bidentate ligands
+    are placed after, as they always were.
+    """
+    poly = [lig for lig in ligands if lig.denticity >= 3]
+    if not poly:
+        return 0
+    targets = site_vectors(geometry, cn, 1.0)
+    held = _check_reserved(reserve, cn)
+    free = [i for i in range(cn) if i not in held]
+    return len(_arrangements(targets, poly, free, held))
+
+
 def _assign_targets(targets: np.ndarray, ligands: list, *, reserved: Sequence[int] = (),
-                    ) -> tuple[list[np.ndarray], list[int]]:
+                    arrangement: int = 0) -> tuple[list[np.ndarray], list[int]]:
     """Give each ligand coordination vertices its denticity can actually reach.
 
     Polydentate ligands are served first and take the vertex set whose angles sit
@@ -459,13 +599,32 @@ def _assign_targets(targets: np.ndarray, ligands: list, *, reserved: Sequence[in
 
     `reserved` vertices are withheld before any ligand is served and come back among the
     vacancies: this is *which* vertices stay open, as against how many (S4).
+
+    Ligands of three or more donors are served first and together, by `arrangement`, an
+    index into `vertex_arrangements` (#15): fac and mer are two arrangements, not one
+    best guess.  Each gets its vertices in donor order.
     """
     from itertools import combinations
 
     held = set(reserved)
     remaining = [i for i in range(len(targets)) if i not in held]
-    order = sorted(range(len(ligands)), key=lambda i: -ligands[i].denticity)
     assigned: dict[int, np.ndarray] = {}
+    poly = [i for i in range(len(ligands)) if ligands[i].denticity >= 3]
+    if poly:
+        options = _arrangements(targets, [ligands[i] for i in poly], remaining, held)
+        if not options:
+            raise ValueError(
+                "no arrangement of these polydentate ligands on this geometry keeps every "
+                "chelate ring cis")
+        if not 0 <= arrangement < len(options):
+            raise ValueError(f"arrangement {arrangement} does not exist: this sphere has "
+                             f"{len(options)}")
+        for i, verts in zip(poly, options[arrangement], strict=True):
+            assigned[i] = targets[list(verts)]
+            for v in verts:
+                remaining.remove(v)
+    order = sorted((i for i in range(len(ligands)) if i not in assigned),
+                   key=lambda i: -ligands[i].denticity)
     for i in order:
         k = ligands[i].denticity
         if k == 1:
@@ -543,6 +702,10 @@ class LigandPlacement:
     #: the choice `join(lone_pair=)` makes (M6/S1).  For a carboxylate it decides whether
     #: the metal sits syn or anti to the free oxygen.  0 is the stored frame, as before.
     lone_pair: int = 0
+    #: For three or more donors (#15): which donor pairs close a chelate ring, as
+    #: positions in `donor_idxs`.  Those pairs must sit cis; any other pair may be trans,
+    #: which is what makes mer possible.  Empty means every pair must be cis.
+    rings: tuple[tuple[int, int], ...] = ()
 
     @property
     def denticity(self) -> int:
@@ -686,6 +849,7 @@ def place_mononuclear(
     d_ml: float | None = None,
     reserve: Sequence[int] | None = None,
     seed: int = 0,
+    arrangement: int = 0,
 ) -> PlacementResult:
     """Assemble one coordination centre from ligands whose frames are already known.
 
@@ -733,7 +897,8 @@ def place_mononuclear(
     # So assignment happens on unit vectors — it scores angles, which are scale-free —
     # and the scaling is applied per donor afterwards.
     unit_targets = site_vectors(geometry, cn, 1.0)
-    per_ligand_units, vacant = _assign_targets(unit_targets, ligands, reserved=reserved)
+    per_ligand_units, vacant = _assign_targets(unit_targets, ligands, reserved=reserved,
+                                               arrangement=arrangement)
 
     per_ligand_d: list[list[Distance]] = []
     for lig in ligands:
@@ -859,16 +1024,25 @@ def place_mononuclear(
                 # Only when twisted, so an untwisted chelate keeps its choice vector.
                 choices[-1]["twist"] = twists
         else:
-            p_donors = np.array([f.origin for f in frames])
-            centroid = xyz.mean(axis=0)
-            outward = _unit(assigned.mean(axis=0))
-            span = float(np.linalg.norm(centroid - p_donors.mean(axis=0)))
-            rot, trans = _kabsch(np.vstack([p_donors, centroid]),
-                                 np.vstack([assigned, assigned.mean(axis=0) + outward * span]))
-            placed = (rot @ xyz.T).T + trans
+            # Three or more donors, each on its own vertex in donor order (#15): the
+            # ligand is re-shaped around the metal (`geometry.wrap`), clear of the
+            # vertices the other ligands take.  No fit: the rigid ligand, aligned on its
+            # donors, and QC says why it fails.
+            mine = {tuple(np.round(v, 6)) for v in _unit_rows(assigned)}
+            others = np.array([d * u for u in unit_targets
+                               if tuple(np.round(u, 6)) not in mine]).reshape(-1, 3)
+            wrapped = wrap_conformer(mol, lig.donor_idxs, assigned, vertices=others)
+            if wrapped is not None:
+                placed = wrapped
+            else:
+                rot, trans = _kabsch(xyz[list(lig.donor_idxs)], assigned)
+                placed = (rot @ xyz.T).T + trans
             choices.append({"ligand": lig.name, "mode": lig.mode.value,
                             "donors": list(lig.donor_idxs),
-                            "distances": [x.to_dict() for x in dists]})
+                            "distances": [x.to_dict() for x in dists],
+                            "wrapped": wrapped is not None})
+            if lig.rings:
+                choices[-1]["rings"] = [list(r) for r in lig.rings]
 
         owner = lig.name or f"ligand{len(offsets)}"
         for atom, position in zip(mol.GetAtoms(), placed):
@@ -902,6 +1076,9 @@ def place_mononuclear(
         # Only when something was reserved, so a saturated build's choice vector — and
         # therefore its stored identity — is unchanged by this argument existing.
         cv["reserve"] = sorted(reserved)
+    if any(lig.denticity >= 3 for lig in ligands):
+        # Only with a polydentate ligand, for the same reason: which isomer this is.
+        cv["arrangement"] = int(arrangement)
     return PlacementResult(symbols, arr, 0, donor_idxs, bonded, report,
                            choice_vector=cv,
                            atom_offsets=offsets, owners=owners,
