@@ -219,7 +219,7 @@ defaulting.
 = 0.15 Å (**D21**), calibrated on xTB-relaxed geometries because RAW constructs turned out to
 have *no* stochastic spread to calibrate against — a join is a deterministic function of its
 choice vector. The energy window is deliberately unset: the only measurement available is
-contaminated by the rigid-core defect ([B9](../BUGS_details.md#b9)), and a window set from it would
+contaminated by the rigid-core defect ([B9](../BUGS.md#b9)), and a window set from it would
 bake that defect into a stored threshold.
 
 **Its bookkeeping landed late, at M6/S0** — D21, D22 and D23 written up, and
@@ -310,6 +310,35 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 64)* **B8: a donor's approach rays start where the metal sits.** `occlusion` cast its
+  rays from the donor's centre, which lies inside a bonded H's sphere, so each bonded atom blocked
+  a ~73° wedge wherever it pointed and every amine read BLOCKED (ammonia 0.86). A donor's rays now
+  start at `DONOR_RAY_START` (2.0 Å); vacancies keep 0. Every atom still counts, so a bonded H
+  that points into the path still blocks. Ammonia, methylamine and ethylenediamine become OPEN
+  (0.00–0.16); water reads 0.00. `ALGO_VERSIONS["site_state"]` "1" → "2"; stored rows are not
+  re-derived. `BLOCKED_OCCLUSION` stays 0.80; its note now carries the re-measured panel (#14),
+  including that most hindered bases (2,6-di-tBu-pyridine, tBu₃N) read OPEN.
+- *(rev 63)* **Bugs: a checklist, and details that stay in place.** `docs/BUGS.md` is one line
+  per bug (ledger entries, open `bug` issues, resolved entries); the detail sections are renamed
+  to `BUGS_details.md`, where a fix adds a `**Fixed (rev N, PR #M).**` note instead of moving
+  the entry. `archive/BUGS_resolved.md` keeps what was fixed before this and takes no new entries.
+- *(rev 62)* **B20: a charged co-ligand counts in the complex's net charge.** `_build_sphere`
+  adds its formal charge × `n_co`, so Ni(II) + catechol + 3 `[Cl-]` is q−1, not q+2. The planner
+  skip and the `co_ligand_charged` refusal are removed, so charged co-ligands get ladder steps.
+  No re-derivation: existing rows built with a charged co-ligand keep the wrong charge, and those
+  registries have to be rebuilt.
+- *(rev 61)* **One `join`, with the special cases as mode objects.** `join`, `join_chelate`,
+  `join_bridge` and `join_metal_metal` each repeated the merge, charge/multiplicity, site
+  inheritance and coordinate stacking (#74's O–H turn had to go in four places). Now
+  `join(a, b, sites_a, sites_b, mode=)` does those once, and `Mono`, `Chelate`, `Bridge` and
+  `MetalMetal` hold only what differs: the verdict, the bonds, the choice vector and the
+  placement. The three variant functions are gone; callers pass a mode. Behaviour-neutral:
+  construct builds of the Ni/tHQ/Cl slice (2,616 geometries) and the M6/S5 enumerate route (127)
+  reproduce identical L1 hashes, choice-vector digests and coordinate hashes. Likewise in
+  `energy/routes.py`: `price_reaction` (recorded edges) and `_derived` (inferred splits) repeated
+  the quality → balance → energy → fidelity-gate sequence; both now call `_price`, so the two
+  cannot be priced by different rules. `price_reaction` and `decompositions` give identical
+  output over all 1,089 edges of `mvp_ni_thq_cl.db`.
 - *(rev 60)* **A hydroxyl H no longer points into the coordination sphere (#69, B30).** The
   ligand is placed rigidly, so an O–H on an O not bound to the metal could aim at it (Ni–H 1.86 Å
   on #132). `placer.turn_hydroxyl_h` turns it about its X–O bond until it is ≥ 2.4 Å from every
@@ -335,35 +364,6 @@ built, and what the building turned up that the diagnosis had not.
   the local LLM server share a card (`WORKPLAN_energy.md` risk "One GPU, three tenants"). Not
   covered: the check is a snapshot, not a reservation, so two workers can both see room for one
   task, and a floor above the card's total memory holds a worker indefinitely.
-- *(rev 61)* **One `join`, with the special cases as mode objects.** `join`, `join_chelate`,
-  `join_bridge` and `join_metal_metal` each repeated the merge, charge/multiplicity, site
-  inheritance and coordinate stacking (#74's O–H turn had to go in four places). Now
-  `join(a, b, sites_a, sites_b, mode=)` does those once, and `Mono`, `Chelate`, `Bridge` and
-  `MetalMetal` hold only what differs: the verdict, the bonds, the choice vector and the
-  placement. The three variant functions are gone; callers pass a mode. Behaviour-neutral:
-  construct builds of the Ni/tHQ/Cl slice (2,616 geometries) and the M6/S5 enumerate route (127)
-  reproduce identical L1 hashes, choice-vector digests and coordinate hashes. Likewise in
-  `energy/routes.py`: `price_reaction` (recorded edges) and `_derived` (inferred splits) repeated
-  the quality → balance → energy → fidelity-gate sequence; both now call `_price`, so the two
-  cannot be priced by different rules. `price_reaction` and `decompositions` give identical
-  output over all 1,089 edges of `mvp_ni_thq_cl.db`.
-- *(rev 62)* **B20: a charged co-ligand counts in the complex's net charge.** `_build_sphere`
-  adds its formal charge × `n_co`, so Ni(II) + catechol + 3 `[Cl-]` is q−1, not q+2. The planner
-  skip and the `co_ligand_charged` refusal are removed, so charged co-ligands get ladder steps.
-  No re-derivation: existing rows built with a charged co-ligand keep the wrong charge, and those
-  registries have to be rebuilt.
-- *(rev 63)* **Bugs: a checklist, and details that stay in place.** `docs/BUGS.md` is one line
-  per bug (ledger entries, open `bug` issues, resolved entries); the detail sections are renamed
-  to `BUGS_details.md`, where a fix adds a `**Fixed (rev N, PR #M).**` note instead of moving
-  the entry. `archive/BUGS_resolved.md` keeps what was fixed before this and takes no new entries.
-- *(rev 64)* **B8: a donor's approach rays start where the metal sits.** `occlusion` cast its
-  rays from the donor's centre, which lies inside a bonded H's sphere, so each bonded atom blocked
-  a ~73° wedge wherever it pointed and every amine read BLOCKED (ammonia 0.86). A donor's rays now
-  start at `DONOR_RAY_START` (2.0 Å); vacancies keep 0. Every atom still counts, so a bonded H
-  that points into the path still blocks. Ammonia, methylamine and ethylenediamine become OPEN
-  (0.00–0.16); water reads 0.00. `ALGO_VERSIONS["site_state"]` "1" → "2"; stored rows are not
-  re-derived. `BLOCKED_OCCLUSION` stays 0.80; its note now carries the re-measured panel (#14),
-  including that most hindered bases (2,6-di-tBu-pyridine, tBu₃N) read OPEN.
 - *(rev 57)* **Organising: package overviews, a gate that keeps this changelog current, and
   a device setting the code could not use.** Revisions for PRs #31–#68 (2026-09 to 2026-10-26:
   M6 S1–S5, the salt study, solvation S1–S3, reversible hops, MACE-MH/POLAR and GPU4PySCF
