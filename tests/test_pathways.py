@@ -251,3 +251,44 @@ def test_the_estimate_writes_nothing(reg, tmp_path):
     before = reg.count("structures"), reg.count("runs")
     estimate(ladder_spec())
     assert (reg.count("structures"), reg.count("runs")) == before
+
+
+def test_a_chelate_step_twists_a_ligand_that_cannot_reach_as_embedded(reg):
+    """#15: oxalate embeds trans, so of its O,O' 5-ring pockets only the syn pair fits.
+
+    `place` twists it (placer); the step that joins it onto the rung below has to as well,
+    or the ladder has a rung with no way up to it.
+    """
+    import json
+
+    spec = ladder_spec(molecules=(MoleculeSpec("oxalate", "[O-]C(=O)C(=O)[O-]", 1),),
+                       metals=(MetalSpec("Ni", 2, "hs"),), coordination="6",
+                       geometries=("octahedral",), pocket=PocketPredicate(ring_size=5),
+                       co_ligand="O")
+    assert run(reg, spec)["status"] == "done"
+    steps = [(r["status"], r["error_code"], json.loads(r["detail_json"] or "{}"))
+             for r in reg.conn.execute(
+                 "SELECT status, error_code, payload_json, detail_json FROM tasks "
+                 "WHERE kind = 'grow'")
+             if "co_ligand" not in json.loads(r["payload_json"])["component"]]
+    assert steps and all(s == "done" for s, _, _ in steps), [(s, c) for s, c, _ in steps]
+    assert any(d["step"].get("twist") for _, _, d in steps), "the anti pair was twisted"
+
+
+def test_a_step_adding_a_tridentate_ligand_lands_on_the_placed_structure(reg):
+    """#15: dien is wrapped onto three open vertices of the rung below, not refused."""
+    import json
+
+    spec = ladder_spec(molecules=(MoleculeSpec("dien", "NCCNCCN", 1),),
+                       metals=(MetalSpec("Ni", 2, "hs"),), coordination="6",
+                       ligands_per_metal="1", geometries=("octahedral",),
+                       pocket=PocketPredicate(), co_ligand="O", co_ligand_window=3)
+    assert run(reg, spec)["status"] == "done"
+    rows = reg.conn.execute(
+        "SELECT kind, status, structure_id, payload_json FROM tasks "
+        "WHERE kind IN ('place', 'grow')").fetchall()
+    placed = {r["structure_id"] for r in rows if r["kind"] == "place" and r["status"] == "done"}
+    steps = [r for r in rows if r["kind"] == "grow"
+             and json.loads(r["payload_json"])["component"].get("denticity") == 3]
+    assert steps and all(r["status"] == "done" for r in steps)
+    assert {r["structure_id"] for r in steps} <= placed
