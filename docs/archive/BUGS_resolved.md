@@ -1,7 +1,8 @@
 # Resolved issues
 
-**Archive.** `../BUGS.md` is the active tracker and holds only what is still open. An entry
-moves here when it is fixed and covered by a test.
+**Closed to new entries (rev 63).** New fixes are not moved here: they are ticked in [`../BUGS.md`](../BUGS.md) and noted in place in [`../BUGS_details.md`](../BUGS_details.md).
+
+**Archive.** `../BUGS.md` is the active tracker. Entries fixed before rev 63 moved here.
 
 Each entry keeps its diagnosis as well as its fix. The diagnosis is the expensive part and it
 explains the shape of the fix; several of these also record what building the fix turned up
@@ -80,7 +81,7 @@ Site states that had been keyed through the wrong numbering were dropped (absent
 **What it turned up.** With the numbering accounted for, about half of OMOL-0 relaxations really
 change connectivity (5892/10946 on `salt_study_k1`, 4511/8781 on `THQ_run`) — the subject of D11
 `derived_from` next. And a canonical index names an atom only up to symmetry, which is harmless
-for site rows but not for L2's centre key ([B29](../BUGS.md#b29)).
+for site rows but not for L2's centre key ([B29](../BUGS_details.md#b29)).
 
 ---
 
@@ -294,7 +295,7 @@ perceives `hydroxide_O`, which already declared `mono`/`mu2`/`mu3` in `sites.fra
 
 **What the fix turned up, and it is a separate defect: `[O-2]` types as `hydroxide_O` too.**
 The `not heavy` branch does not distinguish a bare oxide from a hydroxide, so an oxo reports a
-hydroxide's type and pKa. It is filed as [B15](../BUGS.md#b15) rather than folded in here,
+hydroxide's type and pKa. It is filed as [B15](../BUGS_details.md#b15) rather than folded in here,
 because giving oxo its own type means a new curated row in `donor_descriptors.tsv` and that is
 a change to the reference dataset, not to this function. It does not block S2: µ3/µ4 oxo
 bridges are handled as **centres**, which never asks perception for a donor type.
@@ -341,7 +342,7 @@ nothing asserted on a `metal_block` identity. A correctness bug that no test can
 correctness bug that will be reintroduced, which is why the fix ships with a producer-agreement
 test rather than with a hash update.
 
-**It moves identities, and the cost is the one already accepted for [B2](../BUGS.md#b2).** Rows
+**It moves identities, and the cost is the one already accepted for [B2](../BUGS_details.md#b2).** Rows
 written under the old behaviour keep their stored hash and are never re-derived (ground rule 6
 / D19), so the same species can occupy two rows across the change. In practice the cost was not
 paid: `metal_block` has no caller in `src/` or `scripts/` — the enumerator is reached from tests

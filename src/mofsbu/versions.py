@@ -80,7 +80,7 @@ ALGO_VERSIONS: dict[str, str] = {
     #    their own answer and are rewritten the next time anything touches the structure
     #    (D19), which is how the `2` bump behaved too.
     "perception":       "3",       # which atoms are donors, of what type, and their lobes
-    "site_state":       "1",       # status rule + buried-volume convention (M4)
+    "site_state":       "2",       # status rule + buried-volume convention (M4)
     # E1: which distances count as a broken graph edge or a formed non-edge
     # (`geometry.connectivity.BROKEN` / `FORMED`).  Stored in each verdict.
     "connectivity":     "conn1",
@@ -105,7 +105,12 @@ ALGO_VERSIONS: dict[str, str] = {
     #    keep algo=2 and are never re-labelled (ground rule 6 / D19).
     # 4: an O–H on an O not bound to a metal is turned away from it (#69), so constructs
     #    whose O–H pointed into the sphere differ from a `3` one; no other atom moves.
-    "placement":        "4",       # how a ligand is oriented on a coordination vertex
+    # 5: a chelate whose embedded shape cannot span two vertices (bite outside
+    #    BITE_ANGLE_RANGE) is twisted about the single bonds between its donors (#15).
+    #    Only those builds move; a chelate that already fitted is byte-identical to `4`.
+    #    A ligand of three or more donors is placed by arrangement and wrapped
+    #    (`geometry.wrap`); no such sphere was built at `4`.
+    "placement":        "5",       # how a ligand is oriented on a coordination vertex
 }
 
 

@@ -391,6 +391,41 @@ def test_buried_volume_stays_in_range_on_a_real_complex():
     assert all(s.buried_vol is None or 0.0 <= s.buried_vol <= 1.0 for s in states)
 
 
+def _open_donors(smiles: str) -> tuple[int, int]:
+    """(open, perceived) donor atoms for one free ligand at its embedded geometry."""
+    mol = embed_molecule(mol_from_smiles(smiles), seed=7)
+    graph = from_rdkit(mol, charge=0, multiplicity=1)
+    conf = mol.GetConformer()
+    coords = [list(conf.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
+    states = refresh_state(perceive(mol), coords, graph=graph,
+                           symbols=[a.GetSymbol() for a in mol.GetAtoms()])
+    return (len({s.atom_idx for s in states if s.is_open}),
+            len({s.atom_idx for s in states}))
+
+
+@pytest.mark.parametrize("name,smiles", [
+    ("ammonia", "N"), ("methylamine", "CN"), ("ethylenediamine", "NCCN"),
+    ("water", "O"), ("pyridine", "c1ccncc1")])
+def test_a_donor_is_not_blocked_by_its_own_bonded_atoms(name, smiles):
+    """B8: an amine's own N-H hydrogens read as walls, so no amine could be joined."""
+    n_open, n_donors = _open_donors(smiles)
+    assert n_open == n_donors > 0, (name, n_open, n_donors)
+
+
+def test_a_bonded_h_in_the_approach_path_still_blocks():
+    """B8 starts a donor's rays at the metal's distance; it does not drop bonded atoms."""
+    from mofsbu.descriptors.ease import occlusion
+    from mofsbu.sites.state import DONOR_RAY_START
+
+    mol = embed_molecule(mol_from_smiles("O"), seed=7)
+    xyz = np.array([list(mol.GetConformer().GetAtomPosition(i)) for i in range(3)])
+    elements = ["O", "H", "H"]
+    along_oh = occlusion(xyz, 0, xyz[1] - xyz[0], elements=elements, start=DONOR_RAY_START)
+    lone_pair = occlusion(xyz, 0, perceive(mol)[0].frame["axis"], elements=elements,
+                          start=DONOR_RAY_START)
+    assert lone_pair == 0.0 < along_oh
+
+
 def _provisional_fraction(smiles: str) -> tuple[int, int]:
     from mofsbu.sites.model import shifting_pocket_donors
 

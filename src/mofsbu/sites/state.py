@@ -41,9 +41,19 @@ class SiteStatus(str, Enum):
 #: Above this fraction of the approach cone blocked, a donor with no metal on it is
 #: reported as sterically BLOCKED rather than open.  Chosen so that a donor whose entire
 #: hemisphere of approach is walled off reads as blocked while ordinary substituent
-#: crowding does not: a bare aqua O sits near 0.0, a carboxylate O in an open carboxylate
-#: near 0.2-0.4, and a donor pointing into its own ring system above 0.8.
+#: crowding does not.  Measured with donor rays from `DONOR_RAY_START` (B8, #14), free
+#: ligand, one embed: aqua O and ammonia N 0.00, acetate O 0.05-0.08, pyridine N 0.09,
+#: tHQ O 0.11-0.28, PtBu3 P 0.52, 2,6-di-tBu-pyridine N 0.70, tBu3N 0.78, proton sponge
+#: N 0.77-0.80.  So most hindered bases read OPEN at this value.  Lowering it to 0.6
+#: would block them, and also 94 more of the 8,590 unbound donors in the Ni/tHQ/Cl
+#: slice's complexes (154 score >= 0.6, 60 >= 0.8): not chosen yet.  Vacancies use the
+#: same value.
 BLOCKED_OCCLUSION = 0.80
+
+#: Where a donor's approach rays start, in A: about where the metal sits (M-L ~2.0-2.1).
+#: Closer in, a ray starts inside the donor's own bonded H (B8). A vacancy's rays start at
+#: the metal, so they keep 0.
+DONOR_RAY_START = 2.0
 
 STATE_METHOD = MethodSpec(
     code="heuristic", code_version=ALGO_VERSIONS["site_state"],
@@ -92,8 +102,9 @@ def buried_volume(coords: Any, site: Any, *, radius: float = 3.5,
         # No frame means no direction to ask about.  A sphere-average would be a
         # different quantity wearing this one's name, so the answer is "unknown".
         return None                                              # type: ignore[return-value]
+    start = 0.0 if getattr(site, "role", "donor") == "vacancy" else DONOR_RAY_START
     return occlusion(coords, site.atom_idx, frame["axis"], radius=radius,
-                     elements=symbols)
+                     elements=symbols, start=start)
 
 
 def _occupied(graph: TypedGraph | None, atom_idx: int) -> bool:

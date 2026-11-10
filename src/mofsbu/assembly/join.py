@@ -409,12 +409,11 @@ def chelate_compatible(donors: Sequence[Site], vacancies: Sequence[Site], *,
             f"the two vertices are on different metals ({vacancies[0].atom_idx} and "
             f"{vacancies[1].atom_idx}); one ligand across two centres is a mu2 bridge, "
             "not a chelate", mode=mode)
-    for donor in donors:
-        if mode not in donor.binding_modes:
-            return Compatibility(
-                False, float("inf"),
-                f"{donor.donor_type} does not chelate; it offers "
-                f"{', '.join(donor.binding_modes)}", mode=mode)
+    # No check that each donor's `binding_modes` lists "chelate" (#15).  That table is per
+    # donor type, and whether two donors chelate is a property of the PAIR: an amine or a
+    # pyridyl N lists only "mono", so the gate refused every en and bipy step that
+    # `sites.model.chelate_pockets` had already found a pocket for.  The geometry below
+    # decides.
 
     frames = [_frame_of(s) for s in (*donors, *vacancies)]
     if any(f is None for f in frames):
@@ -898,11 +897,11 @@ class Chelate:
         Both vertices are on ONE metal — `chelate_compatible` refuses the other case by name,
         and that refusal is where a µ2 bridge begins.
         """
-        if len(sites_a) != 2 or len(sites_b) != 2:
+        if len(sites_a) != len(sites_b) or len(sites_a) < 2:
             raise ValueError(
-                f"a chelate join takes two sites on each block; got {len(sites_a)} and "
-                f"{len(sites_b)}. One donor onto one vertex is `join`; one donor across two "
-                f"METALS is a mu2 bridge and is M6.")
+                f"a chelate join takes the same number of sites, two or more, on each "
+                f"block; got {len(sites_a)} and {len(sites_b)}. One donor onto one vertex "
+                f"is `join`; one donor across two METALS is a mu2 bridge and is M6.")
         # Each side has to be entirely one role: two donors here, two vertices there.  A
         # mixed pair is refused as a pairing rather than caught later as an atom-map error,
         # because "one of these four is on the wrong side" is the thing the caller got wrong.
@@ -924,8 +923,12 @@ class Chelate:
 
         metal_element = metal_block.graph.label(vacancies[0].atom_idx).element
         donor_elements = [donor_block.graph.label(s.atom_idx).element for s in donors]
-        verdict = chelate_reach(donors, vacancies, partner=metal_element,
-                                donor_elements=donor_elements)
+        if len(donors) == 2:
+            verdict = chelate_reach(donors, vacancies, partner=metal_element,
+                                    donor_elements=donor_elements)
+        else:
+            verdict = _set_reach(donor_block, donors, vacancies, metal_element,
+                                 donor_elements)
         if not verdict.feasible:
             raise IncompatibleJoin(verdict)
 
@@ -954,9 +957,12 @@ class Chelate:
 
         donor_sites = donor_block.sites
         coords = None
-        if with_geometry:
+        if with_geometry and len(donors) == 2:
             coords, donor_sites = _place_chelating_block(donor_block, donors, vacancies,
                                                          distances=distances)
+        elif with_geometry:
+            coords, donor_sites = _place_set_block(donor_block, donors, vacancies,
+                                                   distances=distances)
 
         return _finish(a, product, map_a, map_b, coords=coords, choice_vector=choice_vector,
                        verdict=verdict, moving=donor_block, moved_sites=donor_sites,
@@ -1186,6 +1192,77 @@ def chelate_reach(donors: Sequence[Site], vacancies: Sequence[Site], *,
     return Compatibility(feasible, mismatch / tolerance_deg, reason,
                          mode=BindingMode.CHELATE.value, wells=pocket.wells,
                          d_ml=pocket.d_ml)
+
+
+#: How far, A, a donor of three or more may miss its vertex after the rigid fit (#15).
+#: The caller shapes the ligand to the vertices first (`geometry.wrap`); a block that
+#: misses by more was not shaped for these vertices.
+MAX_SET_MISS = 0.3
+
+
+def _set_targets(donors: Sequence[Site], vacancies: Sequence[Site],
+                 distances: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    frames = [_frame_of(s) for s in (*donors, *vacancies)]
+    if any(f is None for f in frames):
+        raise ValueError("a chelate placement is computed FROM the frames and at least "
+                         "one site has none. Perceive with a geometry before joining.")
+    k = len(donors)
+    p = np.array([frames[i][0] for i in range(k)])
+    t = np.array([frames[k + i][0] + d * frames[k + i][1]
+                  for i, d in enumerate(distances)])
+    return p, t
+
+
+def _rigid_fit(p: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    cp, ct = p.mean(axis=0), t.mean(axis=0)
+    u, _s, vt = np.linalg.svd((p - cp).T @ (t - ct))
+    d = np.sign(np.linalg.det(vt.T @ u.T))
+    rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+    miss = float(np.linalg.norm((p - cp) @ rot.T + ct - t, axis=1).max())
+    return rot, ct - rot @ cp, miss
+
+
+def _set_reach(donor_block: BuildingBlock, donors: Sequence[Site],
+               vacancies: Sequence[Site], metal: str,
+               elements: Sequence[str]) -> Compatibility:
+    """Can this block, as shaped, put three or more donors on these vertices at once?
+
+    A rigid fit of the donors onto the vertex positions at their own bond lengths; the
+    worst miss decides.  The block is expected to arrive already wrapped to these
+    vertices (`geometry.wrap`), so this checks the shape it was given rather than
+    searching for one.
+    """
+    if len({v.atom_idx for v in vacancies}) != 1:
+        return Compatibility(False, float("inf"),
+                             "the vertices are on different metals; a chelate wraps one",
+                             mode=BindingMode.CHELATE.value)
+    distances = [metal_donor_distance(metal, el).value for el in elements]
+    p, t = _set_targets(donors, vacancies, distances)
+    _rot, _shift, miss = _rigid_fit(p, t)
+    feasible = miss <= MAX_SET_MISS
+    return Compatibility(
+        feasible, miss / MAX_SET_MISS,
+        f"{len(donors)} donors onto {len(vacancies)} vertices: worst miss {miss:.2f} A "
+        f"against {MAX_SET_MISS} A" + ("" if feasible else
+                                       "; the ligand is not shaped for these vertices"),
+        mode=BindingMode.CHELATE.value)
+
+
+def _place_set_block(donor_block: BuildingBlock, donors: Sequence[Site],
+                     vacancies: Sequence[Site], *, distances: Sequence[float],
+                     ) -> tuple[np.ndarray, tuple[Site, ...]]:
+    """Rigidly move a block of three or more donors onto their vertices (#15)."""
+    coords = _coords_of(donor_block, "the donor block")
+    if coords is None:
+        raise ValueError("cannot align this chelate join: the donor block has no "
+                         "coordinates; pass with_geometry=False for the graph only.")
+    p, t = _set_targets(donors, vacancies, distances)
+    rot, shift, _miss = _rigid_fit(p, t)
+    moved = coords @ rot.T + shift
+    centre = p.mean(axis=0)
+    sites = tuple(replace(s, frame=_transform_frame(s.frame, rot, centre, rot @ centre + shift))
+                  for s in donor_block.sites)
+    return moved, sites
 
 
 def _refuse_chelate(sites_a: Sequence[Site], sites_b: Sequence[Site],

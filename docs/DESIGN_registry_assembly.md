@@ -597,7 +597,7 @@ coordinates.
   **C2's energy half stays open, deliberately.** Over the same set the Kind-A *energy* spread
   reached 16.6 kcal/mol between samples whose cores agreed to 0.03 Å — all of it motion
   outside the core, because the rigid-core rule cuts a delocalised carboxylate C–O as if it
-  were rotatable ([B9](BUGS.md#b9)). A window set from that data would bake a known defect
+  were rotatable ([B9](BUGS_details.md#b9)). A window set from that data would bake a known defect
   into a stored threshold. `DEFAULT_ENERGY_WINDOW is None`, the mechanism is built and tested,
   and the number waits for the core fix.
 
@@ -607,7 +607,7 @@ coordinates.
   only the builder holds coordinates at insert time. `store_block` therefore derives the tag
   by default and takes `l2=` as an override for the one case that needs it: the run pipeline
   does not tag isomers, so a route that tagged its own product would file it apart from the
-  node every other route reached ([B2](BUGS.md#b2)). It passes `l2=""` **on purpose**, and
+  node every other route reached ([B2](BUGS_details.md#b2)). It passes `l2=""` **on purpose**, and
   closing B2 moves both paths together or neither.
 
   No backfill, in either direction. Of the 39 structures stored under the stub, 18 would gain

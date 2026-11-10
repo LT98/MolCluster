@@ -176,7 +176,7 @@ def sharpness(donor: DonorDescriptor) -> float:
 
 def occlusion(coords: Any, site_idx: int, axis: Any, *,
               radius: float = 3.5, n_rays: int = 64, half_angle_deg: float = 75.0,
-              elements: Any = None) -> float:
+              elements: Any = None, start: float = 0.0) -> float:
     """Fraction of the approach cone that is blocked, in [0, 1].
 
     §6.4 lists steric accessibility as "cone/solid angle or buried volume %V_bur —
@@ -185,6 +185,13 @@ def occlusion(coords: Any, site_idx: int, axis: Any, *,
     a second time: a buried-volume sphere centred on the donor counts the ligand the donor
     is attached to as blocking, and every donor then looks equally crowded.  What matters
     is whether a metal can get in ALONG THE DIRECTION THE LONE PAIR POINTS.
+
+    `start` is where along each ray the test begins (B8). From the donor's centre (0) a
+    ray starts inside its own bonded H's sphere (N-H 1.02 A < vdW 1.20 A), so every bonded
+    atom blocked a ~73 deg wedge wherever it pointed, and every amine read BLOCKED. A
+    donor's caller starts at the metal's distance instead: an atom blocks if its sphere
+    reaches the ray between `start` and `radius`, so a bonded H that does point into the
+    path still blocks it.
     """
     import numpy as np
 
@@ -218,6 +225,12 @@ def occlusion(coords: Any, site_idx: int, axis: Any, *,
         ray = cos_t * axis + sin_t * (math.cos(phi) * perp + math.sin(phi) * perp2)
         rel = blockers - origin
         along = rel @ ray
+        if start > 0:
+            # Closest point of the segment [start, radius] to each atom.
+            t = np.clip(along, start, radius)
+            if (np.linalg.norm(rel - np.outer(t, ray), axis=1) < radii).any():
+                blocked += 1
+            continue
         near = (along > 0) & (along < radius)
         if not near.any():
             continue
