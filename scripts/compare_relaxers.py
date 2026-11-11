@@ -104,11 +104,12 @@ def sample(con: sqlite3.Connection, reference_method: str, per_class: int, confo
     return picked
 
 
-def relax(backend, symbols, xyz, graph, fmax, steps) -> dict:
+def relax(backend, symbols, xyz, graph, fmax, steps, on_step=None) -> dict:
     t0 = time.perf_counter()
+    kw = {} if on_step is None else {"on_step": on_step}
     try:
         r = backend.relax(symbols, xyz, charge=int(graph.charge),
-                          multiplicity=int(graph.multiplicity), fmax=fmax, steps=steps)
+                          multiplicity=int(graph.multiplicity), fmax=fmax, steps=steps, **kw)
     except Exception as exc:                                             # noqa: BLE001
         return {"error": f"{type(exc).__name__}: {exc}"}
     return {"energy": r.energy, "converged": r.converged, "steps": r.n_steps,

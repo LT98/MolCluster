@@ -310,6 +310,18 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 67)* **F0: trajectory capture (branch `feat/f0-trajectory-capture`, PR pending).**
+  The funnel's partial-relaxation policies (F1–F5) need each relaxation's path, and relax
+  returned only its end point. `relax` takes `on_step(energy, fmax, coords)` (`backends.OnStep`),
+  called at every optimiser point, the start first; the xTB and MACE backends share one LBFGS
+  helper (`_lbfgs`) that attaches it as an ASE observer, so observing costs no extra evaluation,
+  and `DFTBackend.relax`'s existing hook now passes coordinates too. `scripts/funnel_eval.py
+  --trajectories DIR --every N` writes one `.npz` per relaxation (energy and fmax at every point,
+  coordinates every N points plus the last, the start, and structure/start/stage/model), and
+  `--sample-from raw` takes starts from raw constructs, because the registries it sampled were
+  built before #69 and are to be regenerated (2026-11-11). Smoke run, 2 structures × 2 starts,
+  POLAR-S → OMOL-0: 10 files, 55–208 points each, ~30 KB at N = 5. The F0 run itself waits for a
+  regenerated registry.
 - *(rev 66)* **Ligands bind through more than two donors (#15).** `sites.model.donor_sets` builds
   sets of 3+ donors from the pockets: connected through chelate rings of ≥ 5, one donor per group
   (one O per carboxylate), no two donors a rigid path keeps apart (so tHQ's ring gets none), one

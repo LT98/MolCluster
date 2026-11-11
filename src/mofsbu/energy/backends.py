@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
@@ -112,7 +112,14 @@ class EnergyBackend(Protocol):
 
     def relax(self, symbols: Sequence[str], positions: Any, *,
               charge: int, multiplicity: int, solvent: str | None = None,
-              fmax: float = 0.20, steps: int = 250) -> RelaxResult: ...
+              fmax: float = 0.20, steps: int = 250,
+              on_step: OnStep | None = None) -> RelaxResult: ...
+
+
+#: Called once per optimiser point, the start first, with the energy (eV), the largest atomic
+#: force (eV/Å) and the coordinates (Å, an (n, 3) copy) at that point.  For trajectory capture
+#: (`scripts/funnel_eval.py --trajectories`); a relaxation without it is unchanged.
+OnStep = Callable[[float, float, Any], None]
 
 
 # ── spin ─────────────────────────────────────────────────────────────────────
@@ -272,6 +279,34 @@ class _Base:
         return "not installed"
 
 
+def _max_force(forces: Any) -> float:
+    return float(max(math.sqrt(float(f @ f)) for f in forces))
+
+
+def _lbfgs(backend: _Base, atoms: Any, symbols: Sequence[str], charge: int, multiplicity: int,
+           solvent: str | None, fmax: float, steps: int,
+           on_step: OnStep | None) -> RelaxResult:
+    """ASE LBFGS on `atoms` (calculator attached), shared by the xTB and MACE backends."""
+    from ase.optimize import LBFGS
+
+    e0 = float(atoms.get_potential_energy())
+    opt = LBFGS(atoms, logfile=None)
+    if on_step is not None:
+        # ASE calls observers at the start and after each step; energy and forces are
+        # cached by then, so observing costs no extra evaluation.
+        opt.attach(lambda: on_step(float(atoms.get_potential_energy()),
+                                   _max_force(atoms.get_forces()),
+                                   atoms.get_positions().copy()))
+    converged = bool(opt.run(fmax=fmax, steps=steps))
+    return RelaxResult(
+        symbols=tuple(symbols), positions=atoms.get_positions(),
+        energy=float(atoms.get_potential_energy()),
+        method=backend.method_spec(charge=charge, multiplicity=multiplicity, solvent=solvent),
+        fidelity=backend.fidelity, converged=converged,
+        n_steps=int(opt.get_number_of_steps()), fmax=_max_force(atoms.get_forces()),
+        initial_energy=e0)
+
+
 class NullBackend(_Base):
     """A deterministic, deliberately non-physical backend for tests.
 
@@ -309,9 +344,13 @@ class NullBackend(_Base):
                             fidelity=self.fidelity, converged=True)
 
     def relax(self, symbols, positions, *, charge, multiplicity, solvent=None,
-              fmax=0.20, steps=250) -> RelaxResult:
+              fmax=0.20, steps=250, on_step=None) -> RelaxResult:
         sp = self.single_point(symbols, positions, charge=charge,
                                multiplicity=multiplicity, solvent=solvent)
+        if on_step is not None:
+            import numpy as np
+
+            on_step(sp.energy, 0.0, np.array(positions, dtype=float))
         return RelaxResult(symbols=tuple(symbols), positions=positions,
                            energy=sp.energy, method=sp.method, fidelity=self.fidelity,
                            converged=True, n_steps=0, fmax=0.0,
@@ -405,24 +444,12 @@ class XTBBackend(_Base):
                             fidelity=self.fidelity, converged=True)
 
     def relax(self, symbols, positions, *, charge, multiplicity, solvent=None,
-              fmax=0.20, steps=250) -> RelaxResult:
+              fmax=0.20, steps=250, on_step=None) -> RelaxResult:
         self._require()
         check_spin(list(symbols), charge, multiplicity)
-        from ase.optimize import LBFGS
-
         atoms = self._atoms(symbols, positions)
         atoms.calc = self._calc(charge, multiplicity, solvent)
-        e0 = float(atoms.get_potential_energy())
-        opt = LBFGS(atoms, logfile=None)
-        converged = bool(opt.run(fmax=fmax, steps=steps))
-        forces = atoms.get_forces()
-        reached = float(max(math.sqrt(float(f @ f)) for f in forces))
-        return RelaxResult(
-            symbols=tuple(symbols), positions=atoms.get_positions(),
-            energy=float(atoms.get_potential_energy()),
-            method=self.method_spec(charge=charge, multiplicity=multiplicity, solvent=solvent),
-            fidelity=self.fidelity, converged=converged,
-            n_steps=int(opt.get_number_of_steps()), fmax=reached, initial_energy=e0)
+        return _lbfgs(self, atoms, symbols, charge, multiplicity, solvent, fmax, steps, on_step)
 
 
 class MACEBackend(_Base):
@@ -570,21 +597,9 @@ class MACEBackend(_Base):
             fidelity=self.fidelity, converged=True)
 
     def relax(self, symbols, positions, *, charge, multiplicity, solvent=None,
-              fmax=0.05, steps=250) -> RelaxResult:
-        from ase.optimize import LBFGS
-
+              fmax=0.05, steps=250, on_step=None) -> RelaxResult:
         atoms = self._prepare(symbols, positions, charge, multiplicity, solvent)
-        e0 = float(atoms.get_potential_energy())
-        opt = LBFGS(atoms, logfile=None)
-        converged = bool(opt.run(fmax=fmax, steps=steps))
-        forces = atoms.get_forces()
-        reached = float(max(math.sqrt(float(f @ f)) for f in forces))
-        return RelaxResult(
-            symbols=tuple(symbols), positions=atoms.get_positions(),
-            energy=float(atoms.get_potential_energy()),
-            method=self.method_spec(charge=charge, multiplicity=multiplicity, solvent=solvent),
-            fidelity=self.fidelity, converged=converged,
-            n_steps=int(opt.get_number_of_steps()), fmax=reached, initial_energy=e0)
+        return _lbfgs(self, atoms, symbols, charge, multiplicity, solvent, fmax, steps, on_step)
 
 
 class MACEOmolBackend(MACEBackend):

@@ -765,9 +765,11 @@ that would fail if the claim stopped being true.**
    until the second-shell probe decides each one: held in the second shell → an outer-sphere
    adduct (C19 shell record); leaving → labelled unstable, locked away. A few dozen broken
    skeletons stay refused. Then `scripts/file_derived_species.py --apply` on `data/`.
-2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). One trajectory-capture
-   run, then every pruning, dedup and staging policy is evaluated offline; F3 (stop a relaxation
-   when its connectivity changes) now has E1 to stand on.
+2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). The capture tool
+   is built (`funnel_eval.py --trajectories`, rev 67); the one F0 run waits for a registry
+   regenerated after #69, sampled with `--sample-from raw`. Then every pruning, dedup and staging
+   policy is evaluated offline; F3 (stop a relaxation when its connectivity changes) now has E1
+   to stand on.
 3. **The spin ladder and the oxidation-state check on the redox-active species (E4).** Stage 5a
    is done (2026-10-22, `WORKPLAN_energy.md` §3a): the four deprotonated bis-THQ species carry
    ~0.9 unpaired electrons on Ni at their DFT minimum, not the ~1.8 of a Ni(II) triplet. Before
