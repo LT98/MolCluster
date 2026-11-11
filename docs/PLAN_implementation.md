@@ -756,15 +756,18 @@ that would fail if the claim stopped being true.**
 
 ## 7. What to do next, concretely
 
-1. **D31 (D11's connectivity half) — single-piece filing built; separations wait for the
+1. **D31 (D11's connectivity half) — single-piece filing merged (#65); separations wait for the
    second-shell probe.** A connectivity-changed relaxation that stays one piece is filed under
-   the species it became (`assembly/derive.py`). On copies: 4036 of 5892 flagged `salt_study_k1`
-   geometries and 3122 of 4511 on `THQ_run` file as one species and carry their energy again;
-   most derived species already existed as structures. Separations — 1483 / 895 on those
-   copies, plus the refused THQ cases (~360 / ~470 where a THQ ligand leaves) — are held back
-   until the second-shell probe decides each one: held in the second shell → an outer-sphere
-   adduct (C19 shell record); leaving → labelled unstable, locked away. A few dozen broken
-   skeletons stay refused. Then `scripts/file_derived_species.py --apply` on `data/`.
+   the species it became (`assembly/derive.py`), by new relax tasks on their own. Left: an
+   index on `derived_from`, and the separations, held back until the second-shell probe decides
+   each one: held in the second shell → an outer-sphere adduct (C19 shell record); leaving →
+   labelled unstable, locked away. Broken skeletons stay refused.
+   **Called 2026-11-11: registries built before #69 are regenerated, not repaired**, so
+   `scripts/file_derived_species.py --apply` is not run on them. On `THQ_run`, 45% of the 4511
+   connectivity-changed relaxations started with a metal–H contact under 1.6 Å (median 1.01 Å),
+   against 1% of unchanged ones: the derived species there are mostly construction artefacts.
+   The copy counts #65 measured (4036 / 5892 `salt_study_k1`, 3122 / 4511 `THQ_run`) describe
+   that pre-#69 data, not what a regenerated registry will show.
 2. **The partial-relaxation funnel, F0 → F1 first** (`WORKPLAN_energy.md` §3a). One trajectory-capture
    run, then every pruning, dedup and staging policy is evaluated offline; F3 (stop a relaxation
    when its connectivity changes) now has E1 to stand on.
@@ -781,7 +784,8 @@ that would fail if the claim stopped being true.**
    reconciliation (`place_multicentre`) and `check_intercentre`, both stubs, plus widening
    `to_rdkit` past one metal. They serve M6's oxo-centred clusters (Fe₃O, Zn₄O); the paddlewheel
    M7 needs builds without them (D20). The plan-B trigger is **2026-10-14** (§4).
-7. **L2 (B2), as one piece:** a numbering-stable centre key ([B29](BUGS_details.md#b29)), an
+7. **L2 (B2), as one piece.** Since #79, fac/mer and every κ3–κ6 arrangement build but share
+   one registry row each until L2 is tagged. Needed: a numbering-stable centre key ([B29](BUGS_details.md#b29)), an
    arrangement-changed-after-relax check (L2's analogue of E1), and the call on the existing
    all-`''` registries (rebuild, or accept untagged and tagged rows side by side under D19).
 
