@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from mofsbu.config import (
-    REPO_ROOT, compute_device, data_root, machine_profile, max_workers, registry_path,
+    REPO_ROOT, compute_devices, data_root, machine_profile, max_workers, registry_path,
     store_root,
 )
 
@@ -80,7 +80,7 @@ def confirm_compute_settings() -> None:
     if not sys.stdin.isatty():
         return
 
-    device = compute_device()
+    device = ",".join(compute_devices())
     hint = ""
     try:
         import torch
@@ -102,7 +102,7 @@ def confirm_compute_settings() -> None:
         count = input(f"  how many workers? [{max_workers()}]: ").strip()
         if count:
             os.environ["MOFSBU_WORKERS"] = count
-    print(f"→ device={compute_device()}  profile={machine_profile()}  "
+    print(f"→ device={','.join(compute_devices())}  profile={machine_profile()}  "
           f"max_workers={max_workers()}\n")
 
 

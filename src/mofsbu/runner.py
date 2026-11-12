@@ -19,6 +19,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
+import os
 import sqlite3
 import time
 import traceback
@@ -29,7 +30,8 @@ from typing import Any, Sequence
 from rdkit import Chem
 
 from mofsbu.config import (
-    compute_device, device_note, max_workers, parallel_enabled, relax_workers,
+    compute_devices, device_note, max_workers, parallel_enabled, physical_device, pin_env,
+    relax_workers,
 )
 from mofsbu.energy.backends import combined_multiplicity, spin_class_multiplicity
 from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
@@ -802,7 +804,7 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
                         "converged": result.converged, "steps": result.n_steps,
                         "fmax": round(result.fmax, 4), "energy": result.energy,
                         "relaxation_energy": result.relaxation_energy,
-                        "device": compute_device(),
+                        "device": physical_device(),
                         "method": result.method.describe()}}
     if geom.created:
         conn = reg.conn.execute("SELECT connectivity_changed, connectivity_json "
@@ -1871,16 +1873,36 @@ def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = Non
     return done
 
 
+def worker_env(role: str, index: int, *, split: bool) -> dict[str, str]:
+    """The environment a spawned worker sets before it touches a GPU.
+
+    Relax worker i gets card i mod n of the declared pool, and sees only that card, as
+    `cuda:0` (`MOFSBU_DEVICE_PHYSICAL` keeps its real name for records): GPU4PySCF uses
+    every card it can see (#70), and torch would open a context on each.  When the queue
+    is split, build workers see no card at all.  A bare `cuda`, cpu or mps is left as is.
+    """
+    if role == "build":
+        return {"CUDA_VISIBLE_DEVICES": ""} if split and _gpu_pool() else {}
+    devices = compute_devices()
+    return pin_env(devices[index % len(devices)])
+
+
+def _gpu_pool() -> bool:
+    return all(d.startswith(("cuda", "xpu")) for d in compute_devices())
+
+
 def _worker_process(db_path: str, store_path: str, spec_json: str, run_id: int,
                     kinds: Sequence[str] | None = None,
                     exclude_kinds: Sequence[str] | None = None,
-                    more_coming: Any = None) -> None:
+                    more_coming: Any = None, env: dict[str, str] | None = None) -> None:
     """One worker, in its own process.  Arguments only — nothing is inherited.
 
     `more_coming` is an `mp.Event` the parent sets once the build workers have all
     exited: while it is clear, an empty relax queue means the builders have not caught up
     yet, and the relax worker waits rather than finishing a run that is not over.
+    `env` (`worker_env`) is applied first, before anything imports torch or cupy.
     """
+    os.environ.update(env or {})
     from mofsbu.config import name_process
     from mofsbu.registry import BlobStore
 
@@ -1974,12 +1996,14 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     # puts construction behind the optimiser, and on a GPU it also means several
     # processes on one card.
     builders = [ctx.Process(target=_worker_process, args=args,
-                            kwargs={"exclude_kinds": RELAX_KINDS if pool.split else None},
+                            kwargs={"exclude_kinds": RELAX_KINDS if pool.split else None,
+                                    "env": worker_env("build", i, split=pool.split)},
                             name=f"mofsbu-build-{run_id}-{i}")
                 for i in range(pool.build)]
     builds_done = ctx.Event() if pool.split else None
     relaxers = [ctx.Process(target=_worker_process, args=args,
-                            kwargs={"kinds": RELAX_KINDS, "more_coming": builds_done},
+                            kwargs={"kinds": RELAX_KINDS, "more_coming": builds_done,
+                                    "env": worker_env("relax", i, split=True)},
                             name=f"mofsbu-relax-{run_id}-{i}")
                 for i in range(pool.relax)]
     for proc in [*builders, *relaxers]:

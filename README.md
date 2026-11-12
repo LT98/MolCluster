@@ -165,7 +165,8 @@ lines back.
 ## Choosing hardware and database (`/builder`)
 
 * **Device.** A selector lists what this machine actually has (`cpu`, plus each visible CUDA
-  device by name, `mps` where applicable) and what is currently declared. It stays a
+  device by name, "All N GPUs" when there are several, `mps` where applicable) and what is
+  currently declared. It stays a
   *declaration*: enumerating the GPUs and letting a person choose is not detection, and nothing
   ever selects CUDA because a card is present. The chosen device is written into the run row,
   so a stored run still says which hardware produced it. It applies process-wide, so two runs
@@ -228,7 +229,7 @@ seize hardware or to switch theories:
 
     MOFSBU_PROFILE   laptop | workstation        # how many workers may run
     MOFSBU_WORKERS   N                           # or say exactly how many
-    MOFSBU_DEVICE    cpu | cuda | cuda:N | mps   # where the MLIP and DFT run
+    MOFSBU_DEVICE    cpu | cuda | cuda:N | mps | cuda:0,cuda:1   # where the MLIP and DFT run
     MOFSBU_ML_MODEL  mace-mp-0 | mace-omol-0 | mace-mh-1 | mace-polar-1-{s,m,l}   # WHICH MLIP; default mace-mp-0
     MOFSBU_MIN_FREE_RAM_GIB   G   # claim no task while less RAM than this is free; unset = no check
     MOFSBU_MIN_FREE_VRAM_GIB  G   # same for MOFSBU_DEVICE, on the workers that relax with ML or DFT
@@ -244,7 +245,16 @@ workers are **divided**, not multiplied — on a declared accelerator one of the
 card and the rest keep building, which is what lets the two halves of a run overlap
 instead of queueing behind each other. On CPU there is no split: relaxation is core work
 like everything else. `MOFSBU_RELAX_WORKERS=N` states the division outright (`0` shares one
-pool, `2` for a second card). The builder page shows the division it will actually use.
+pool). The builder page shows the division it will actually use.
+
+**Two cards.** `MOFSBU_DEVICE=cuda:0,cuda:1` declares a pool: a run gets one relax worker per
+card, and each relax worker sees only its own card (`CUDA_VISIBLE_DEVICES`), so the two never
+share memory and GPU4PySCF cannot spread across both. Build workers see no card. Each relax
+task records the card it ran on. A single process (a script) uses the first card; the
+measurement scripts `funnel_eval.py` and `dft_reopt.py` take `--shard I/N` to split their
+structures over N processes, one card each, and `--merge` to join the outputs. Ollama shares
+the same cards, so set `MOFSBU_MIN_FREE_VRAM_GIB` when it may be loaded. DFT refuses a process
+that sees more than one card.
 
 `ml_go` names a rung of the fidelity ladder, not a theory. **MACE-MP-0** (Materials
 Project) is blind to formal charge and spin, so the reference scheme refuses it on any

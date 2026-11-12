@@ -31,7 +31,7 @@ import os
 import threading
 from pathlib import Path
 
-from mofsbu.config import compute_device, machine_profile, max_workers
+from mofsbu.config import compute_devices, machine_profile, max_workers
 
 
 class ActiveDatabase:
@@ -103,6 +103,10 @@ def available_devices() -> list[dict[str, object]]:
                     name = "CUDA device"
                 devices.append({"id": f"cuda:{i}", "label": f"{name} (cuda:{i})",
                                 "note": "NVIDIA GPU"})
+            cards = [d["id"] for d in devices if str(d["id"]).startswith("cuda:")]
+            if len(cards) > 1:
+                devices.append({"id": ",".join(cards), "label": f"All {len(cards)} GPUs",
+                                "note": "one relax worker per card"})
     except Exception:                                                    # noqa: BLE001
         pass
     try:
@@ -125,7 +129,7 @@ def compute_state() -> dict[str, object]:
     from mofsbu.runner import plan_workers
 
     try:
-        declared = compute_device()
+        declared = ",".join(compute_devices())
     except ValueError as exc:
         # A bad MOFSBU_DEVICE must not take the page down with it; say so instead.
         return {"devices": available_devices(), "device": None, "device_error": str(exc),
@@ -151,7 +155,7 @@ def declare_compute(device: str | None = None, workers: int | None = None) -> di
     """Record a device / worker choice for this process.
 
     Writes the same environment variables the command line and the startup prompt
-    write, because `compute_device()` and `max_workers()` read the environment at
+    write, because `compute_devices()` and `max_workers()` read the environment at
     EXECUTION time and `submit_run` executes on a thread in this very process.  That is
     what makes a page control possible here without a new process model — and also why
     it is process-wide: two runs going at once share one device declaration.  The run
@@ -162,7 +166,7 @@ def declare_compute(device: str | None = None, workers: int | None = None) -> di
         previous = os.environ.get("MOFSBU_DEVICE")
         os.environ["MOFSBU_DEVICE"] = device
         try:
-            compute_device()                     # shape check, same as the CLI path
+            compute_devices()                    # shape check, same as the CLI path
         except ValueError:
             if previous is None:
                 os.environ.pop("MOFSBU_DEVICE", None)

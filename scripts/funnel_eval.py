@@ -20,6 +20,8 @@ read-only and writes nothing to it.
 relaxation: energy and fmax at every optimiser point, coordinates every `--every` points plus
 the last, and the run's identity (structure, start, stage, model).  F1 replays these offline.
 `--sample-from raw` takes starts from raw constructs, so a registry with no relaxations yet works.
+`--shard I/N` splits the structures over N processes, one card each, and `--merge` joins them
+(`scripts/_shard.py`).
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import _shard                                                            # noqa: E402
 from compare_relaxers import relax                                       # noqa: E402
 
 from mofsbu.energy.backends import get_backend                           # noqa: E402
@@ -124,11 +127,45 @@ class Trajectories:
         return r
 
 
+def summarise(results: list[dict], smalls: list[str], k_max: int, starts: int) -> dict:
+    """Regret, time and storage per small model and k, over every structure in `results`."""
+    summary: dict = {}
+    base_s = sum(r["baseline"]["seconds"] for r in results)
+    for key in smalls:
+        summary[key] = {}
+        for k in range(1, k_max + 1):
+            regrets = [r[key]["per_k"][k]["regret"] for r in results
+                       if r[key]["per_k"][k]["regret"] is not None]
+            summary[key][f"k={k}"] = {
+                "median_regret": round(statistics.median(regrets), 4) if regrets else None,
+                "worst_regret": round(max(regrets), 4) if regrets else None,
+                "missed_over_0.05eV": sum(x > 0.05 for x in regrets),
+                "time_vs_all_large": round(sum(r[key]["per_k"][k]["seconds"] for r in results)
+                                           / base_s, 3) if base_s else None,
+                "stored_vs_all_large": round((starts + k) / starts, 2)}
+        summary[key]["rank_of_large_best"] = [r[key]["rank_of_large_best"] for r in results]
+    return summary
+
+
+def merge(a: argparse.Namespace) -> int:
+    """Join `--shard` outputs into `--out` (`_shard`), with the summary over all of them."""
+    head, results = _shard.load(a.merge, "results",
+                                ("large", "small", "fmax", "starts", "k_max", "seed"))
+    for r in results:                          # JSON turned the k keys into strings
+        for key in head["small"]:
+            r[key]["per_k"] = {int(k): v for k, v in r[key]["per_k"].items()}
+    head = {k: v for k, v in head.items() if k not in ("summary", "results")}
+    summary = summarise(results, head["small"], head["k_max"], head["starts"])
+    a.out.write_text(json.dumps(head | {"summary": summary, "results": results}, indent=1))
+    print(json.dumps(summary, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
                                 epilog=__doc__)
-    p.add_argument("--db", type=Path, required=True)
+    p.add_argument("--db", type=Path, default=None, help="required unless --merge")
     p.add_argument("--store", type=Path, default=None)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--small", nargs="+", default=["mace_polar_s", "mace_polar_m"])
@@ -150,7 +187,13 @@ def main(argv: list[str] | None = None) -> int:
                    choices=["neutral", "charged"])
     p.add_argument("--skip", type=int, nargs="*", default=[],
                    help="structure ids already measured by an earlier run")
+    _shard.add_args(p)
     a = p.parse_args(argv)
+    if a.merge:
+        return merge(a)
+    if a.db is None:
+        p.error("--db is required")
+    shard = _shard.start(a)
 
     con = sqlite3.connect(f"file:{a.db.resolve()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
@@ -158,7 +201,10 @@ def main(argv: list[str] | None = None) -> int:
     reg = ReadOnlyRegistry(conn=con, store=BlobStore(a.store or a.db.parent / "store"))
     large = get_backend(a.large)
     smalls = {k: get_backend(k) for k in a.small}
-    picked = pick(con, a.sample_from, a.structures, a.starts, a.seed, tuple(a.classes))
+    picked = _shard.take(
+        pick(con, a.sample_from, a.structures, a.starts, a.seed, tuple(a.classes)), shard)
+    header = {"large": large.method, "small": list(smalls), "fmax": a.fmax,
+              "starts": a.starts, "k_max": a.k_max, "seed": a.seed}
     traj = Trajectories(a.trajectories, a.every)
     print(f"{len(picked)} structures x {a.starts} starts; large {large.method}, small "
           f"{[b.method for b in smalls.values()]}", flush=True)
@@ -211,26 +257,10 @@ def main(argv: list[str] | None = None) -> int:
                          | {k: {kk: {"regret": None if v["regret"] is None else round(v["regret"], 3),
                                      "s": round(v["seconds"], 1)}
                                 for kk, v in row[k]["per_k"].items()} for k in smalls}), flush=True)
-        a.out.write_text(json.dumps({"large": large.method, "small": list(smalls),
-                                     "fmax": a.fmax, "results": results}, indent=1))
+        a.out.write_text(json.dumps(header | {"results": results}, indent=1))
 
-    summary = {}
-    base_s = sum(r["baseline"]["seconds"] for r in results)
-    for key in smalls:
-        summary[key] = {}
-        for k in range(1, a.k_max + 1):
-            regrets = [r[key]["per_k"][k]["regret"] for r in results
-                       if r[key]["per_k"][k]["regret"] is not None]
-            summary[key][f"k={k}"] = {
-                "median_regret": round(statistics.median(regrets), 4) if regrets else None,
-                "worst_regret": round(max(regrets), 4) if regrets else None,
-                "missed_over_0.05eV": sum(x > 0.05 for x in regrets),
-                "time_vs_all_large": round(sum(r[key]["per_k"][k]["seconds"] for r in results)
-                                           / base_s, 3) if base_s else None,
-                "stored_vs_all_large": round((a.starts + k) / a.starts, 2)}
-        summary[key]["rank_of_large_best"] = [r[key]["rank_of_large_best"] for r in results]
-    a.out.write_text(json.dumps({"large": large.method, "small": list(smalls), "fmax": a.fmax,
-                                 "summary": summary, "results": results}, indent=1))
+    summary = summarise(results, list(smalls), a.k_max, a.starts)
+    a.out.write_text(json.dumps(header | {"summary": summary, "results": results}, indent=1))
     print(json.dumps(summary, indent=1))
     return 0
 

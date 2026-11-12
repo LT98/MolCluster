@@ -69,7 +69,8 @@ write, list and reload named specs from `spec_dir`, so a run is reproducible fro
 ## Hardware and database, declared from the page
 
 - `GET`/`POST /api/compute` — enumerate the devices that exist here and **declare** which
-  one this server uses. Never chosen for you.
+  one this server uses, or "All N GPUs" (`cuda:0,cuda:1`: one relax worker per card). Never
+  chosen for you.
 - `GET`/`POST /api/databases`, `POST /api/database/select` — create a registry, list them,
   and switch the *whole app* to one. The viewer follows the switch, because every endpoint
   asks `ActiveDatabase` where the registry is at request time rather than capturing it at

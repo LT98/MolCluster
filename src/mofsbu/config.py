@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -100,8 +101,11 @@ def relax_workers() -> int:
     lets the two run at once: the GPU relaxes what has been built while the remaining
     workers build the next batch.
 
-    `MOFSBU_RELAX_WORKERS` overrides, including back to 0 (share one pool) or up to N for
-    a multi-GPU box.  Declared, never detected — the device it keys off is itself declared.
+    With a pool of cards (`MOFSBU_DEVICE=cuda:0,cuda:1`) it is one per card; the runner
+    pins relax worker i to card i mod n.
+
+    `MOFSBU_RELAX_WORKERS` overrides, including back to 0 (share one pool).  Declared, never
+    detected — the devices it keys off are themselves declared.
     """
     explicit = os.environ.get("MOFSBU_RELAX_WORKERS")
     if explicit:
@@ -110,7 +114,8 @@ def relax_workers() -> int:
         except ValueError:
             pass
     try:
-        return 0 if compute_device() == CPU else 1
+        devices = compute_devices()
+        return 0 if devices == [CPU] else len(devices)
     except ValueError:
         # A malformed MOFSBU_DEVICE is reported where it is set, not here; until then
         # this run has no accelerator to feed.
@@ -128,27 +133,92 @@ CPU = "cpu"
 _DEVICE = re.compile(r"cpu|mps|(?:cuda|xpu)(?::\d+)?")
 
 
-def compute_device() -> str:
-    """`MOFSBU_DEVICE` = cpu | cuda | cuda:N | mps.  Defaults to cpu.
+_CARD = re.compile(r"cuda:\d+")
 
-    Returned verbatim after a shape check so a typo fails at the backend with the string
-    you typed, rather than silently becoming "cpu" and looking like slow hardware.
+
+def compute_devices() -> list[str]:
+    """`MOFSBU_DEVICE` = cpu | cuda | cuda:N | mps | xpu, or a pool of cards `cuda:0,cuda:1`.
+
+    Defaults to cpu.  Returned verbatim after a shape check so a typo fails here with the
+    string you typed, rather than silently becoming "cpu" and looking like slow hardware.
+    A pool lists distinct indexed CUDA cards only: one process uses one card, and the
+    runner gives each relax worker its own (`runner.worker_env`).
     """
     value = (os.environ.get("MOFSBU_DEVICE") or CPU).strip().lower()
-    if not _DEVICE.fullmatch(value):
-        raise ValueError(
-            f"MOFSBU_DEVICE={value!r} is not a device torch would recognise; "
-            f"expected cpu, cuda, cuda:<n>, mps or xpu. One device per process: a list "
-            f"such as 'cuda:0,cuda:1' is not supported")
-    return value
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) == 1 and _DEVICE.fullmatch(parts[0]):
+        return parts
+    if len(parts) > 1 and all(_CARD.fullmatch(p) for p in parts) and len(set(parts)) == len(parts):
+        return parts
+    raise ValueError(
+        f"MOFSBU_DEVICE={value!r} is not a device torch would recognise; expected cpu, "
+        f"cuda, cuda:<n>, mps or xpu, or a list of distinct cards such as 'cuda:0,cuda:1'")
+
+
+def compute_device() -> str:
+    """The one device this process computes on: the first of a pool."""
+    return compute_devices()[0]
+
+
+def physical_device() -> str:
+    """The device this process runs on, as the machine numbers it, for records.
+
+    A pinned worker sees only its card, as `cuda:0`; `MOFSBU_DEVICE_PHYSICAL` says which.
+    """
+    return os.environ.get("MOFSBU_DEVICE_PHYSICAL") or compute_device()
+
+
+def pin_env(device: str) -> dict[str, str]:
+    """The environment that confines a process to one indexed card, or {} for anything else.
+
+    The card is the only one the process sees, as `cuda:0`; `MOFSBU_DEVICE_PHYSICAL` keeps
+    its real name.  GPU4PySCF works on every card it can see (#70), so this is how DFT is
+    kept on one.
+    """
+    card = re.fullmatch(r"cuda:(\d+)", device)
+    if card is None:
+        return {}
+    return {"CUDA_VISIBLE_DEVICES": card.group(1), "MOFSBU_DEVICE": "cuda:0",
+            "MOFSBU_DEVICE_PHYSICAL": device}
+
+
+def pin_process(index: int = 0) -> str:
+    """Confine this process to card `index` mod n of the declared pool; return its name.
+
+    Call before anything touches CUDA.  A process already confined (`CUDA_VISIBLE_DEVICES`
+    set) is left as it is.  Refused once torch has initialised CUDA, because by then the
+    other cards are already open.
+    """
+    if os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
+        return physical_device()
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_initialized():
+        raise RuntimeError("pin_process() after CUDA was initialised: call it first")
+    devices = compute_devices()
+    os.environ.update(pin_env(devices[index % len(devices)]))
+    return physical_device()
+
+
+def visible_cards() -> int | None:
+    """How many CUDA cards this process can see, without initialising CUDA; None if unknown."""
+    value = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if value is not None:
+        return len([v for v in value.split(",") if v.strip()])
+    try:
+        return len(os.listdir("/proc/driver/nvidia/gpus"))
+    except OSError:
+        return None
 
 
 def device_note() -> str:
     """One line for a run's first line of output, so an idle GPU is visible immediately."""
-    device = compute_device()
-    if device == CPU:
+    devices = compute_devices()
+    if devices == [CPU]:
         return "device=cpu  (set MOFSBU_DEVICE=cuda to use a GPU)"
-    return f"device={device}"
+    if len(devices) > 1:
+        return (f"devices={','.join(devices)}  (one card per relax worker; work in this "
+                f"process uses {devices[0]})")
+    return f"device={physical_device()}"
 
 
 # ── headroom floors: declared, never detected ────────────────────────────────

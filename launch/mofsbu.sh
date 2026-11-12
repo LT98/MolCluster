@@ -4,6 +4,7 @@
 #
 #   ./launch/mofsbu.sh                 CPU, finds the registry on its own
 #   ./launch/mofsbu.sh --gpu           use the first CUDA device for ml_go runs
+#   ./launch/mofsbu.sh --device cuda:0,cuda:1   one relax worker on each card
 #   ./launch/mofsbu.sh --gpu --workers 8
 #   ./launch/mofsbu.sh --db scratch.db --port 8001
 #
@@ -40,7 +41,7 @@ while [ $# -gt 0 ]; do
     --port)        PORT="$2"; shift 2 ;;
     --no-browser)  OPEN=""; shift ;;
     -h|--help)
-      sed -n '2,16p' "$SOURCE" | sed 's/^# \{0,1\}//'
+      sed -n '2,17p' "$SOURCE" | sed 's/^# \{0,1\}//'
       echo
       echo "Anything else is passed straight through to scripts/viewer.py:"
       echo "  --db FILE  --store DIR  --host ADDR  --list-db  --log-level LEVEL"

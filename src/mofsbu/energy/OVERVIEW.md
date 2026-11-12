@@ -86,7 +86,7 @@ Energy backends behind one protocol (M7).
 | `backend_for(fidelity, *, ml_model, **kwargs) -> EnergyBackend`* | The backend that produces geometries at this rung, or a reason why not. | `runner` |
 | `available_backends() -> dict[str, bool]`* | What this machine can actually run. The UI reads this rather than guessing. |  |
 
-### `dft` (354 lines)
+### `dft` (363 lines)
 
 DFT through GPU4PySCF — the `Fidelity.DFT` rung (WORKPLAN_energy E4, stage 5b/5c).
 

@@ -115,10 +115,10 @@ def create_run(reg: Registry, spec: BuildSpec, *, note: str = "",
     a choice was expressed — `None` means "not stated", which is different from "cpu".
     """
     if device is None:
-        from mofsbu.config import compute_device
+        from mofsbu.config import compute_devices
 
         try:
-            device = compute_device()
+            device = ",".join(compute_devices())
         except ValueError:
             device = ""                      # a malformed declaration is not a run error
     if workers is None:

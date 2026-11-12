@@ -799,9 +799,6 @@ that would fail if the claim stopped being true.**
 - `WORKPLAN_M7.md` §10: the M7 resize is done; correct the rest after the ledger calls.
 - **`OVERVIEW.md` for the other nine packages**, `registry` and `assembly` first. Generated
   tables are free; each hand-written top needs the package read.
-- **DFT with both GPUs visible** ([#70](https://github.com/LT98/MolCluster/issues/70)):
-  GPU4PySCF spreads over every visible card and four tests fail (`LinAlgError`). Workaround:
-  `CUDA_VISIBLE_DEVICES` set to one card for any process that runs DFT.
 - Open bugs: none blocks M7 or M7R. **B9 stays in the backlog** (called 2026-10-02); C2's energy
   window is tracked in §3 on its own.
 

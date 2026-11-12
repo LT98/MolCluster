@@ -661,7 +661,8 @@ def test_compute_device_accepts_one_device(monkeypatch, value):
     assert compute_device() == value.strip().lower()
 
 
-@pytest.mark.parametrize("value", ["cuda:0,cuda:1", "cuda0", "gpu", "cuda:"])
+@pytest.mark.parametrize("value", ["cuda0", "gpu", "cuda:", "cuda:0,cuda:0", "cuda,cuda:1",
+                                   "cpu,cuda:0", "cuda:0,"])
 def test_compute_device_refuses_what_torch_cannot_use(monkeypatch, value):
     from mofsbu.config import compute_device
 

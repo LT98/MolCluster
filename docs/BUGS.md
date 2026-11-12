@@ -36,7 +36,7 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 - [ ] **B19** · honesty · `ui/static/graph.html` — One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend ([details](BUGS_details.md#b19))
 - [ ] **B27** · correctness · `sites/model.py` — A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces ([details](BUGS_details.md#b27))
 - [ ] **B29** · correctness · `identity/isomers.py` — `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) ([details](BUGS_details.md#b29))
-- [ ] **#70** · correctness · `energy/dft.py` — `DFTBackend` ignores `MOFSBU_DEVICE`: GPU4PySCF spreads over every visible GPU ([issue](https://github.com/LT98/MolCluster/issues/70))
+- [x] **#70** · correctness · `energy/dft.py` — `DFTBackend` ignores `MOFSBU_DEVICE`: GPU4PySCF spreads over every visible GPU ([issue](https://github.com/LT98/MolCluster/issues/70))
 - [ ] **#53** · undecided · `ui/` — Searching the registry for a displayed label (`tHQ`, chloride) returns no entries ([issue](https://github.com/LT98/MolCluster/issues/53))
 
 ## Resolved
