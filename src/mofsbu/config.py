@@ -191,11 +191,14 @@ def pin_process(index: int = 0) -> str:
     """
     if os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
         return physical_device()
+    devices = compute_devices()
+    env = pin_env(devices[index % len(devices)])
+    if not env:
+        return physical_device()
     torch = sys.modules.get("torch")
     if torch is not None and torch.cuda.is_initialized():
         raise RuntimeError("pin_process() after CUDA was initialised: call it first")
-    devices = compute_devices()
-    os.environ.update(pin_env(devices[index % len(devices)]))
+    os.environ.update(env)
     return physical_device()
 
 

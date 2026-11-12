@@ -1,6 +1,8 @@
 """Two cards, one per process: `MOFSBU_DEVICE=cuda:0,cuda:1` and the worker pinning it drives."""
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from mofsbu import runner
@@ -85,12 +87,26 @@ def test_pin_process_confines_this_process_to_its_card(monkeypatch):
     from mofsbu.config import pin_process
 
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delitem(sys.modules, "torch", raising=False)   # as in a fresh process
     monkeypatch.setenv("MOFSBU_DEVICE", "cuda:0,cuda:1")
     assert pin_process(1) == "cuda:1"
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "1"
     assert compute_device() == "cuda:0"
     # already confined: a second call changes nothing
     assert pin_process(0) == "cuda:1" and os.environ["CUDA_VISIBLE_DEVICES"] == "1"
+
+
+def test_pin_process_refuses_once_cuda_has_started(monkeypatch):
+    from types import SimpleNamespace
+
+    from mofsbu.config import pin_process
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    fake = SimpleNamespace(cuda=SimpleNamespace(is_initialized=lambda: True))
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda:1")
+    with pytest.raises(RuntimeError, match="call it first"):
+        pin_process()
 
 
 def test_pin_process_leaves_cpu_alone(monkeypatch):
