@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 67)* **F0: trajectory capture (branch `feat/f0-trajectory-capture`, PR pending).**
+- *(rev 67)* **F0: trajectory capture (PR #84).**
   The funnel's partial-relaxation policies (F1–F5) need each relaxation's path, and relax
   returned only its end point. `relax` takes `on_step(energy, fmax, coords)` (`backends.OnStep`),
   called at every optimiser point, the start first; the xTB and MACE backends share one LBFGS
