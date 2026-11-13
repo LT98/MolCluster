@@ -6,6 +6,7 @@ the laptop and on the workstation.
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from mofsbu._types import EnergyBackendUnavailable, Fidelity, MethodSpec
@@ -519,7 +520,14 @@ def test_dft_continuum_lowers_a_polar_molecule():
 
 def test_dft_relaxes_water():
     b = _gpu_dft()
-    r = b.relax(*WATER, charge=0, multiplicity=1, fmax=0.05, steps=50)
+    seen = []
+    r = b.relax(*WATER, charge=0, multiplicity=1, fmax=0.05, steps=50,
+                on_step=lambda e, f, x: seen.append((e, f, x)))
     assert r.converged and r.n_steps >= 1
     assert r.energy <= (r.initial_energy or 0.0) + 1e-6
     assert r.fmax <= 0.05 + 1e-9
+    # one call per optimiser point, the start first, with coordinates in Å
+    assert len(seen) == r.n_steps and seen[0][0] == pytest.approx(r.initial_energy)
+    assert all(x.shape == (3, 3) for _, _, x in seen)
+    assert seen[0][2] == pytest.approx(np.asarray(WATER[1]), abs=1e-6)
+    assert seen[-1][1] == pytest.approx(r.fmax)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -41,7 +42,12 @@ def start(a: argparse.Namespace) -> tuple[int, int] | None:
 
     shard = parse(a.shard)
     i = 0 if shard is None else shard[0]
+    preset = os.environ.get("CUDA_VISIBLE_DEVICES")
     device = pin_process(i)
+    if shard is not None and preset is not None:
+        print(f"CUDA_VISIBLE_DEVICES={preset!r} was already set and wins: this shard runs on "
+              f"what it allows, not on card {i} of the pool", flush=True)
+        device = f"CUDA_VISIBLE_DEVICES={preset}"
     if shard is not None:
         a.out = a.out.with_name(f"{a.out.stem}.shard{shard[0]}of{shard[1]}{a.out.suffix}")
         print(f"shard {shard[0]}/{shard[1]} on {device} -> {a.out}", flush=True)

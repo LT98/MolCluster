@@ -254,7 +254,8 @@ task records the card it ran on. A single process (a script) uses the first card
 measurement scripts `funnel_eval.py` and `dft_reopt.py` take `--shard I/N` to split their
 structures over N processes, one card each, and `--merge` to join the outputs. Ollama shares
 the same cards, so set `MOFSBU_MIN_FREE_VRAM_GIB` when it may be loaded. DFT refuses a process
-that sees more than one card.
+that sees more than one card, so with a pool a DFT run needs two or more workers (one worker
+runs in the declaring process, which sees every card).
 
 `ml_go` names a rung of the fidelity ladder, not a theory. **MACE-MP-0** (Materials
 Project) is blind to formal charge and spin, so the reference scheme refuses it on any

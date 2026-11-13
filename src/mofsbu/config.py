@@ -168,18 +168,27 @@ def physical_device() -> str:
     return os.environ.get("MOFSBU_DEVICE_PHYSICAL") or compute_device()
 
 
-def pin_env(device: str) -> dict[str, str]:
-    """The environment that confines a process to one indexed card, or {} for anything else.
+def pin_env(device: str, label: str | None = None) -> dict[str, str]:
+    """The environment that confines a process to one CUDA card, or {} for anything else.
 
     The card is the only one the process sees, as `cuda:0`; `MOFSBU_DEVICE_PHYSICAL` keeps
-    its real name.  GPU4PySCF works on every card it can see (#70), so this is how DFT is
-    kept on one.
+    its real name.  Bare `cuda` is card 0, as torch reads it.  GPU4PySCF works on every
+    card it can see (#70), so this is how DFT is kept on one.  `MOFSBU_DEVICE_LABEL` is the
+    device as declared (`label`, default `device`), which a method row records
+    (`device_label`), so pinning never changes which method row a result belongs to.
     """
-    card = re.fullmatch(r"cuda:(\d+)", device)
+    card = re.fullmatch(r"cuda(?::(\d+))?", device)
     if card is None:
         return {}
-    return {"CUDA_VISIBLE_DEVICES": card.group(1), "MOFSBU_DEVICE": "cuda:0",
-            "MOFSBU_DEVICE_PHYSICAL": device}
+    index = card.group(1) or "0"
+    return {"CUDA_VISIBLE_DEVICES": index, "MOFSBU_DEVICE": "cuda:0",
+            "MOFSBU_DEVICE_PHYSICAL": f"cuda:{index}",
+            "MOFSBU_DEVICE_LABEL": label or device}
+
+
+def device_label() -> str:
+    """The device as the run declared it, for a method row: the first of a pool."""
+    return os.environ.get("MOFSBU_DEVICE_LABEL") or compute_device()
 
 
 def pin_process(index: int = 0) -> str:
@@ -192,7 +201,7 @@ def pin_process(index: int = 0) -> str:
     if os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
         return physical_device()
     devices = compute_devices()
-    env = pin_env(devices[index % len(devices)])
+    env = pin_env(devices[index % len(devices)], label=devices[0])
     if not env:
         return physical_device()
     torch = sys.modules.get("torch")

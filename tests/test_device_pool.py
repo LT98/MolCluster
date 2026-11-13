@@ -17,7 +17,8 @@ from mofsbu.config import (
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    for var in ("MOFSBU_DEVICE", "MOFSBU_DEVICE_PHYSICAL", "MOFSBU_RELAX_WORKERS"):
+    for var in ("MOFSBU_DEVICE", "MOFSBU_DEVICE_PHYSICAL", "MOFSBU_DEVICE_LABEL",
+                "MOFSBU_RELAX_WORKERS"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -49,10 +50,33 @@ def test_a_single_indexed_card_is_pinned_too(monkeypatch):
     monkeypatch.setenv("MOFSBU_DEVICE", "cuda:1")
     assert runner.worker_env("relax", 0, split=True) == {
         "CUDA_VISIBLE_DEVICES": "1", "MOFSBU_DEVICE": "cuda:0",
-        "MOFSBU_DEVICE_PHYSICAL": "cuda:1"}
+        "MOFSBU_DEVICE_PHYSICAL": "cuda:1", "MOFSBU_DEVICE_LABEL": "cuda:1"}
 
 
-@pytest.mark.parametrize("value", ["cuda", "cpu", "mps"])
+def test_bare_cuda_is_card_zero_and_keeps_its_label(monkeypatch):
+    monkeypatch.setenv("MOFSBU_DEVICE", "cuda")
+    assert runner.worker_env("relax", 0, split=True) == {
+        "CUDA_VISIBLE_DEVICES": "0", "MOFSBU_DEVICE": "cuda:0",
+        "MOFSBU_DEVICE_PHYSICAL": "cuda:0", "MOFSBU_DEVICE_LABEL": "cuda"}
+
+
+@pytest.mark.parametrize("declared, card", [("cuda:1", 0), ("cuda", 0), ("cuda:0,cuda:1", 1)])
+def test_pinning_never_changes_the_method_row(monkeypatch, declared, card):
+    """The planner (parent) and the pinned worker must describe one method, or a re-run
+    cannot recognise work already done (`runner.existing_relaxation`)."""
+    from mofsbu.energy.backends import MACEOmolBackend
+
+    monkeypatch.setenv("MOFSBU_DEVICE", declared)
+    parent = MACEOmolBackend().method_spec(charge=0, multiplicity=1)
+    for key, value in runner.worker_env("relax", card, split=True).items():
+        monkeypatch.setenv(key, value)
+    worker = MACEOmolBackend()
+    assert worker.device == "cuda:0"
+    assert worker.method_spec(charge=0, multiplicity=1) == parent
+    assert parent.extras["device"] == declared.split(",")[0]
+
+
+@pytest.mark.parametrize("value", ["cpu", "mps"])
 def test_nothing_to_pin_is_left_alone(monkeypatch, value):
     monkeypatch.setenv("MOFSBU_DEVICE", value)
     assert runner.worker_env("relax", 0, split=True) == {}

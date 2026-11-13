@@ -485,12 +485,14 @@ class MACEBackend(_Base):
 
     def __init__(self, *, model: str | None = None, device: str | None = None,
                  default_dtype: str = "float64") -> None:
-        from mofsbu.config import compute_device
+        from mofsbu.config import compute_device, device_label
 
         # `device="cpu"` used to be the hard default, so a workstation with a GPU ran the
         # MLIP on its CPU and the only symptom was a card that never warmed up.  The
         # device is DECLARED (`MOFSBU_DEVICE`), never detected, for the same reason
-        # parallelism is opt-in.
+        # parallelism is opt-in.  The method row records it as declared (`device_label`),
+        # not as a pinned worker sees it.
+        self.device_label = device_label() if device is None else device
         device = compute_device() if device is None else device
         self.model = self.default_model if model is None else model
         self.device = device
@@ -526,7 +528,7 @@ class MACEBackend(_Base):
             raise ValueError(
                 f"{self.method} has no solvation model; use xtb for a continuum")
         spec = super().method_spec(charge=charge, multiplicity=multiplicity, solvent=None)
-        extras = {**spec.extras, "model": self.model, "device": self.device,
+        extras = {**spec.extras, "model": self.model, "device": self.device_label,
                   "training_set": self.training_set}
         if not self.spin_aware:
             # Same reasoning as `charge_blind`: the caveat is stored WITH the number.

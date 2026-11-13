@@ -59,7 +59,7 @@ well when the public surface changes.
 
 `*` = re-exported from the package root. *Used by* lists importers in `src/` and `scripts/` outside this package; blank = internal or tests only.
 
-### `backends` (809 lines)
+### `backends` (811 lines)
 
 Energy backends behind one protocol (M7).
 

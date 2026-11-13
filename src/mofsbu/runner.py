@@ -1879,12 +1879,13 @@ def worker_env(role: str, index: int, *, split: bool) -> dict[str, str]:
     Relax worker i gets card i mod n of the declared pool, and sees only that card, as
     `cuda:0` (`MOFSBU_DEVICE_PHYSICAL` keeps its real name for records): GPU4PySCF uses
     every card it can see (#70), and torch would open a context on each.  When the queue
-    is split, build workers see no card at all.  A bare `cuda`, cpu or mps is left as is.
+    is split, build workers see no card at all.  Bare `cuda` is card 0; cpu and mps are
+    left as they are.
     """
     if role == "build":
         return {"CUDA_VISIBLE_DEVICES": ""} if split and _gpu_pool() else {}
     devices = compute_devices()
-    return pin_env(devices[index % len(devices)])
+    return pin_env(devices[index % len(devices)], label=devices[0])
 
 
 def _gpu_pool() -> bool:

@@ -327,6 +327,13 @@ built, and what the building turned up that the diagnosis had not.
   0.0 eV on every one; two F0 shards ran on cuda:0 and cuda:1 at once and merged; with both
   cards visible the four GPU DFT tests now skip with the reason instead of failing
   (`LinAlgError`), and a process pinned to cuda:1 runs DFT there with cupy seeing one card.
+  What the review turned up: the MACE method row records the device, so a worker pinned from
+  `cuda:1` (which sees it as `cuda:0`) would have filed results under a new method row and a
+  re-run would have recomputed them. A pinned process now carries the declared device
+  (`MOFSBU_DEVICE_LABEL`, `config.device_label`), and the method row records that. Bare `cuda`
+  is pinned as card 0. A run with one worker still sees every card, so DFT is refused there
+  with a pool (`docs/gui/04_limits.md`). Whether a device belongs in method identity at all is
+  left open.
 - *(rev 67)* **F0: trajectory capture (branch `feat/f0-trajectory-capture`, PR pending).**
   The funnel's partial-relaxation policies (F1–F5) need each relaxation's path, and relax
   returned only its end point. `relax` takes `on_step(energy, fmax, coords)` (`backends.OnStep`),
