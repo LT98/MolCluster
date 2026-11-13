@@ -310,6 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+<<<<<<< HEAD
 - *(rev 68)* **Both GPUs: one card per worker process (#70; branch `feat/two-gpus`, PR
   pending).** `MOFSBU_DEVICE=cuda:0,cuda:1` was refused ("one device per process"), and
   nothing gave a second process a second card: every spawned worker inherited the same device.
@@ -335,6 +336,9 @@ built, and what the building turned up that the diagnosis had not.
   with a pool (`docs/gui/04_limits.md`). Whether a device belongs in method identity at all is
   left open.
 - *(rev 67)* **F0: trajectory capture (branch `feat/f0-trajectory-capture`, PR pending).**
+=======
+- *(rev 67)* **F0: trajectory capture (PR #84).**
+>>>>>>> feat/f0-trajectory-capture
   The funnel's partial-relaxation policies (F1–F5) need each relaxation's path, and relax
   returned only its end point. `relax` takes `on_step(energy, fmax, coords)` (`backends.OnStep`),
   called at every optimiser point, the start first; the xTB and MACE backends share one LBFGS
