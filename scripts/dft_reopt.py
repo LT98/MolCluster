@@ -118,7 +118,7 @@ def one_relaxer(dft, backend, symbols, x0, graph, ordered, metal, a, peak) -> di
     trail: list[list[float]] = []
     t0 = time.perf_counter()
 
-    def on_step(e: float, f: float) -> None:
+    def on_step(e: float, f: float, _xyz) -> None:
         trail.append([round(e, 6), round(f, 4)])
         print(f"    step {len(trail):3d}  E {e:.4f} eV  fmax {f:.3f} eV/Å", flush=True)
 

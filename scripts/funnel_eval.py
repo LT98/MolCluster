@@ -15,6 +15,11 @@ with `--large` from where the small model left them.  Reported for k = 1..--k-ma
 
 All energies compared are the large model's, so regret is in one theory.  Reads the registry
 read-only and writes nothing to it.
+
+`--trajectories DIR` (funnel F0, `docs/WORKPLAN_energy.md` §3a) also writes one `.npz` per
+relaxation: energy and fmax at every optimiser point, coordinates every `--every` points plus
+the last, and the run's identity (structure, start, stage, model).  F1 replays these offline.
+`--sample-from raw` takes starts from raw constructs, so a registry with no relaxations yet works.
 """
 from __future__ import annotations
 
@@ -43,13 +48,23 @@ from mofsbu.runner import read_xyz                                       # noqa:
 
 def pick(con, method: str, n: int, starts: int, seed: int,
          classes: tuple[str, ...] = ("neutral", "charged")) -> list[dict]:
-    """Ni structures with at least `starts` raw starts, `n` split evenly over `classes`."""
-    rows = con.execute(
-        """SELECT s.id sid, s.net_charge, r.id gid FROM geometries g
-           JOIN methods m ON m.id = g.method_id JOIN geometries r ON r.id = g.relaxed_from
-           JOIN structures s ON s.id = g.structure_id
-           WHERE m.method = ? AND r.fidelity <= 1 AND s.hidden = 0 AND s.n_metals > 0
-           ORDER BY s.id, r.id""", (method,)).fetchall()
+    """Ni structures with at least `starts` raw starts, `n` split evenly over `classes`.
+
+    A start is a raw construct that `method` relaxed; with `method == "raw"`, any raw construct.
+    """
+    if method == "raw":
+        rows = con.execute(
+            """SELECT s.id sid, s.net_charge, g.id gid FROM geometries g
+               JOIN structures s ON s.id = g.structure_id
+               WHERE g.fidelity <= 1 AND s.hidden = 0 AND s.n_metals > 0
+               ORDER BY s.id, g.id""").fetchall()
+    else:
+        rows = con.execute(
+            """SELECT s.id sid, s.net_charge, r.id gid FROM geometries g
+               JOIN methods m ON m.id = g.method_id JOIN geometries r ON r.id = g.relaxed_from
+               JOIN structures s ON s.id = g.structure_id
+               WHERE m.method = ? AND r.fidelity <= 1 AND s.hidden = 0 AND s.n_metals > 0
+               ORDER BY s.id, r.id""", (method,)).fetchall()
     by: dict[int, dict] = {}
     for r in rows:
         e = by.setdefault(r["sid"], {"sid": r["sid"], "charge": r["net_charge"], "starts": []})
@@ -68,6 +83,47 @@ def pick(con, method: str, n: int, starts: int, seed: int,
     return out
 
 
+class Trajectories:
+    """Writes each relaxation's path to `<dir>/<sid>_<start>_<stage>_<model>.npz` (F0)."""
+
+    def __init__(self, out: Path | None, every: int) -> None:
+        self.out, self.every = out, every
+        if out is not None:
+            out.mkdir(parents=True, exist_ok=True)
+
+    def relax(self, backend, key: str, stage: str, sid: int, gid: int, symbols, xyz, graph,
+              fmax: float, steps: int) -> dict:
+        if self.out is None:
+            return relax(backend, symbols, xyz, graph, fmax, steps)
+        energy: list[float] = []
+        force: list[float] = []
+        frames: list[tuple[int, np.ndarray]] = []
+
+        def on_step(e: float, f: float, x) -> None:
+            if len(energy) % self.every == 0:
+                frames.append((len(energy), np.asarray(x, dtype=float)))
+            energy.append(e)
+            force.append(f)
+            last[0] = np.asarray(x, dtype=float)
+
+        last: list = [None]
+        r = relax(backend, symbols, xyz, graph, fmax, steps, on_step=on_step)
+        if energy and frames[-1][0] != len(energy) - 1:
+            frames.append((len(energy) - 1, last[0]))
+        meta = {"sid": sid, "start_geometry": gid, "stage": stage, "model": key,
+                "method": backend.method, "charge": int(graph.charge),
+                "multiplicity": int(graph.multiplicity), "fmax_target": fmax,
+                "steps_max": steps, "every": self.every, "symbols": list(symbols),
+                "converged": r.get("converged"), "error": r.get("error")}
+        np.savez_compressed(
+            self.out / f"{sid}_{gid}_{stage}_{key}.npz",
+            energy=np.array(energy), fmax=np.array(force),
+            frame_index=np.array([i for i, _ in frames], dtype=int),
+            coords=np.array([x for _, x in frames]).reshape(len(frames), len(symbols), 3),
+            start=np.asarray(xyz, dtype=float), meta=json.dumps(meta))
+        return r
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -83,7 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fmax", type=float, default=0.05)
     p.add_argument("--steps", type=int, default=1000)
     p.add_argument("--sample-from", default="MACE-OMOL-0",
-                   help="method whose stored relaxations define the starts")
+                   help="method whose stored relaxations define the starts; 'raw' for any "
+                        "raw construct")
+    p.add_argument("--trajectories", type=Path, default=None,
+                   help="directory for one .npz per relaxation (F0 trajectory capture)")
+    p.add_argument("--every", type=int, default=10,
+                   help="with --trajectories: keep coordinates every N optimiser points")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--classes", nargs="+", default=["neutral", "charged"],
                    choices=["neutral", "charged"])
@@ -98,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     large = get_backend(a.large)
     smalls = {k: get_backend(k) for k in a.small}
     picked = pick(con, a.sample_from, a.structures, a.starts, a.seed, tuple(a.classes))
+    traj = Trajectories(a.trajectories, a.every)
     print(f"{len(picked)} structures x {a.starts} starts; large {large.method}, small "
           f"{[b.method for b in smalls.values()]}", flush=True)
 
@@ -110,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         for gid in e["starts"]:
             symbols, coords = read_xyz(geometry_xyz(reg, gid))
             starts.append((gid, symbols, np.asarray(coords, dtype=float)))
-        base = [relax(large, s, x, graph, a.fmax, a.steps) for _, s, x in starts]
+        base = [traj.relax(large, a.large, "base", e["sid"], g, s, x, graph, a.fmax, a.steps)
+                for g, s, x in starts]
         ok = [r for r in base if "energy" in r]
         if not ok:
             continue
@@ -119,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
                "baseline": {"seconds": sum(r.get("seconds", 0) for r in base),
                             "stored": len(base), "failed": len(base) - len(ok)}}
         for key, small in smalls.items():
-            mins = [relax(small, s, x, graph, a.fmax, a.steps) for _, s, x in starts]
+            mins = [traj.relax(small, key, "small", e["sid"], g, s, x, graph, a.fmax, a.steps)
+                    for g, s, x in starts]
             t_small = sum(r.get("seconds", 0) for r in mins)
             order = sorted((i for i, r in enumerate(mins) if "energy" in r),
                            key=lambda i: mins[i]["energy"])
@@ -129,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
             for k in range(1, a.k_max + 1):
                 if k <= len(order):
                     i = order[k - 1]
-                    r = relax(large, starts[i][1], mins[i]["xyz"], graph, a.fmax, a.steps)
+                    r = traj.relax(large, a.large, f"refine-{key}", e["sid"], starts[i][0],
+                                   starts[i][1], mins[i]["xyz"], graph, a.fmax, a.steps)
                     t_refine += r.get("seconds", 0)
                     if "energy" in r:
                         refined.append(r["energy"])

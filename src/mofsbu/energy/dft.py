@@ -265,7 +265,8 @@ class DFTBackend:
               fmax=0.05, steps=100, on_step=None):
         """geomeTRIC on the SCF gradient.  `fmax` (eV/Å) sets the gradient criteria.
 
-        `on_step(energy_eV, fmax_eV_per_A)` is called after every optimiser step.
+        `on_step(energy_eV, fmax_eV_per_A, coords_A)` is called at every optimiser point
+        (`backends.OnStep`).
         """
         from pyscf.geomopt.geometric_solver import kernel as geometric_kernel
 
@@ -281,7 +282,8 @@ class DFTBackend:
             trail.append((float(env["energy"]),
                           float(np.sqrt((g ** 2).sum(axis=1)).max()) * HARTREE_EV / BOHR_ANGSTROM))
             if on_step is not None:
-                on_step(trail[-1][0] * HARTREE_EV, trail[-1][1])
+                on_step(trail[-1][0] * HARTREE_EV, trail[-1][1],
+                        np.asarray(env["coords"]).reshape(-1, 3) * BOHR_ANGSTROM)
 
         converged, final = geometric_kernel(
             mf, maxsteps=steps, callback=callback, assert_convergence=False,

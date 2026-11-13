@@ -59,7 +59,7 @@ well when the public surface changes.
 
 `*` = re-exported from the package root. *Used by* lists importers in `src/` and `scripts/` outside this package; blank = internal or tests only.
 
-### `backends` (794 lines)
+### `backends` (809 lines)
 
 Energy backends behind one protocol (M7).
 
@@ -86,7 +86,7 @@ Energy backends behind one protocol (M7).
 | `backend_for(fidelity, *, ml_model, **kwargs) -> EnergyBackend`* | The backend that produces geometries at this rung, or a reason why not. | `runner` |
 | `available_backends() -> dict[str, bool]`* | What this machine can actually run. The UI reads this rather than guessing. |  |
 
-### `dft` (352 lines)
+### `dft` (354 lines)
 
 DFT through GPU4PySCF — the `Fidelity.DFT` rung (WORKPLAN_energy E4, stage 5b/5c).
 
