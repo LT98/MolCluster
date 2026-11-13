@@ -8,6 +8,8 @@ What this backend refuses rather than approximates:
 
 * **No GPU, no DFT.**  `MOFSBU_DEVICE=cpu` makes it unavailable, never a CPU fallback at
   another cost or another code (invariant 3: declared, never detected).
+* **More than one visible card.**  GPU4PySCF spreads over every card it can see and fails
+  there (#70), so a process that sees two is refused; `config.pin_process` confines one.
 * **A broken CUDA toolchain is a missing install.**  `available()` compiles one kernel, so
   a CuPy whose NVRTC and headers disagree is reported here rather than as an exception
   in the middle of a run.
@@ -142,6 +144,13 @@ class DFTBackend:
         if not self.device.startswith("cuda"):
             return (f"GPU4PySCF runs on a CUDA device and MOFSBU_DEVICE={self.device!r}; "
                     "declare MOFSBU_DEVICE=cuda")
+        from mofsbu.config import visible_cards
+
+        cards = visible_cards()
+        if cards is not None and cards > 1:
+            return (f"GPU4PySCF works on every card it can see and this process sees {cards} "
+                    "(#70); confine it to one with CUDA_VISIBLE_DEVICES=<n>, or "
+                    "config.pin_process() before CUDA starts")
         return _toolchain_problem()
 
     def install_hint(self) -> str:

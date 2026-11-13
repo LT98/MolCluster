@@ -115,6 +115,13 @@ imports here — `mode_status()` decides, and the page reports `available: false
 note rather than failing at submit time. The `ml_go` model picker lists only installed
 models.
 
+## With "All N GPUs", DFT needs at least two workers
+
+Each spawned relax worker sees only its own card. A run with one worker drains its queue
+inside the server process, which sees every card, and GPU4PySCF spreads over every card it
+can see (#70), so DFT refuses to run there and says why. Declare two or more workers, or a
+single card. ML relaxations are not affected: they use the first card.
+
 ## The energy graph does not search, score or rank
 
 The graph page composes routes **you** walk. It will not find them for you, and it puts no

@@ -15,7 +15,9 @@ re-optimised by DFT (geomeTRIC, default ωB97M-V/def2-TZVPD).  Reported per rela
   * the DFT optimiser's energy trail, and peak GPU memory per structure.
 
 Reads the registry read-only and writes nothing to it.  The output is rewritten after every
-structure; `--resume` keeps the structures already in it.  Needs the GPU to itself.
+structure; `--resume` keeps the structures already in it.  Needs its card to itself.
+`--shard I/N` splits the structures over N processes, one card each, and `--merge` joins them
+(`scripts/_shard.py`).
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import _shard  # noqa: E402
 from compare_relaxers import bond_changes, heavy_rmsd, relax, sample  # noqa: E402
 from dft_arbitrate import dft_point  # noqa: E402
 from mofsbu.energy.backends import get_backend  # noqa: E402
@@ -229,11 +232,22 @@ def write(a, dft, backends, rows) -> dict:
     return summary
 
 
+def merge(a: argparse.Namespace) -> int:
+    """Join `--shard` outputs into `--out` (`_shard`), with the summary over all of them."""
+    head, rows = _shard.load(a.merge, "records", (
+        "dft", "relaxers", "fmax", "steps", "dft_fmax", "dft_steps", "acceptance_eV"))
+    head = {k: v for k, v in head.items() if k not in ("summary", "records")}
+    summary = summarise(rows, list(head["relaxers"]))
+    a.out.write_text(json.dumps(head | {"summary": summary, "records": rows}, indent=1))
+    print(json.dumps(summary, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
                                 epilog=__doc__)
-    p.add_argument("--db", type=Path, required=True)
+    p.add_argument("--db", type=Path, default=None, help="required unless --merge")
     p.add_argument("--store", type=Path, default=None,
                    help="blob store (default: <db dir>/store)")
     p.add_argument("--out", type=Path, required=True)
@@ -250,7 +264,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--basis", default="def2-tzvpd")
     p.add_argument("--resume", action="store_true",
                    help="keep the structures already in --out and skip them")
+    _shard.add_args(p)
     a = p.parse_args(argv)
+    if a.merge:
+        return merge(a)
+    if a.db is None:
+        p.error("--db is required")
+    shard = _shard.start(a)
 
     con = sqlite3.connect(f"file:{a.db.resolve()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
@@ -263,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"DFT backend unavailable: {dft.install_hint()}")
     ref_method = next(iter(backends.values())).method
     pool = sample(con, ref_method, per_class=10 ** 6, conformers=1, seed=0)
-    chosen = pick(pool, a.sids, a.extra, a.near_atoms)
+    chosen = _shard.take(pick(pool, a.sids, a.extra, a.near_atoms), shard)
 
     rows: list[dict] = []
     if a.resume and a.out.is_file():

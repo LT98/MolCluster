@@ -310,6 +310,30 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 68)* **Both GPUs: one card per worker process (#70, PR #85).**
+  `MOFSBU_DEVICE=cuda:0,cuda:1` was refused ("one device per process"), and
+  nothing gave a second process a second card: every spawned worker inherited the same device.
+  `config.compute_devices` now reads a pool of distinct indexed cards; `compute_device` is still
+  one per process (the first). `relax_workers` defaults to one per card, and `runner.worker_env`
+  pins relax worker i to card i mod n: it sees only that card (`CUDA_VISIBLE_DEVICES`, as
+  `cuda:0`; `MOFSBU_DEVICE_PHYSICAL` keeps the real name, which the relax task detail and the run
+  row record). Build workers see no card when relaxation has its own workers. #70: GPU4PySCF
+  counts the visible cards once, at import, and uses them all, so selecting a device afterwards
+  cannot confine it; `DFTBackend` instead refuses a process that sees more than one card, and
+  `config.pin_process` confines a process before CUDA starts. `funnel_eval.py` and
+  `dft_reopt.py` call it and take `--shard I/N` (one card per shard) and `--merge`
+  (`scripts/_shard.py`). The builder page offers "All N GPUs". Measured: an `ml_go` run (Ni/NH₃,
+  20 relaxations, 4 workers) put 10 relaxations on each card and matched a one-card run to
+  0.0 eV on every one; two F0 shards ran on cuda:0 and cuda:1 at once and merged; with both
+  cards visible the four GPU DFT tests now skip with the reason instead of failing
+  (`LinAlgError`), and a process pinned to cuda:1 runs DFT there with cupy seeing one card.
+  What the review turned up: the MACE method row records the device, so a worker pinned from
+  `cuda:1` (which sees it as `cuda:0`) would have filed results under a new method row and a
+  re-run would have recomputed them. A pinned process now carries the declared device
+  (`MOFSBU_DEVICE_LABEL`, `config.device_label`), and the method row records that. Bare `cuda`
+  is pinned as card 0. A run with one worker still sees every card, so DFT is refused there
+  with a pool (`docs/gui/04_limits.md`). Whether a device belongs in method identity at all is
+  left open.
 - *(rev 67)* **F0: trajectory capture (PR #84).**
   The funnel's partial-relaxation policies (F1–F5) need each relaxation's path, and relax
   returned only its end point. `relax` takes `on_step(energy, fmax, coords)` (`backends.OnStep`),
