@@ -12,6 +12,17 @@ from mofsbu.versions import ALGO_VERSIONS
 SCHEMA_VERSION = 1
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+#: Indexes on columns an older database may not have yet.  `schema.sql` runs before the
+#: missing columns are added (`_reconcile_columns`), so an index there would fail on such a
+#: database; these are created after it.  (name, CREATE statement.)
+LATE_INDEXES: tuple[tuple[str, str], ...] = (
+    # D31: `assembly.derive.file_derived` looks a filing up by it, and the foreign key's
+    # ON DELETE SET NULL scans for it on every geometry delete.  Almost every row is NULL.
+    ("ix_geometries_derived",
+     "CREATE INDEX IF NOT EXISTS ix_geometries_derived ON geometries (derived_from) "
+     "WHERE derived_from IS NOT NULL"),
+)
+
 #: How long a connection waits for the write lock before giving up.  sqlite3's own default
 #: is 5 s, which is a whole run's worth of workers deciding they are deadlocked: a dozen
 #: processes committing a structure each, plus a relaxation writing a geometry, queue on
@@ -103,6 +114,7 @@ class Registry:
         # would add the columns to a table whose UNIQUE key still could not hold them.
         rebuilt = self._rebuild_site_catalog(schema)
         added = self._reconcile_columns(schema)
+        indexed = self._late_indexes()
         for i, (table, column) in enumerate(added, start=1):
             # One row per column, and therefore one VERSION per column.  This used to be
             # `SCHEMA_VERSION * 1000 + len(added)` — the same number for every column in
@@ -120,8 +132,14 @@ class Registry:
                 "ON CONFLICT(version) DO NOTHING",
                 (SCHEMA_VERSION * 1000 + self._next_migration_slot(len(added) + 1),
                  utcnow(), "rebuilt site_catalog: UNIQUE now includes slot"))
-        # A table new to an EXISTING database is a migration too; a fresh one records
-        # only its schema version, since every table in it is new.
+        # A table or index new to an EXISTING database is a migration too; a fresh one
+        # records only its schema version, since everything in it is new.
+        for name in indexed if before else []:
+            self.conn.execute(
+                "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
+                "ON CONFLICT(version) DO NOTHING",
+                (SCHEMA_VERSION * 1000 + self._next_migration_slot(1), utcnow(),
+                 f"created index {name}"))
         for table in created:
             self.conn.execute(
                 "INSERT INTO migrations (version, applied_at, note) VALUES (?,?,?) "
@@ -136,6 +154,17 @@ class Registry:
             )
         self.record_algo_versions()
         self.conn.commit()
+
+    def _late_indexes(self) -> list[str]:
+        """Create each `LATE_INDEXES` entry this database lacks; return their names."""
+        have = {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+        made = []
+        for name, sql in LATE_INDEXES:
+            if name not in have:
+                self.conn.execute(sql)
+                made.append(name)
+        return made
 
     def _tables(self) -> set[str]:
         return {r[0] for r in self.conn.execute(
