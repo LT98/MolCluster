@@ -758,9 +758,8 @@ that would fail if the claim stopped being true.**
 
 1. **D31 (D11's connectivity half) — single-piece filing merged (#65); separations wait for the
    second-shell probe.** A connectivity-changed relaxation that stays one piece is filed under
-   the species it became (`assembly/derive.py`), by new relax tasks on their own. Left: an
-   index on `derived_from`, and the separations, held back until the second-shell probe decides
-   each one: held in the second shell → an outer-sphere adduct (C19 shell record); leaving →
+   the species it became (`assembly/derive.py`), by new relax tasks on their own (indexed,
+   rev 69). Left: the separations, held back until the second-shell probe decides each one: held in the second shell → an outer-sphere adduct (C19 shell record); leaving →
    labelled unstable, locked away. Broken skeletons stay refused.
    **Called 2026-11-11: registries built before #69 are regenerated, not repaired**, so
    `scripts/file_derived_species.py --apply` is not run on them. On `THQ_run`, 45% of the 4511
