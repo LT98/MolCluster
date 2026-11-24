@@ -193,12 +193,14 @@ def claim_task(reg: Registry, run_id: int | None = None, *,
     if exclude_kinds:
         where.append(f"kind NOT IN ({','.join('?' * len(exclude_kinds))})")
         args += list(exclude_kinds)
-    # A step that joins onto another task's product waits for it (B25).  Only `grow`
-    # names a parent, so only a `grow` row pays for reading its payload.
+    # A step that joins onto another task's product waits for it (B25), and for the
+    # product task whose isomer it aims at.  Only `grow` names them, so only a `grow` row
+    # pays for reading its payload.
     where.append(
         "(kind != 'grow' OR NOT EXISTS (SELECT 1 FROM tasks dep WHERE dep.id IN ("
         "json_extract(tasks.payload_json, '$.parent_task'), "
-        "json_extract(tasks.payload_json, '$.ligand_task')) AND dep.status IN (?, ?)))")
+        "json_extract(tasks.payload_json, '$.ligand_task'), "
+        "json_extract(tasks.payload_json, '$.child_task')) AND dep.status IN (?, ?)))")
     args += [PENDING, CLAIMED]
     sql = ("SELECT id, run_id, kind, payload_json, attempts FROM tasks WHERE "
            + " AND ".join(where) + " ORDER BY priority DESC, id ASC LIMIT 1")

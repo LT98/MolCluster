@@ -38,9 +38,10 @@ from mofsbu.geometry.embed import embed_molecule, embed_with_report, to_xyz
 from mofsbu.geometry import qc as qc_mod
 from mofsbu.geometry.placer import (
     GEOMETRIES, LigandPlacement, place_mononuclear, reserve_for, to_rdkit,
-    twist_chelate_for, vertex_arrangements)
+    arrangement_contains, donor_classes, twist_chelate_for, vertex_arrangements)
 from mofsbu.graph._types import TypedGraph
 from mofsbu.graph.from_mol import from_rdkit, mol_from_smiles
+from mofsbu.identity.keys import l2_isomer_tag
 from mofsbu.naming import decompose
 from mofsbu.registry import (
     MethodSpec, Provenance, Registry, alias_fragment, catalog_drift, put_geometry,
@@ -187,7 +188,10 @@ def _parent_payloads(payload: dict[str, Any], co_ligand: str | None = None,
     `co_ligand` (set under `co_ligand_counts="range"`, D26) adds one more parent: this
     product with one co-ligand fewer, its vertex left empty.  Listed last, so the ligand
     parents keep the order a `fill` spec plans them in.
+    The parent carries no `arrangement`: an isomer index belongs to one sphere, and the
+    parent is another sphere with isomers of its own (`_plan_pathways` places each).
     """
+    payload = {k: v for k, v in payload.items() if k != "arrangement"}
     out = []
     for i, comp in enumerate(payload["components"]):
         rest = [dict(c) for j, c in enumerate(payload["components"]) if j != i]
@@ -203,27 +207,63 @@ def _parent_payloads(payload: dict[str, Any], co_ligand: str | None = None,
     return out
 
 
-def _n_arrangements(payload: dict[str, Any]) -> int | None:
-    """How many isomers a planned sphere's ligands of 3+ donors give it (#15).
+def _component_kind(c: dict[str, Any]) -> str:
+    """What makes two components the same ligand in a sphere — planning and build agree."""
+    return f"{c['molecule']}|{c['label']}|{c['mode']}"
 
-    None when it has no such ligand, so nothing about its tasks changes.  Computed from
-    the payload alone, the same way `_build_sphere` will place it: the same ligands by
-    denticity, rings and donor types, and the same reserved vertices.
+
+#: The co-ligand's `LigandPlacement.kind`, in planning and build alike.
+CO_KIND = "co"
+
+
+def _n_arrangements(payload: dict[str, Any]) -> int:
+    """How many isomers a planned sphere's ligands give it on its polyhedron (#15, #87).
+
+    Computed from the payload alone, the same way `_build_sphere` will place it: the same
+    ligands by kind, denticity, rings and donor classes, and the same reserved vertices.
     """
+    ligands, reserve = _planned_sphere(payload)
+    return vertex_arrangements(payload["geometry"], int(payload["cn"]), ligands,
+                               reserve=reserve)
+
+
+def _planned_sphere(payload: dict[str, Any]) -> tuple[list[LigandPlacement], Any]:
+    """A planned sphere's ligands, in build order, and its reserved vertices."""
     ligands = [LigandPlacement(mol=None, donor_idxs=tuple(c["donors"]),
                                donor_types=tuple(c.get("donor_types", ("",) * c["denticity"])),
                                mode=BindingMode(c["mode"]), name=f"{c['molecule']}{c['label']}",
-                               rings=tuple(tuple(r) for r in c.get("rings", ())))
+                               rings=tuple(tuple(r) for r in c.get("rings", ())),
+                               kind=_component_kind(c),
+                               donor_classes=tuple(c.get("donor_classes", ())))
                for c in payload["components"] for _ in range(int(c["count"]))]
-    if not any(lig.denticity >= 3 for lig in ligands):
-        return None
-    ligands += [LigandPlacement(mol=None, donor_idxs=(0,), donor_types=("",), name="co")
+    ligands += [LigandPlacement(mol=None, donor_idxs=(0,), donor_types=("",), name="co",
+                                kind=CO_KIND)
                 for _ in range(payload["n_co"])]
     cn = int(payload["cn"])
     n_vacant = cn - sum(lig.denticity for lig in ligands)
     reserve = (reserve_for(payload["geometry"], cn, n_vacant, ligands)
                if n_vacant >= 2 else None)
-    return vertex_arrangements(payload["geometry"], cn, ligands, reserve=reserve)
+    return ligands, reserve
+
+
+def _step_reaches(parent: dict[str, Any], child: dict[str, Any], removed: int) -> bool:
+    """Can adding ligand `removed` of `child` to the parent isomer give the child isomer?"""
+    child_ligs, child_reserve = _planned_sphere(child)
+    parent_ligs, parent_reserve = _planned_sphere(parent)
+    return arrangement_contains(
+        child["geometry"], int(child["cn"]),
+        child=child_ligs, child_reserve=child_reserve,
+        child_arrangement=int(child.get("arrangement", 0)), removed=removed,
+        parent=parent_ligs, parent_reserve=parent_reserve,
+        parent_arrangement=int(parent.get("arrangement", 0)))
+
+
+def _removed_index(child: dict[str, Any], which: int) -> int:
+    """The child's ligand (build order) that `_parent_payloads` entry `which` takes away."""
+    counts = [int(c["count"]) for c in child["components"]]
+    if which < len(counts):
+        return sum(counts[:which]) + counts[which] - 1
+    return sum(counts) + int(child["n_co"]) - 1
 
 
 def _co_component(smiles: str) -> dict[str, Any]:
@@ -284,6 +324,7 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
                     "charge": proto.charge, "label": proto.label,
                     "donors": list(donors), "mode": mode,
                     "denticity": len(donors),
+                    "donor_classes": list(donor_classes(mol, donors)),
                 })
             if "chelate" in spec.binding:
                 # Three or more donors (#15); `rings` and `donor_types` are what the
@@ -296,6 +337,7 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
                         "donors": list(s.donors), "mode": BindingMode.CHELATE.value,
                         "denticity": s.denticity, "donor_types": list(s.donor_types),
                         "rings": [[pos[a], pos[b]] for a, b in s.rings],
+                        "donor_classes": list(donor_classes(mol, s.donors)),
                     })
 
     # Under `range` the co-ligand is a reagent a step consumes, so it is built and
@@ -368,14 +410,14 @@ def enumerate_plan(spec: BuildSpec, *, guard: bool = False) -> PlannedRun:
                                    "n_co": k, "cn": cn, "geometry": geometry,
                                    "n_vacant": n_vacant + n_co - k}
                         n_arr = _n_arrangements(payload)
-                        if n_arr is None:
-                            requested.append(place(payload))
-                        elif not n_arr:
+                        if not n_arr:
                             skip(f"no arrangement on {geometry} keeps every chelate ring cis",
-                                 "a ligand of three or more donors cannot sit on this "
-                                 "polyhedron with the vertices it leaves")
-                        for a in range(n_arr or 0):
-                            # One task per isomer (fac, mer, Delta, Lambda), #15.
+                                 "a chelate cannot sit on this polyhedron with the "
+                                 "vertices it leaves")
+                        elif n_arr == 1:
+                            requested.append(place(payload))
+                        for a in range(n_arr if n_arr > 1 else 0):
+                            # One task per isomer (cis, trans, fac, mer, Delta, Lambda).
                             requested.append(place({**payload, "arrangement": a}))
 
     if spec.pathways and spec.metals:
@@ -455,25 +497,36 @@ def _plan_pathways(tasks: list[PlannedTask], place, requested: list[int],
         nxt: list[int] = []
         for child_ix in frontier:
             child = tasks[child_ix].payload
-            for parent_payload, component in _parent_payloads(child, co_ligand):
-                if max_vacant is not None and parent_payload["n_vacant"] > max_vacant:
+            # One step per parent isomer and product isomer; the step looks for a join
+            # that lands on its product's isomer, or says none does (`_execute_grow`).
+            for which, (parent_base, component) in enumerate(
+                    _parent_payloads(child, co_ligand)):
+                if max_vacant is not None and parent_base["n_vacant"] > max_vacant:
                     continue
-                if cap is not None and len(tasks) >= cap:
-                    return True
-                parent_ix = place(parent_payload)
-                if (parent_ix, child_ix) in seen:
-                    continue
-                seen.add((parent_ix, child_ix))
-                nxt.append(parent_ix)
-                tasks.append(PlannedTask("grow", {
-                    "parent_task": parent_ix, "child_task": child_ix,
-                    "ligand_task": ligand_task.get(
-                        ("co_ligand", component["co_ligand"]) if "co_ligand" in component
-                        else (component["molecule"], tuple(component["selection"]))),
-                    "component": component, "metal": child["metal"],
-                    "cn": child["cn"], "geometry": child["geometry"],
-                }, priority=PATHWAY_PRIORITY,
-                    task_refs=("parent_task", "child_task", "ligand_task")))
+                n_arr = _n_arrangements(parent_base)
+                parents = ([parent_base] if n_arr == 1 else
+                           [dict(parent_base, arrangement=a) for a in range(n_arr)])
+                for parent_payload in parents:
+                    if n_arr > 1 or "arrangement" in child:
+                        if not _step_reaches(parent_payload, child,
+                                             _removed_index(child, which)):
+                            continue
+                    if cap is not None and len(tasks) >= cap:
+                        return True
+                    parent_ix = place(parent_payload)
+                    if (parent_ix, child_ix) in seen:
+                        continue
+                    seen.add((parent_ix, child_ix))
+                    nxt.append(parent_ix)
+                    tasks.append(PlannedTask("grow", {
+                        "parent_task": parent_ix, "child_task": child_ix,
+                        "ligand_task": ligand_task.get(
+                            ("co_ligand", component["co_ligand"]) if "co_ligand" in component
+                            else (component["molecule"], tuple(component["selection"]))),
+                        "component": component, "metal": child["metal"],
+                        "cn": child["cn"], "geometry": child["geometry"],
+                    }, priority=PATHWAY_PRIORITY,
+                        task_refs=("parent_task", "child_task", "ligand_task")))
         frontier = [ix for ix in nxt if tasks[ix].payload["components"]
                     or (co_ligand and tasks[ix].payload["n_co"])]
     return False
@@ -807,16 +860,20 @@ def _execute_relax(reg: Registry, task, spec: BuildSpec) -> Outcome:
                         "device": physical_device(),
                         "method": result.method.describe()}}
     if geom.created:
-        conn = reg.conn.execute("SELECT connectivity_changed, connectivity_json "
+        conn = reg.conn.execute("SELECT connectivity_changed, connectivity_json, "
+                                "arrangement_changed, arrangement_json "
                                 "FROM geometries WHERE id=?", (geom.id,)).fetchone()
         verdict = json.loads(conn["connectivity_json"] or "null")
-        if conn["connectivity_changed"]:
+        if conn["arrangement_changed"]:
+            detail["arrangement_changed"] = json.loads(conn["arrangement_json"])
+        if conn["connectivity_changed"] or conn["arrangement_changed"]:
             # Stored and flagged, like a QC failure below: the energy is excluded from
             # selection, the coordinates stay inspectable.  A single-piece change is filed
             # beside it (D31); a refusal, a separation included, is recorded, never raised.
             from mofsbu.assembly.derive import file_derived
 
-            detail["connectivity_changed"] = verdict
+            if conn["connectivity_changed"]:
+                detail["connectivity_changed"] = verdict
             detail["derived"] = file_derived(reg, geom.id)
         elif verdict and "unchecked" in verdict:
             detail["connectivity_unchecked"] = verdict["unchecked"]
@@ -988,7 +1045,9 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
             # The placer's own pose coordinates (its choice vector); absent = search.
             torsion_well=int(comp.get("torsion_well", 0)),
             azimuth_step=comp.get("azimuth_step"), oop_step=comp.get("oop_step"),
-            rings=tuple(tuple(r) for r in comp.get("rings", ())))
+            rings=tuple(tuple(r) for r in comp.get("rings", ())),
+            kind=_component_kind(comp),
+            donor_classes=tuple(comp.get("donor_classes", ())))
             for _ in range(int(comp["count"]))]
     name = "+".join(parts)
     molecule_names = sorted({spec.molecules[c["molecule"]].name for c in components})
@@ -1002,7 +1061,7 @@ def _build_sphere(spec: BuildSpec, payload: dict[str, Any]) -> _Built:
                                "n": payload["n_co"]}
         ligands += [LigandPlacement(mol=co, donor_idxs=(co_site.atom_idx,),
                                     donor_types=(co_site.donor_type,),
-                                    name=spec.co_ligand)
+                                    name=spec.co_ligand, kind=CO_KIND)
                     for _ in range(payload["n_co"])]
         ligand_charge += Chem.GetFormalCharge(co) * payload["n_co"]   # [Cl-] counts (B20)
 
@@ -1279,28 +1338,54 @@ def _rung(reg: Registry, task_id: Any, which: str) -> tuple[int, dict[str, Any]]
     return int(row["structure_id"]), json.loads(row["payload_json"])
 
 
-def _vertex_pair(block, donors: Sequence[Any], vacancies: Sequence[Any], metal: str,
-                 elements: Sequence[str]):
-    """The two vertices a chelating ligand should span, and the verdict that chose them.
+def _vertex_pairs(block, donors: Sequence[Any], vacancies: Sequence[Any], metal: str,
+                  elements: Sequence[str]):
+    """The vertex pairs a chelating ligand can span, least strained first, and a verdict.
 
-    Every pair is judged and the least strained feasible one wins — which is how cis
-    beats trans without anything naming either: a ligand whose donors sit 3 A apart
-    subtends about 90 degrees at its bonds' own length and cannot stretch across 180.
-    Ranked by the SAME verdict that will place it (`chelate_reach`), because ranking on
-    one criterion and placing under another is how a step picks the pair it then cannot
-    build.  Ties break on slot order so a replay picks the same pair.
+    Every pair is judged and ranked by strain — which is how cis beats trans without
+    anything naming either: a ligand whose donors sit 3 A apart subtends about 90 degrees
+    at its bonds' own length and cannot stretch across 180.  Ranked by the SAME verdict
+    that will place it (`chelate_reach`), because ranking on one criterion and placing
+    under another is how a step picks the pair it then cannot build.  Ties break on slot
+    order so a replay picks the same pair.  The verdict is the best one, or the first
+    refusal when none is feasible.
     """
     from mofsbu.assembly.join import chelate_reach
 
-    best, best_verdict, worst = None, None, None
-    for first, second in itertools.combinations(vacancies, 2):
+    feasible, worst = [], None
+    for k, (first, second) in enumerate(itertools.combinations(vacancies, 2)):
         verdict = chelate_reach(donors, [first, second], partner=metal,
                                 donor_elements=elements)
-        if verdict.feasible and (best_verdict is None or verdict.strain < best_verdict.strain):
-            best, best_verdict = (first, second), verdict
+        if verdict.feasible:
+            feasible.append((verdict.strain, k, (first, second), verdict))
         if worst is None:
             worst = verdict
-    return best, (best_verdict or worst)
+    feasible.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in feasible], (feasible[0][3] if feasible else worst)
+
+
+def _target_isomer(reg: Registry, child_task: Any) -> str | None:
+    """The L2 tag of the isomer a step should land on: its product task's structure.
+
+    None when that task built nothing (refused, or none named): the step then builds the
+    first join that works, as it would without isomers.
+    """
+    if child_task is None:
+        return None
+    row = reg.conn.execute(
+        "SELECT s.l2_isomer_tag FROM tasks t JOIN structures s ON s.id = t.structure_id "
+        "WHERE t.id=? AND t.status='done'", (child_task,)).fetchone()
+    return None if row is None else row["l2_isomer_tag"]
+
+
+def _isomer_of(block) -> str:
+    return l2_isomer_tag(block.graph, block.geometry)
+
+
+def _unreachable(target: str | None) -> str:
+    return (f"no join onto this rung's open vertices lands on the product isomer "
+            f"{target!r}: this parent isomer is not a route to it (a substitution or "
+            f"rearrangement would be)")
 
 
 #: Roll offsets from a torsion well that a grow tries, in order, when the well alone
@@ -1391,6 +1476,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                         "status": None if row is None else row["status"]})
         ligand_sid = int(row["structure_id"])
 
+    target = _target_isomer(reg, payload.get("child_task"))
     parent = _build_sphere(spec, parent_payload)
     block = _sphere_block(parent, structure_id=parent_sid)
     comp = payload["component"]
@@ -1404,7 +1490,8 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
     elements = [ligand.graph.label(s.atom_idx).element for s in donors]
     detail: dict[str, Any] = {"step": {
         "adds": name, "mode": comp["mode"], "from_structure": parent_sid,
-        "from_task": payload.get("parent_task"), "ligand_structure": ligand_sid}}
+        "from_task": payload.get("parent_task"), "ligand_structure": ligand_sid,
+        "target_isomer": target}}
     if twists:
         detail["step"]["twist"] = twists
 
@@ -1418,16 +1505,47 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
             code="pathway_no_open_vertex", detail=detail)
     try:
         if len(donors) == 2:
-            pair, verdict = _vertex_pair(block, donors, vacancies, metal.symbol, elements)
-            if pair is None:
+            pairs, verdict = _vertex_pairs(block, donors, vacancies, metal.symbol, elements)
+            if not pairs:
                 raise _Rejected(verdict.reason, code="chelate_cannot_span",
                                 detail={**detail, "strain": round(verdict.strain, 4)})
-            result = join(block, ligand, list(pair), donors, mode=Chelate(), seed=spec.seed)
+            result = None
+            # Least strained first; both ways round, since an unsymmetric chelate's two
+            # orientations are two isomers (#87).  Untargeted, the first is the step.
+            for pair in pairs:
+                for ordered in (pair, pair[::-1]):
+                    trial = join(block, ligand, list(ordered), donors, mode=Chelate(),
+                                 seed=spec.seed)
+                    if target is None or _isomer_of(trial.block) == target:
+                        result = trial
+                        break
+                if result is not None:
+                    break
+            if result is None:
+                raise _Rejected(_unreachable(target), code="pathway_isomer_unreachable",
+                                detail=detail)
             report = None
         elif len(donors) == 1:
-            result, report, tried = _first_clear_join(
-                block, ligand, vacancies, donors[0], mode=comp["mode"],
-                metal=metal.symbol, element=elements[0], seed=spec.seed)
+            choices = [vacancies] if target is None else [[v] for v in vacancies]
+            matching, tried = [], 0
+            for offer in choices:
+                try:
+                    trial, trial_report, n = _first_clear_join(
+                        block, ligand, offer, donors[0], mode=comp["mode"],
+                        metal=metal.symbol, element=elements[0], seed=spec.seed)
+                except IncompatibleJoin:
+                    if target is None:
+                        raise
+                    continue
+                tried += n
+                if target is None or _isomer_of(trial.block) == target:
+                    matching.append((trial, trial_report))
+                    if trial_report.ok:
+                        break
+            if not matching:
+                raise _Rejected(_unreachable(target), code="pathway_isomer_unreachable",
+                                detail=detail)
+            result, report = next(((r, q) for r, q in matching if q.ok), matching[0])
             detail["join_choices_tried"] = tried
         else:
             wrapped, pick = _wrap_onto(spec, comp, block, vacancies, metal.symbol)
@@ -1440,6 +1558,9 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
                                                   mol=wrapped)
             result = join(block, ligand, list(pick), donors, mode=Chelate(), seed=spec.seed)
             report = None
+            if target is not None and _isomer_of(result.block) != target:
+                raise _Rejected(_unreachable(target), code="pathway_isomer_unreachable",
+                                detail={**detail, "reached": _isomer_of(result.block)})
     except IncompatibleJoin as exc:
         # A refusal from the site pair is an ANSWER about the chemistry, the same way the
         # placer's is, and it is reported as a rejection rather than a failure.
@@ -1464,12 +1585,7 @@ def _execute_grow(reg: Registry, task, spec: BuildSpec) -> Outcome:
         depth=sum(int(c["count"]) for c in parent.components) + stepped_co + 1,
         note=f"+{name} onto structure {parent_sid}",
         tags=[*sorted({*parent.molecule_names, *added}), "complex", metal.symbol],
-        seed=spec.seed, qc=report.to_dict(),
-        # The L2 tag is left where the `place` path leaves it — unset.  Computing one here
-        # would put this product in a DIFFERENT structures row from the rung the run's own
-        # place task built, and the edge would then point at a node nothing else reached
-        # (B2 is the seam; both paths move when it is closed, together).
-        l2="")
+        seed=spec.seed, qc=report.to_dict())        # L2 read off the product's coordinates
     detail["join"] = {
         "strain": round(result.strain, 4), "mode": comp["mode"],
         "reaction": stored.reaction_id, "choice_vector": stored.choice_digest,
@@ -1512,6 +1628,7 @@ def _store_place(reg: Registry, spec: BuildSpec, payload: dict[str, Any]) -> Out
                                 vacancies=built.result.vacancies,
                                 metal_idx=built.result.metal_idx)
     put = put_structure(reg, built.graph,
+                        l2=l2_isomer_tag(built.graph, built.result.coords),
                         tags=[*built.molecule_names, "complex", built.metal.symbol],
                         provenance=Provenance(kind="assembly", depth=1,
                                               note=payload["geometry"]))

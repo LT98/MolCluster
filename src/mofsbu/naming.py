@@ -10,9 +10,10 @@ catastrophically once two different species compose the same name.  Nothing in
 Everything here is a pure function of the typed graph plus an optional alias table.
 An alias is display-only: it can be wrong, missing, or changed, and no query moves.
 
-**Placeholders are deliberate and loud.**  Where the pipeline does not yet know
-something, the label says so — `?L2` means configurational isomers are not being
-distinguished yet (M5), so two rows carrying the same label may be different species.
+**Placeholders are deliberate and loud.**  Where the pipeline does not know something, the
+label says so — `?L2` means this row's isomer tag was never read off coordinates, so two
+rows carrying the same label may be different species.  A tag that was read and found
+empty (no centre has an isomeric choice) adds nothing.
 A label that quietly omits what it cannot compute is a debugging trap.
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ from mofsbu.graph._types import BridgeClass, TypedGraph
 from mofsbu.identity import hill_formula, l1_graph_hash
 
 UNNAMED = ""                       # no alias known: the fragment's formula is used
-L2_PLACEHOLDER = "?L2"             # isomer tag not computed yet (M5)
+L2_PLACEHOLDER = "?L2"             # isomer tag never read off coordinates
 L3_PLACEHOLDER = "?L3"             # conformer id not computed yet (M5)
 # `SITES_PLACEHOLDER = "?sites"` lived here while `site_state` was unpopulated. M4's
 # second half populates it (D18), so the placeholder is gone rather than left behind
@@ -101,12 +102,14 @@ def compose_label(
     *,
     aliases: dict[str, str] | None = None,
     l2_tag: str = "",
+    l2_known: bool = False,
     include_placeholders: bool = True,
 ) -> str:
     """Compose a readable label from the graph alone.
 
     No author-supplied name is consulted.  Anything the pipeline cannot yet compute is
-    marked rather than omitted, so an incomplete label is visibly incomplete.
+    marked rather than omitted, so an incomplete label is visibly incomplete.  `l2_known`
+    says the tag was read off coordinates (D32); otherwise the label carries `?L2`.
     """
     parts: list[str] = []
     metals = metal_part(g)
@@ -129,7 +132,10 @@ def compose_label(
     if g.multiplicity and g.multiplicity > 1:
         label += f" s{g.multiplicity}"
     if include_placeholders:
-        label += f" {l2_tag}" if l2_tag else f" {L2_PLACEHOLDER}"
+        if not l2_known:
+            label += f" {L2_PLACEHOLDER}"
+        elif l2_tag:
+            label += f" {l2_tag}"
     return label
 
 

@@ -598,6 +598,29 @@ def test_setting_a_co_ligand_builds_the_complexes(reg):
     assert find(reg, metal="Cu", limit=50), "Cu complexes should now exist"
 
 
+def test_cis_and_trans_bis_anthrarufin_copper_are_two_structures(reg):
+    """D10's motivating case end to end: placed once per isomer, filed under two L2 tags."""
+    import collections
+
+    spec = anthrarufin_spec(
+        molecules=(MoleculeSpec("ATF", "C1=CC2=C(C(=C1)O)C(=O)C3=C(C2=O)C(=CC=C3)O", 1,
+                                max_deprotonations=1),),
+        coordination=(4,), geometries=("square_planar",), ligands_per_metal=(2,),
+        binding=("chelate",))
+    summary = run(reg, spec)
+    assert not summary["counts"].get("failed"), summary["counts"]
+    rows = reg.conn.execute(
+        "SELECT s.l1_graph_hash, s.l2_isomer_tag FROM structures s "
+        "JOIN structure_metals m ON m.structure_id = s.id").fetchall()
+    by_l1 = collections.defaultdict(set)
+    for r in rows:
+        by_l1[r["l1_graph_hash"]].add(r["l2_isomer_tag"])
+    pairs = [tags for tags in by_l1.values() if len(tags) >= 2]
+    assert pairs, by_l1
+    assert any(any("@" in t and "=cis" in t for t in tags)
+               and any("@" in t and "=trans" in t for t in tags) for tags in pairs), pairs
+
+
 def test_the_placer_refusing_is_a_rejection_not_a_failure(reg):
     """A bidentate ligand cannot span a linear two-coordinate centre.
 

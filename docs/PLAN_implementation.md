@@ -684,9 +684,8 @@ energy workplans). Numbers are taken in merge order from **D30**; a plan never r
 advance, because two branches reserving the same number is how the ledger collides.
 
 One further call was open and is **not** a milestone gate — the L2 backfill-versus-version
-decision ([B2](BUGS_details.md#b2)). Called as **D22**: no backfill in either direction, and the run
-pipeline passes `l2=""` on purpose so its products land on the node every other route reaches.
-B2 stays open as the *reported* seam until both paths tag together.
+decision ([B2](BUGS_details.md#b2)). Called as **D22** (no backfill in either direction) and closed
+by **D32**: every path tags, and registries written before `iso2` are regenerated.
 
 Rule for all of them: when a gate is called, **write the resolution into the design doc's
 Decision Ledger with a new D-number and a changelog line**, then code against it. A gate
@@ -785,10 +784,19 @@ that would fail if the claim stopped being true.**
    reconciliation (`place_multicentre`) and `check_intercentre`, both stubs, plus widening
    `to_rdkit` past one metal. They serve M6's oxo-centred clusters (Fe₃O, Zn₄O); the paddlewheel
    M7 needs builds without them (D20). The plan-B trigger is **2026-10-14** (§4).
-7. **L2 (B2), as one piece.** Since #79, fac/mer and every κ3–κ6 arrangement build but share
-   one registry row each until L2 is tagged. Needed: a numbering-stable centre key ([B29](BUGS_details.md#b29)), an
-   arrangement-changed-after-relax check (L2's analogue of E1), and the call on the existing
-   all-`''` registries (rebuild, or accept untagged and tagged rows side by side under D19).
+7. **L2 follow-ups (D32, rev 70).** (c) A step aimed at one product isomer joins rigidly onto the parent
+   rung, so it can clash where `place` searched the whole sphere (measured: one Ni–catechol
+   step, 0.31 Å over). Under a relaxing run mode the relaxation decides; under `construct` it
+   is a QC rejection. (d) B10's Δ/Λ check now covers cis-bis-chelates and the tetrahedral
+   `P`/`M` twist too. (e) **Run size.**
+   One sphere per isomer multiplies a run: Cu + anthrarufin + acetate/EDA/NH₃ at CN 4–6 plans
+   61,573 tasks (10,004 at placement 5), CN 4+5 39,150, CN 4 alone 5,762; EDTA κ≤6 on top
+   plans 813,323. Square-pyramidal spheres dominate. A spec needs a way to keep isomers that
+   matter downstream (D10) without enumerating every one, or a run is scoped by CN. Every
+   `grow` stores a new geometry and relaxation is deduplicated per starting geometry, so
+   each step is also a relaxation (Cu–ATF solvothermal spec: 38,320 relaxations without
+   pathways, up to 105,738 with). Open call: relax a step's product only when it is a new
+   structure, or keep it as a second starting point for the same species.
 
 ### Less critical — triaged 2026-10-02
 

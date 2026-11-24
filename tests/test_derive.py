@@ -292,3 +292,73 @@ def test_a_relax_task_records_a_separation_as_held_back(reg, monkeypatch):
     assert reg.conn.execute("SELECT COUNT(*) FROM reactions WHERE kind='relaxation'"
                             ).fetchone()[0] == 0
     assert backends_mod is not None
+
+
+# ── an arrangement change: L2's analogue of E1 ───────────────────────────────
+
+def cu_oo2() -> TypedGraph:
+    """Square-planar Cu with two unsymmetric O,O' chelates (Oa-C1(-Me)-C2-Ob), no H."""
+    g = TypedGraph(charge=0, multiplicity=2, name="Cu(O,O')2")
+    cu = g.add_atom("Cu", formal_charge=2, oxidation_state=2, spin_class="hs")
+    for _ in range(2):
+        oa, c1 = g.add_atom("O", formal_charge=-1), g.add_atom("C")
+        c2, ob, me = g.add_atom("C"), g.add_atom("O"), g.add_atom("C")
+        for u, v in ((oa, c1), (c1, c2), (c2, ob), (c1, me)):
+            g.add_bond(u, v, COV)
+        g.add_bond(oa, cu, DAT)
+        g.add_bond(ob, cu, DAT)
+    return g
+
+
+def cu_oo2_coords(arrangement: str) -> np.ndarray:
+    """Five-ring chelates at bonded distances; the Oa pair 90 (cis) or 180 (trans) apart."""
+    x, y = np.array([1.0, 0, 0]), np.array([0, 1.0, 0])
+    second = (-x, -y) if arrangement == "trans" else (-y, -x)
+    c, s = np.cos(np.radians(77)), np.sin(np.radians(77))
+    rows = [np.zeros(3)]
+    for u, w in ((x, y), second):
+        c1 = 2 * u + 1.3 * (c * u + s * w)
+        c2 = 2 * w + 1.3 * (c * w + s * u)
+        rows += [2 * u, c1, c2, 2 * w, c1 + 1.42 * u - 0.28 * w]
+    return np.array(rows)
+
+
+def arrangement_row(reg, gid):
+    row = reg.conn.execute("SELECT arrangement_changed, arrangement_json FROM geometries "
+                           "WHERE id=?", (gid,)).fetchone()
+    return row["arrangement_changed"], json.loads(row["arrangement_json"] or "null")
+
+
+def test_a_relaxation_that_moves_cis_to_trans_is_filed_under_trans(reg):
+    from mofsbu.identity.keys import l2_isomer_tag
+
+    g = cu_oo2()
+    cis, trans = cu_oo2_coords("cis"), cu_oo2_coords("trans")
+    cis_tag, trans_tag = l2_isomer_tag(g, cis), l2_isomer_tag(g, trans)
+    assert cis_tag != trans_tag
+    put = put_structure(reg, g, l2=cis_tag)
+    raw = put_geometry(reg, put.id, xyz_of(g, cis), fidelity=Fidelity.RAW, method=RAW,
+                       canonical_order=put.canonical_order)
+    relaxed = put_geometry(reg, put.id, xyz_of(g, trans), fidelity=Fidelity.ML, method=OMOL,
+                           energy=-7.0, converged=True, relaxed_from=raw.id)
+    assert verdict_row(reg, relaxed.id)[0] == 0                # every bond intact
+    changed, verdict = arrangement_row(reg, relaxed.id)
+    assert changed == 1 and (verdict["before"], verdict["after"]) == (cis_tag, trans_tag)
+    # The cis row never takes the trans energy as its own.
+    assert get_structure(reg, put.id)["best_geometry_id"] == raw.id
+
+    out = file_derived(reg, relaxed.id)
+    new_sid, new_gid = out["filed"][0], out["geometries"][0]
+    assert get_structure(reg, new_sid)["l2_isomer_tag"] == trans_tag
+    assert reg.conn.execute("SELECT derived_from FROM geometries WHERE id=?",
+                            (new_gid,)).fetchone()[0] == relaxed.id
+    assert check_balance(reg, out["edge"]).balanced
+    assert file_derived(reg, relaxed.id)["skipped"] == "already filed"
+
+
+def test_no_source_geometry_means_no_arrangement_verdict(reg):
+    g = cu_oo2()
+    put = put_structure(reg, g)                                # no coordinates: no tag
+    gid = put_geometry(reg, put.id, xyz_of(g, cu_oo2_coords("trans")), fidelity=Fidelity.ML,
+                       method=OMOL, energy=-7.0, canonical_order=put.canonical_order).id
+    assert arrangement_row(reg, gid) == (None, None)

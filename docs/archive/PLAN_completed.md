@@ -310,6 +310,43 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 70)* **L2 wired end to end (D32; B2, B29, #87; PR #88), and every sphere built once per
+  isomer (`placement 6`).** Before the Cu–anthrarufin verification run, L2 was written by
+  routes only: `place`, `grow` and derived filings stored `''`, so cis and trans were one row.
+  Wiring it turned up three more problems. (1) **#87**: donors were grouped by ligand and element,
+  so an O,O′ chelate (anthrarufin's phenolate O and quinone O) compared only the chelates' mean
+  directions, which are 180° apart in square-planar M(O,O′)₂ either way: cis and trans both read
+  `O5=trans`. Donor classes are now each donor's orbit within its own ligand, and a ligand that
+  reaches the centre through more than one class gets one comparison per class
+  (`O5@3=cis` / `O5@3=trans`). (2) **The placer built one arrangement of every
+  monodentate/bidentate sphere**: `_assign_targets` enumerated isomers only for ligands of 3+
+  donors (#79) and filled the rest in table order. In a Cu + anthrarufin smoke run, the bis-chelate
+  came out trans only and mono-bound pairs cis only, so no tag could have split them. Every
+  ligand now goes through `_arrangements` (identical ligands in ascending order, so [M(H₂O)₆] is
+  one search; results cached), keyed by `kind` and `donor_classes` set alike at planning and
+  build. Run sizes grow: the reference slice plans 1037 tasks instead of 722. (3) **Two chelates
+  cis on an octahedron sit ~120° apart** and fell in the 135 ± 15° ambiguity band, and the cis
+  pair is chiral while the tag said only `cis`. Chelate pairs now split at 150° and cis gets a
+  hand (`cis-Delta`/`cis-Lambda`, `_chirality` about the normal to the two blades). Also: centres
+  are keyed by orbit (B29: one dimer, two tags under 30 renumberings → one); an undecided centre
+  is written `?` instead of being dropped; `put_geometry` judges each relaxation against its
+  source geometry (`arrangement_changed`/`arrangement_json`, excluded from energy and
+  best-geometry selection like E1's flag), and `file_derived` files an arrangement change under
+  the tag of its own coordinates. Pathways: a parent payload no longer inherits its child's
+  isomer index, which produced `pathway_parent_missing`. Each parent isomer is placed, a step
+  is planned only to the product isomers that contain it (`arrangement_contains`, any copy of
+  the added ligand), and a step waits for its product task, then searches its joins for that
+  task's tag or refuses with `pathway_isomer_unreachable`. The Ni–oxalate ladder plans 3
+  isomers of Ni(ox)₂(H₂O)₂ (cis-Δ, cis-Λ, trans), and every step builds. Planning cost: an
+  octahedral Cu + anthrarufin + acetate spec took 593 s to plan before rotations, relabellings,
+  reach checks and `reserve_for` were cached and each isomer class's images computed once;
+  29 s after, same 17,430 tasks. B16 did not reproduce
+  and is ticked. Pinned plan digests in `test_co_ligand_counts.py` re-pinned (64 → 82,
+  722 → 1037 tasks). Also closed: a tetrahedral M(AB)₂ (two unsymmetric chelates, mean
+  directions 180° apart) carries its twist, `trans-P` / `trans-M`, so its two hands are two
+  rows as the placer builds them; and a label shows the tag when it was read off
+  coordinates (`structures.l2_source = 'geometry'`, nothing for a read empty tag) and keeps
+  `?L2` only for a row never tagged, so pre-D32 rows keep their cached labels.
 - *(rev 69)* **An index on `geometries.derived_from` (D31).** `assembly.derive.file_derived`
   looks a filing up by `derived_from` on every connectivity-changed relaxation, and the column's
   `ON DELETE SET NULL` makes every geometry delete look for rows that point at it; both read the

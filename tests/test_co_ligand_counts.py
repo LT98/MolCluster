@@ -39,12 +39,13 @@ OLD_V7 = {
 }
 
 #: `(task count, sha256 of every task's kind/payload/priority/refs)` as planned by the
-#: runner before `co_ligand_counts` existed (origin/main at caf861f).  Pinned rather than
-#: recomputed: comparing the migrated spec against an explicit `fill` spec would only show
-#: the migration agrees with itself.
+#: runner before `co_ligand_counts` existed (origin/main at caf861f: 64 and 722 tasks),
+#: re-pinned at placement 6, which plans one sphere per isomer and records each ligand's
+#: donor classes (#87).  Pinned rather than recomputed: comparing the migrated spec
+#: against an explicit `fill` spec would only show the migration agrees with itself.
 BEFORE = {
-    "old_v7": (64, "541cc284e1e04eeb77ff4ebd9f1d8ffbfabb3001ae86c72f0952add84ee11b6c"),
-    "slice": (722, "4bf4dfe92f952ca3d148d479cc60b44a290254019162183c36e722ebcb8bdba9"),
+    "old_v7": (82, "3791885fcc36e065cb11a54627a8e53f538b1502bf30a5c36ecf919183622900"),
+    "slice": (1037, "5607384964358b6e428203b7fb0baa5c194d9088b93524389014ee15dd69982e"),
 }
 
 
@@ -120,8 +121,9 @@ def test_range_builds_the_counts_inside_the_window_in_the_same_polyhedron():
     """Full down to two fewer by default; the uncovered vertices are left empty, CN kept."""
     products = [p for p in places(enumerate_plan(aqua_spec(pathways=False)))
                 if p["components"]]
-    # Two kinds (either phenol O binds), each at 3, 2 and 1 waters.
-    assert sorted(p["n_co"] for p in products) == [1, 1, 2, 2, 3, 3]
+    # Two kinds (either phenol O binds), each at 3, 2 and 1 waters; at 2 waters the empty
+    # vertex sits trans to the catechol or to a water, two isomers (placement 6).
+    assert sorted(p["n_co"] for p in products) == [1, 1, 2, 2, 2, 2, 3, 3]
     assert all(p["cn"] == 4 and p["n_co"] + p["n_vacant"] == 3 for p in products)
 
     wide = [p for p in places(enumerate_plan(aqua_spec(pathways=False, co_ligand_window=3)))
@@ -305,15 +307,20 @@ def test_a_pathways_run_links_its_protomers_when_it_finishes(reg):
 def test_the_co_ligand_ladder_is_built_and_connected(reg):
     summary = run(reg, aqua_spec())
     assert summary["status"] == "done"
-    assert not summary["counts"].get("failed") and not summary["counts"].get("rejected"), (
-        summary["counts"])
+    assert not summary["counts"].get("failed"), summary["counts"]
+    # A rigid join aimed at one isomer may clash where `place` searched the whole sphere;
+    # that is a QC answer, never a planning hole.
+    codes = {r["error_code"] for r in reg.conn.execute(
+        "SELECT error_code FROM tasks WHERE status = 'rejected'")}
+    assert all(c.startswith("qc_") for c in codes), codes
 
     rows = {r["id"]: dict(r) for r in find(reg, limit=200)}
     by_formula = {r["formula"]: r["id"] for r in rows.values()}
     assert "Ni" not in by_formula, "no bare-metal row"
     complexes = {i for i, r in rows.items() if r["n_metals"]}
-    # Ni(H2O)2, Ni(H2O)3, Ni(cat)(H2O)1..3 — the two catechol kinds are one identity (D2).
-    assert len(complexes) == 5, sorted(rows[i]["display_label"] for i in complexes)
+    # Ni(H2O)2, Ni(H2O)3, Ni(cat)(H2O)1..3 — the two catechol kinds are one identity (D2) —
+    # and Ni(cat)(H2O)2 twice: its empty vertex trans to the catechol or to a water (L2).
+    assert len(complexes) == 6, sorted(rows[i]["display_label"] for i in complexes)
 
     # The water step cites the rung below and the free water.
     steps = [r for r in incoming_routes(reg, by_formula["NiH6O3"])
@@ -352,5 +359,5 @@ def test_a_charged_co_ligand_counts_in_the_net_charge_and_the_ladder_does_not_fo
         m = re.search(r"Cl(\d*)", r["formula"])
         n_cl = int(m.group(1) or 1) if m else 0
         assert r["net_charge"] == 2 - n_cl, (r["formula"], r["net_charge"])
-    # Ni(Cl)2, Ni(Cl)3, Ni(cat)(Cl)1..3: one node each, as with water — no step forks one.
-    assert len(complexes) == 5, sorted((r["formula"], r["net_charge"]) for r in complexes)
+    # Ni(Cl)2, Ni(Cl)3, Ni(cat)(Cl)1..3, and Ni(cat)(Cl)2 as two isomers, as with water.
+    assert len(complexes) == 6, sorted((r["formula"], r["net_charge"]) for r in complexes)

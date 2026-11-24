@@ -314,9 +314,13 @@ def test_reserving_empty_vertices_leaves_every_chelate_a_cis_pair(n_chelates, n_
     from mofsbu.geometry.placer import cis_vertices, reserve_for
 
     chelates = [thq_chelate() for _ in range(n_chelates)]
-    with pytest.raises(ValueError, match="bite angle"):
-        place_mononuclear("Zn", chelates, geometry="octahedral", cn=6,
-                          reserve=cis_vertices("octahedral", 6, n_empty))
+    if n_chelates == 1:
+        # Four cis vertices reserved leave one trans pair: no arrangement exists.  (With
+        # two chelates and two reserved, the arrangement search finds the two cis pairs
+        # that a first-come assignment used to miss.)
+        with pytest.raises(ValueError, match="bite angle"):
+            place_mononuclear("Zn", chelates, geometry="octahedral", cn=6,
+                              reserve=cis_vertices("octahedral", 6, n_empty))
     reserve = reserve_for("octahedral", 6, n_empty, chelates)
     result = place_mononuclear("Zn", chelates, geometry="octahedral", cn=6, reserve=reserve)
     assert len(result.vacancies) == n_empty
@@ -471,6 +475,58 @@ def test_a_planar_ligand_is_not_bent_into_an_arrangement_it_cannot_reach():
     assert not built[1].choice_vector["ligands"][0]["wrapped"]
 
 
-def test_a_sphere_without_a_polydentate_ligand_records_no_arrangement():
+def test_every_sphere_records_its_arrangement():
     result = place_mononuclear("Zn", [thq_chelate(), aqua(), aqua()], geometry="tetrahedral")
-    assert "arrangement" not in result.choice_vector
+    assert result.choice_vector["arrangement"] == 0
+
+
+# ── every ligand is arranged, not only those of three or more donors (#87) ──
+
+ATF = "C1=CC2=C(C(=C1)O)C(=O)C3=C(C2=O)C(=CC=C3)O"
+
+
+def atf_chelate() -> LigandPlacement:
+    """One anthrarufin peri pocket, the phenol deprotonated: phenolate O + quinone O."""
+    from mofsbu.geometry.placer import donor_classes
+
+    mol = embed_molecule(mol_from_smiles(ATF), seed=7)
+    phenols = [s for s in find_donor_sites(mol) if s.donor_type.startswith("phen")]
+    mol, _ = deprotonate(mol, phenols[:1])
+    mol = embed_molecule(mol, seed=7)
+    sites = perceive(mol)
+    by_idx = {s.atom_idx: s for s in sites}
+    pocket = next(p for p in chelate_pockets(mol, sites) if p.n_anionic > 0)
+    return LigandPlacement(mol=mol, donor_idxs=tuple(pocket.donors),
+                           donor_types=tuple(by_idx[i].donor_type for i in pocket.donors),
+                           mode=BindingMode.CHELATE, name="ATF",
+                           donor_classes=donor_classes(mol, pocket.donors))
+
+
+@pytest.mark.parametrize("geometry, ligands, expected", [
+    ("square_planar", lambda: [aqua(), aqua(), chloride(), chloride()], 2),      # cis, trans
+    ("octahedral", lambda: [aqua() for _ in range(6)], 1),
+    ("octahedral", lambda: [aqua()] * 4 + [chloride()] * 2, 2),                 # cis, trans
+    ("octahedral", lambda: [aqua()] * 3 + [chloride()] * 3, 2),                 # fac, mer
+    ("square_planar", lambda: [atf_chelate(), atf_chelate()], 2),               # #87
+])
+def test_monodentate_and_bidentate_spheres_count_their_isomers(geometry, ligands, expected):
+    from mofsbu.geometry.placer import vertex_arrangements
+
+    cn = {"square_planar": 4, "octahedral": 6}[geometry]
+    assert vertex_arrangements(geometry, cn, ligands()) == expected
+
+
+def test_both_arrangements_of_bis_anthrarufin_copper_are_built():
+    """The D10 pair: two square-planar Cu(ATF)2 placements, phenolates cis and trans."""
+    ligands = [atf_chelate(), atf_chelate()]
+    phenolate_slots = []
+    for a in range(2):
+        result = place_mononuclear("Cu", ligands, geometry="square_planar", arrangement=a)
+        assert result.ok, (a, str(result.report))
+        assert result.choice_vector["arrangement"] == a
+        metal = result.coords[result.metal_idx]
+        # donor_idxs lists each ligand's donors in donor order: pocket donor 0, then 1.
+        first = [result.coords[result.donor_idxs[2 * k]] - metal for k in range(2)]
+        cos = float(first[0] @ first[1] / np.linalg.norm(first[0]) / np.linalg.norm(first[1]))
+        phenolate_slots.append(round(float(np.degrees(np.arccos(np.clip(cos, -1, 1))))))
+    assert [angle < 135 for angle in sorted(phenolate_slots)] == [True, False]   # cis, trans

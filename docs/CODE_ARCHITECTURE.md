@@ -46,7 +46,7 @@ charge, spin — travels with it in a `methods` row.
 | `graph/from_mol.py` | RDKit mol → typed graph. The molecular input path | ✅ |
 | **identity/** | | |
 | `identity/keys.py` | L0 composition, L1 certificate hash, `block_id` | ✅ |
-| ↳ `l2_isomer_tag` | cis/trans, fac/mer, Δ/Λ | ✅ *(`identity/isomers.py`; needs a geometry, so `""` without one)* |
+| ↳ `l2_isomer_tag` | cis/trans, fac/mer, Δ/Λ; centres keyed by orbit, donor classes within a ligand compared on their own, `?` when the geometry does not decide (D32) | ✅ *(`identity/isomers.py`; needs a geometry, so `""` without one; every writer passes its coordinates)* |
 | ↳ `l3_conformer_id` | choice-vector label + geometric verifier | ✅ *(`identity/conformers.py`; θ_geom = 0.15 Å calibrated, energy window open)* |
 | **sites/** | | |
 | `sites/perception.py` | Which atoms can bind a metal, and what type of donor they are | ✅ |
@@ -60,12 +60,12 @@ charge, spin — travels with it in a `methods` row.
 | `descriptors/ease.py` | Activation-ease floor (**D18**). Components ▸ scalar | ✅ |
 | ↳ `hsab_match` | partner term | 🔴 **stub → C7 open** |
 | **geometry/** | | |
-| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot. Takes `reserve=` (which vertices stay open), because a caller that can only say *how many* gets its two vacancies trans. `LigandPlacement.lone_pair` picks which lobe of a monodentate sp2 donor binds (a carboxylate syn or anti to its free O); `torsion_well` / `azimuth_step` / `oop_step` pin the pose instead of searching it — all four reachable from a `place` payload component | ✅ |
+| `geometry/placer.py` | `place_mononuclear` — fills ONE coordination sphere in one shot, in one `arrangement` (isomer) of every ligand: `vertex_arrangements` counts them under proper rotations and swaps of identical ligands / interchangeable donors (`donor_classes`), `arrangement_contains` says which product isomers a step from a parent isomer can reach (D32). Takes `reserve=` (which vertices stay open), because a caller that can only say *how many* gets its two vacancies trans. `LigandPlacement.lone_pair` picks which lobe of a monodentate sp2 donor binds (a carboxylate syn or anti to its free O); `torsion_well` / `azimuth_step` / `oop_step` pin the pose instead of searching it — all four reachable from a `place` payload component | ✅ |
 | ↳ `cis_vertices` | the mutually-cis vertex set to reserve, **measured** off the polyhedron rather than read from an index convention. `runner._execute_place` reserves one whenever a rung leaves ≥2 vertices open, which is what makes the pathway ladder's co-ligand series connect | ✅ |
 | ↳ `bridging_metal_positions` | mechanism B: a bridging ATOM is a centre whose vertices are metal positions. Reads the bonding, not a frame — a lone-pair lobe is the wrong bisector for a bridge | ✅ |
 | ↳ `place_multicentre` | **reconciliation only** (D20) — where two determinants fix one M···M and disagree. `Center` and `InterCentreConstraint` are defined; `Center.element` is not always a metal (a bridging atom is a centre) | 🔴 **stub → M6 S3** |
 | `geometry/qc.py` | Clash + distance checks; structured report | ✅ |
-| `geometry/connectivity.py` | **E1**: `connectivity_check` — graph edges broken past 1.30× their ideal length, non-edges formed inside 1.10× (`geometry.distances` lengths). `put_geometry` stores the verdict on every geometry above RAW (`geometries.connectivity_changed`); best-geometry and `energy.reference` never select a `1`. Judged against the graph through the geometry's own link (D30); a geometry with no link is left NULL with the reason ([B28](archive/BUGS_resolved.md)) | ✅ |
+| `geometry/connectivity.py` | **E1**: `connectivity_check` — graph edges broken past 1.30× their ideal length, non-edges formed inside 1.10× (`geometry.distances` lengths). `put_geometry` stores the verdict on every geometry above RAW (`geometries.connectivity_changed`), and beside it L2's analogue for a relaxation — the tag before and after (`arrangement_changed`, D32); best-geometry and `energy.reference` never select a `1` of either. Judged against the graph through the geometry's own link (D30); a geometry with no link is left NULL with the reason ([B28](archive/BUGS_resolved.md)) | ✅ |
 | ↳ `check_intercentre` | validates the M···M the joins produced. `qc()` alone cannot see a squeezed node — 1.90 Å Cu···Cu is above the clash floor and is not a metal–donor pair | 🔴 **stub → M6 S6** |
 | `geometry/distances.py` | M–L target distance as a property of the *pair*. `metal_metal_distance` is the M–M half and has **no table behind it**: a named motif is refused, because the element symbols do not carry the bond order | ✅ |
 | `geometry/embed.py` | ETKDG + MMFF | ✅ |
@@ -85,7 +85,7 @@ charge, spin — travels with it in a `methods` row.
 | `assembly/construct.py` | deterministic construct + branch-tree enumerator + Kind-C refusals | ✅ |
 | `assembly/route_steps.py` | Executes a `RouteSpec`. Ground-up steps: `sphere` / `free_ligand` build and store through the `place` / `ligand` tasks' own paths, `load` reads a stored structure back, so a join acts only on registry entries. Then `join` (`lone_pair` and `torsion` may be stated geometrically — `{toward: label}`, `{bring, toward}` — because a well index is not a face, B27), `release`, `reserve`, `bridge`, `store` (`from` = reagents, `leaving` = released species), `perturb`; in-memory `metal`, `ligand`, `cap` remain. Labels are carried through every join's and release's atom maps; every stored geometry carries its clash QC; a `perturb` start is a RAW geometry with its displacement in the choice vector, never a construct. `scripts/route_report.py` reads the results back | ✅ |
 | `assembly/release.py` | `release` — the water-loss step, `join` backwards: one bound ligand fragment leaves, its vertex opens pointing where its donor was, the fragment comes back as its own block. A chelate or bridge is refused (`ReleaseRefused`). Stored as an edge with the ligand `leaving`, so complex → complex′ + L balances | ✅ |
-| `assembly/derive.py` | **D31**: `derive_species` applies an E1 verdict to a geometry's own graph — donor bonds to a metal and proton transfers, split into pieces (only a neutral closed-shell leaver); `file_derived` stores a single-piece result as its own structure with a `relaxation` edge and returns a separation as refused (pending the second-shell probe), called by the relax task and `scripts/file_derived_species.py`. Refusals carry their reason | ✅ |
+| `assembly/derive.py` | **D31/D32**: `derive_species` applies an E1 verdict to a geometry's own graph — donor bonds to a metal and proton transfers, split into pieces (only a neutral closed-shell leaver); `file_derived` stores a single-piece result as its own structure with a `relaxation` edge and returns a separation as refused (pending the second-shell probe), called by the relax task and `scripts/file_derived_species.py`. An arrangement change (same graph, new L2) is filed the same way, under the tag of its own coordinates. Refusals carry their reason | ✅ |
 | `assembly/persist.py` | `store_block` stores an assembled block: L2 from its geometry, sites by inheritance, provenance (`reagent_ids`, `leaving_ids`). `load_block` reads one back as a joinable block — graph, coordinates, catalog sites, recomputed state checked against the stored rows; frames from the geometry's own state rows (`site_state.frame_json`), else the catalog's if this is the geometry they describe or a rigid copy; a relaxed geometry (no state rows) is `NotBuiltYet` until S7. **Writes nothing itself** — orchestrates `registry.api` | ✅ |
 | **registry/** | | |
 | `registry/api.py` | **The only write surface** (ground rule 1) | ✅ |
@@ -188,6 +188,7 @@ Full text in `DESIGN_registry_assembly.md` §7.
 | **D29** | A `place` edge cites nothing; "made of what" is the composed ladder, never the free ion. CN is a construction scaffold — "saturated" is not a node property |
 | **D30** | Coordinates are stored as built; each geometry records its rows' link to canonical positions; nothing reads rows by position across builds (`geometry_graph`) |
 | **D31** | A relaxation that changes connectivity is filed under the species it became (new L1, `relaxation` edge); metal-donor bonds and proton transfers only, single piece only; a separation is held back pending the second-shell probe |
+| **D32** | L2 is written by every path from its own coordinates (orbit-keyed centres, donor classes, `?` kept); one sphere per isomer for every ligand; a relaxation that changes the arrangement is filed under the isomer it became. Pre-`iso2` registries are regenerated |
 
 **Open checkpoints:** C2 **half-resolved** (θ_geom = 0.15 Å, calibrated on xTB-relaxed
 geometries; the energy window stays open — see ISSUES 6b), C6 (barrier proxy — M8),
@@ -197,12 +198,11 @@ C7 (partner dependence — M8). *Resolved: C1→D10, C4→D12, C5→D18, C8→cu
 
 ## 6. Known seams
 
-Two places where the code is internally consistent and still reports something misleading.
+One place where the code is internally consistent and still reports something misleading.
 Full diagnosis and current measurements in `BUGS_details.md`; one line each here.
 
 | | Seam | Bites when |
 |---|---|---|
-| [B2](BUGS_details.md#b2) | `l2_isomer_tag` is `''` on every stored row, so cis and trans are one `structures` row | the classifier exists and `store_block` derives a tag where it has coordinates, but the run pipeline passes `l2=""` **on purpose** (D22) so its products land on the node every other route reaches. Both paths tag together or neither |
 | [B3](BUGS_details.md#b3) | Structures built before M4's second half have no `site_state`, so `n_open_sites` is NULL | a query treats NULL as 0 and reports a fully-occupied structure. Self-heals as `perception/2` re-derivation reaches each one (D19) |
 
 *Closed, and both worth reading before touching perception: `site_catalog` was not a pure

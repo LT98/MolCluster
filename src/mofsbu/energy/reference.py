@@ -363,7 +363,7 @@ def _energy_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | None,
     sql = ("SELECT g.id, g.energy, g.converged, g.fidelity, g.method_id "
            "FROM geometries g JOIN methods m ON m.id = g.method_id "
            "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS ? "
-           "AND g.connectivity_changed IS NOT 1")
+           "AND g.connectivity_changed IS NOT 1 AND g.arrangement_changed IS NOT 1")
     args: list[Any] = [structure_id, solvent]
     if fidelity is not None:
         sql += " AND g.fidelity=?"
@@ -398,7 +398,8 @@ def _corrected_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | Non
            "JOIN solvation_corrections sc ON sc.geometry_id = g.id "
            "JOIN methods cm ON cm.id = sc.method_id "
            "WHERE g.structure_id=? AND g.energy IS NOT NULL AND m.solvent IS NULL "
-           "AND cm.solvent=? AND g.connectivity_changed IS NOT 1")
+           "AND cm.solvent=? AND g.connectivity_changed IS NOT 1 "
+           "AND g.arrangement_changed IS NOT 1")
     args: list[Any] = [structure_id, medium]
     if fidelity is not None:
         sql += " AND g.fidelity=?"
@@ -416,15 +417,24 @@ def _corrected_row(reg: Registry, structure_id: int, *, fidelity: Fidelity | Non
 
 
 def _connectivity_note(reg: Registry, structure_id: int) -> str:
-    """Why a species may have no energy: geometries excluded as `connectivity_changed`."""
-    n = reg.conn.execute(
-        "SELECT COUNT(*) FROM geometries WHERE structure_id=? AND energy IS NOT NULL "
-        "AND connectivity_changed IS 1", (structure_id,)).fetchone()[0]
-    if not n:
+    """Why a species may have no energy: geometries excluded as connectivity or arrangement
+    changed."""
+    n, m = reg.conn.execute(
+        "SELECT SUM(connectivity_changed IS 1), "
+        "       SUM(connectivity_changed IS NOT 1 AND arrangement_changed IS 1) "
+        "FROM geometries WHERE structure_id=? AND energy IS NOT NULL",
+        (structure_id,)).fetchone()
+    notes = []
+    if n:
+        notes.append(f"{n} of its geometries {'is' if n == 1 else 'are'} excluded as "
+                     f"connectivity_changed: the relaxation broke or formed a bond")
+    if m:
+        notes.append(f"{m} {'is' if m == 1 else 'are'} excluded as arrangement_changed: "
+                     f"the relaxation moved it to another isomer")
+    if not notes:
         return ""
-    return (f". {n} of its geometries {'is' if n == 1 else 'are'} excluded as "
-            f"connectivity_changed: the relaxation broke or formed a bond, so the energy "
-            f"belongs to a different species than structure {structure_id}")
+    return (". " + "; ".join(notes)
+            + f", so the energy belongs to a different species than structure {structure_id}")
 
 
 def _corrected_spec(base: MethodSpec, row: Any, medium: str) -> MethodSpec:

@@ -406,3 +406,27 @@ def test_a_reagent_consumed_zero_times_is_refused(reg):
     product = put_structure(reg, fx.ALL["water"]()).id
     with pytest.raises(RegistryError, match="not consumed is absent"):
         put_reaction(reg, product, Provenance(reagent_ids=((product, 0),)))
+
+
+def test_a_label_shows_the_tag_read_off_coordinates_and_flags_one_never_read(tmp_path):
+    """D32: `?L2` only where no coordinates were read; a read empty tag adds nothing."""
+    from mofsbu.identity.keys import l2_isomer_tag
+    from mofsbu.naming import L2_PLACEHOLDER
+    from mofsbu.registry.api import relabel_all
+    from mofsbu.registry.verify import verify
+    from test_isomers import unsymmetric_bis_chelate
+
+    g, coords = unsymmetric_bis_chelate("cis")
+    tag = l2_isomer_tag(g, coords)
+    with Registry(tmp_path / "r.db") as reg:
+        reg.migrate()
+        tagged = put_structure(reg, g, l2=tag).id
+        untagged = put_structure(reg, g).id
+        label = {r["id"]: r["display_label"] for r in reg.conn.execute(
+            "SELECT id, display_label FROM structures")}
+        assert label[tagged].endswith(tag) and L2_PLACEHOLDER not in label[tagged]
+        assert label[untagged].endswith(L2_PLACEHOLDER)
+        relabel_all(reg)
+        assert {r["id"]: r["display_label"] for r in reg.conn.execute(
+            "SELECT id, display_label FROM structures")} == label
+        assert not [p for p in verify(reg) if p.check == "display_label"]

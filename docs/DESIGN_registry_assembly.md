@@ -601,22 +601,11 @@ coordinates.
   into a stored threshold. `DEFAULT_ENERGY_WINDOW is None`, the mechanism is built and tested,
   and the number waits for the core fix.
 
-- **D22 (C2's storage corollary; narrows D19)** **A tag is derived where the coordinates are,
-  and a caller that shares a node with an untagged path says so explicitly.** `put_structure`
-  computes L2 from a graph alone, and a `structures` row exists before its geometry does — so
-  only the builder holds coordinates at insert time. `store_block` therefore derives the tag
-  by default and takes `l2=` as an override for the one case that needs it: the run pipeline
-  does not tag isomers, so a route that tagged its own product would file it apart from the
-  node every other route reached ([B2](BUGS_details.md#b2)). It passes `l2=""` **on purpose**, and
-  closing B2 moves both paths together or neither.
-
-  No backfill, in either direction. Of the 39 structures stored under the stub, 18 would gain
-  a real tag and 21 would still tag `""` — and re-deriving them would rewrite stored
-  identities and every `reactions` edge pointing at them, which is the one thing here that is
-  not regenerable (D2). `structures.algo_l2` records which recipe produced each value, so a
-  `""` reads as *"this predates L2"* rather than as *"this has no isomerism"*. The
-  choice-vector digest goes the other way and for the same rule: it is an **annotation**
-  nothing points at, so `ix_geometries_choice` is repopulated by rewriting, not versioned.
+- **D22 (C2's storage corollary; narrows D19)** *Superseded by D32 (2026-11-24): every writer
+  derives L2 from the coordinates it stores, so no path passes `l2=""`.* Still in force: **no
+  backfill in either direction** — a stored identity is never re-derived, and
+  `structures.algo_l2` records the recipe that produced each tag. The original text is in
+  `archive/DESIGN_history.md`.
 
 - **D23** **`MAX_BITE_MISMATCH_DEG = 40°`, and what it separates is pinned rather than the
   threshold itself.** A chelate's verdict is its bite angle against the angular separation of
@@ -781,6 +770,36 @@ coordinates.
   `test_a_broken_skeleton_is_refused`, `test_a_charged_leaver_is_refused`,
   `test_metals_ending_up_apart_are_refused`,
   `test_a_relax_task_records_a_separation_as_held_back`).
+
+- **D32 (B2, B29, #87)** **L2 is written by every path that stores coordinates, and a
+  relaxation that changes the arrangement is filed under the isomer it became.** The tag
+  (`identity/isomers.py`, `iso2`) keys each metal centre by its **orbit** (smallest canonical
+  index among symmetry-equivalent metals; centres sharing an orbit are a sorted multiset, B29),
+  compares ligands of one kind by their mean donor direction and — where a ligand reaches the
+  centre through donors of more than one symmetry class within the ligand — each donor class
+  on its own (#87: anthrarufin's phenolate O and quinone O). Two chelates are split cis/trans at
+  150° (their mean directions sit ~120° apart cis on an octahedron) and cis carries a hand,
+  `cis-Delta` / `cis-Lambda`; two unsymmetric chelates twisted about a common axis (tetrahedral)
+  carry `trans-P` / `trans-M`. A centre the geometry does not decide is written `?`, never
+  dropped (ground rule 8). A label shows `?L2` only for a row whose tag was never read off
+  coordinates (`structures.l2_source`). The placer builds **one sphere per arrangement for every ligand**
+  (`placement 6`): proper rotations and relabellings of identical ligands and interchangeable
+  donors (`donor_classes`, the donor's orbit in its own molecule) decide what counts as one
+  isomer, so enantiomers are two. A pathway step is planned from each parent isomer to each
+  product isomer that contains it (`arrangement_contains`), and the step searches its joins for
+  one that lands on the product's tag, or refuses with `pathway_isomer_unreachable`.
+  `put_geometry` judges every relaxation against the geometry it started from
+  (`geometries.arrangement_changed`, `arrangement_json`); a `1` is never selected for an energy
+  or as best geometry and `assembly.derive.file_derived` files it under the tag of its own
+  coordinates, beside D31's connectivity filing. **Registries written before `iso2` are
+  regenerated, not mixed with tagged rows** (called 2026-11-13). Tests: `tests/test_isomers.py`
+  (`test_an_unsymmetric_o_o_chelate_splits_cis_from_trans`,
+  `test_equivalent_centres_get_one_tag_under_any_numbering`,
+  `test_a_distorted_geometry_declines_to_call_it`), `tests/test_placer.py`
+  (`test_monodentate_and_bidentate_spheres_count_their_isomers`,
+  `test_both_arrangements_of_bis_anthrarufin_copper_are_built`), `tests/test_jobs.py`
+  (`test_cis_and_trans_bis_anthrarufin_copper_are_two_structures`), `tests/test_derive.py`
+  (`test_a_relaxation_that_moves_cis_to_trans_is_filed_under_trans`).
 
 Every entry above is locked and has a test that fails if it is reversed. Revision
 history — how each one was argued and what it cost — is in

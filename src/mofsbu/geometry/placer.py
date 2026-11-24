@@ -198,6 +198,19 @@ def reserve_for(geometry: str, cn: int, k: int, ligands: Sequence[LigandPlacemen
     first that `_assign_targets` accepts wins, so a set that already worked is unchanged.
     None accepted: `cis_vertices`'s answer, and the placer refuses it with its reason.
     """
+    memo = (geometry, cn, k, angle_deg,
+            tuple((_ligand_key(lig), tuple(map(tuple, _ring_pairs(lig)))) for lig in ligands))
+    if memo not in _RESERVE_CACHE:
+        _RESERVE_CACHE[memo] = _reserve_for(geometry, cn, k, ligands, angle_deg=angle_deg)
+    return _RESERVE_CACHE[memo]
+
+
+#: `reserve_for` depends only on the polyhedron and the ligands' symmetry keys.
+_RESERVE_CACHE: dict[tuple, tuple[int, ...]] = {}
+
+
+def _reserve_for(geometry: str, cn: int, k: int, ligands: Sequence[LigandPlacement], *,
+                 angle_deg: float | None = None) -> tuple[int, ...]:
     from itertools import combinations
 
     targets = site_vectors(geometry, cn, 1.0, angle_deg=angle_deg)
@@ -449,12 +462,29 @@ def _clearance_scorer(symbols: list[str], other_symbols: list[str],
     return score
 
 
+def _targets_key(units: np.ndarray) -> tuple:
+    return tuple(tuple(round(float(c), 6) for c in t) for t in units)
+
+
+#: Pure functions of the polyhedron / the ligands' symmetry keys, asked once per payload.
+_ROTATION_CACHE: dict[tuple, list[tuple[int, ...]]] = {}
+_SYMMETRY_CACHE: dict[tuple, list[list[tuple[int, int]]]] = {}
+_CONTAINS_CACHE: dict[tuple, bool] = {}
+
+
 def _rotations(units: np.ndarray) -> list[tuple[int, ...]]:
     """Vertex permutations made by the polyhedron's PROPER rotations.
 
     Reflections are left out on purpose: they turn one enantiomer (Delta) into the other
     (Lambda), and those are two isomers, not one.
     """
+    key = _targets_key(units)
+    if key not in _ROTATION_CACHE:
+        _ROTATION_CACHE[key] = _compute_rotations(units)
+    return _ROTATION_CACHE[key]
+
+
+def _compute_rotations(units: np.ndarray) -> list[tuple[int, ...]]:
     u = np.array([_unit(x) for x in units])
     n = len(u)
 
@@ -483,24 +513,57 @@ def _ring_pairs(lig: LigandPlacement) -> list[tuple[int, int]]:
     return list(lig.rings) or list(combinations(range(lig.denticity), 2))
 
 
-def _ligand_symmetries(ligs: Sequence[LigandPlacement]) -> list[list[tuple[int, int]]]:
-    """Relabellings of the polydentate donors that leave the sphere the same molecule.
+def _donor_class_key(lig: LigandPlacement) -> tuple[str, ...]:
+    """Which of a ligand's donors are interchangeable: its donor classes, else its types."""
+    return tuple(lig.donor_classes) or tuple(lig.donor_types)
 
-    Within a ligand, a permutation of its donors that keeps donor types and ring pairs;
+
+def _ligand_key(lig: LigandPlacement) -> tuple:
+    """Two ligands with one key are the same ligand, so swapping them is no new isomer."""
+    return (lig.kind or lig.name, lig.denticity, _donor_class_key(lig),
+            tuple(sorted(map(tuple, map(sorted, lig.rings)))))
+
+
+def donor_classes(mol: Chem.Mol, donor_idxs: Sequence[int]) -> tuple[str, ...]:
+    """Each donor's symmetry class within its own molecule (an orbit of the mol graph).
+
+    Two donors in one class are interchangeable, so placing them either way round is one
+    isomer; anthrarufin's phenolate O and quinone O are two classes, so swapping them is
+    another isomer (#87) — the distinction donor *types* draw only when the types differ.
+    """
+    from mofsbu.graph.canon import atom_orbits
+    from mofsbu.graph.from_mol import from_rdkit
+
+    g = from_rdkit(mol, multiplicity=1)
+    rep = {v: min(orbit) for orbit in atom_orbits(g) for v in orbit}
+    return tuple(str(rep[i]) for i in donor_idxs)
+
+
+def _ligand_symmetries(ligs: Sequence[LigandPlacement]) -> list[list[tuple[int, int]]]:
+    """Relabellings of the donors that leave the sphere the same molecule.
+
+    Within a ligand, a permutation of its donors that keeps donor classes and ring pairs;
     across ligands, swapping two identical ones.  Each relabelling maps (ligand, donor)
     to (ligand, donor).
     """
+    key = tuple((_ligand_key(lig), tuple(map(tuple, _ring_pairs(lig)))) for lig in ligs)
+    if key not in _SYMMETRY_CACHE:
+        _SYMMETRY_CACHE[key] = _compute_ligand_symmetries(ligs)
+    return _SYMMETRY_CACHE[key]
+
+
+def _compute_ligand_symmetries(ligs: Sequence[LigandPlacement]
+                               ) -> list[list[tuple[int, int]]]:
     from itertools import permutations
 
     own: list[list[tuple[int, ...]]] = []
     for lig in ligs:
         rings = {frozenset(r) for r in _ring_pairs(lig)}
+        classes = _donor_class_key(lig)
         own.append([p for p in permutations(range(lig.denticity))
-                    if all(lig.donor_types[p[i]] == lig.donor_types[i]
-                           for i in range(lig.denticity))
+                    if all(classes[p[i]] == classes[i] for i in range(lig.denticity))
                     and {frozenset((p[x], p[y])) for x, y in rings} == rings])
-    key = [(lig.name, lig.donor_types, tuple(sorted(map(tuple, map(sorted, lig.rings)))))
-           for lig in ligs]
+    key = [_ligand_key(lig) for lig in ligs]
     out = []
     for order in permutations(range(len(ligs))):
         if any(key[order[i]] != key[i] for i in range(len(ligs))):
@@ -513,7 +576,7 @@ def _ligand_symmetries(ligs: Sequence[LigandPlacement]) -> list[list[tuple[int, 
 
 def _arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
                   free: Sequence[int], held: set[int]) -> list[tuple[tuple[int, ...], ...]]:
-    """Every distinct way the polydentate ligands can sit, one per isomer, in a fixed order.
+    """Every distinct way the ligands can sit, one per isomer, in a fixed order.
 
     An arrangement gives each ligand its vertices in donor order.  Donors that close a
     chelate ring must be cis (inside `BITE_ANGLE_RANGE`); other pairs may be trans.  Two
@@ -521,7 +584,30 @@ def _arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
     vertices reserved, together with a relabelling from `_ligand_symmetries`, maps one
     onto the other; the smallest member of each class represents it.
     """
+    key = (_targets_key(targets),
+           tuple((_ligand_key(lig), tuple(map(tuple, _ring_pairs(lig)))) for lig in ligs),
+           tuple(free), tuple(sorted(held)))
+    hit = _ARRANGEMENT_CACHE.get(key)
+    if hit is None:
+        hit = _ARRANGEMENT_CACHE[key] = _enumerate_arrangements(targets, ligs, free, held)
+    return hit
+
+
+#: `_arrangements` is a pure function of the polyhedron and the ligands' symmetry keys,
+#: and planning asks it the same question once per payload.
+_ARRANGEMENT_CACHE: dict[tuple, list[tuple[tuple[int, ...], ...]]] = {}
+
+
+def _enumerate_arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
+                            free: Sequence[int],
+                            held: set[int]) -> list[tuple[tuple[int, ...], ...]]:
     slots = [(li, d) for li, lig in enumerate(ligs) for d in range(lig.denticity)]
+    # Identical ligands are interchangeable, so only orderings whose first donors ascend
+    # are searched: every class keeps a member, and [M(H2O)6] is one search, not 720.
+    lig_keys = [_ligand_key(lig) for lig in ligs]
+    previous_twin = {li: max(lj for lj in range(li) if lig_keys[lj] == lig_keys[li])
+                     for li in range(len(ligs))
+                     if any(lig_keys[lj] == lig_keys[li] for lj in range(li))}
     partners: dict[tuple[int, int], list[tuple[int, int]]] = {s: [] for s in slots}
     for li, lig in enumerate(ligs):
         for x, y in _ring_pairs(lig):
@@ -539,8 +625,11 @@ def _arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
             return
         slot = slots[k]
         used = set(chosen.values())
+        twin = previous_twin.get(slot[0]) if slot[1] == 0 else None
         for v in free:
             if v in used:
+                continue
+            if twin is not None and v < chosen[(twin, 0)]:
                 continue
             if all((v, chosen[p]) in cis for p in partners[slot] if p in chosen):
                 chosen[slot] = v
@@ -555,42 +644,91 @@ def _arrangements(targets: np.ndarray, ligs: Sequence[LigandPlacement],
         return tuple(tuple(a[(li, d)] for d in range(lig.denticity))
                      for li, lig in enumerate(ligs))
 
-    classes = set()
+    # Each class's images are generated once; an assignment already seen as an image of an
+    # earlier one is in that class and is skipped.
+    classes, seen = set(), set()
     for a in found:
-        images = []
-        for rot in rotations:
-            for rel in relabels:
-                images.append(shaped({rel[k]: rot[a[s]] for k, s in enumerate(slots)}))
+        if shaped(a) in seen:
+            continue
+        images = {shaped({rel[k]: rot[a[s]] for k, s in enumerate(slots)})
+                  for rot in rotations for rel in relabels}
+        seen |= images
         classes.add(min(images))
     return sorted(classes)
 
 
+def arrangement_contains(geometry: str, cn: int, *,
+                         child: Sequence[LigandPlacement], child_reserve, child_arrangement: int,
+                         removed: int,
+                         parent: Sequence[LigandPlacement], parent_reserve,
+                         parent_arrangement: int) -> bool:
+    """Does the child isomer, less one copy of ligand `removed`, leave the parent isomer?
+
+    Which product isomers a step from one parent isomer can reach: adding a ligand to the
+    parent's open vertices gives the child only if the rest of the child sits as the parent
+    does, up to a rotation of the polyhedron.  `parent` must be `child` without entry
+    `removed`, in the same order.
+    """
+    sig = lambda ligs: tuple((_ligand_key(lig), tuple(map(tuple, _ring_pairs(lig))))  # noqa: E731
+                             for lig in ligs)
+    memo = (geometry, cn, sig(child), tuple(sorted(child_reserve or ())), child_arrangement,
+            removed, sig(parent), tuple(sorted(parent_reserve or ())), parent_arrangement)
+    if memo not in _CONTAINS_CACHE:
+        _CONTAINS_CACHE[memo] = _contains(geometry, cn, child, child_reserve,
+                                          child_arrangement, removed, parent,
+                                          parent_reserve, parent_arrangement)
+    return _CONTAINS_CACHE[memo]
+
+
+def _contains(geometry, cn, child, child_reserve, child_arrangement, removed, parent,
+              parent_reserve, parent_arrangement) -> bool:
+    targets = site_vectors(geometry, cn, 1.0)
+    held_c = _check_reserved(child_reserve, cn)
+    held_p = _check_reserved(parent_reserve, cn)
+    kids = _arrangements(targets, list(child),
+                         [i for i in range(cn) if i not in held_c], held_c)
+    folks = _arrangements(targets, list(parent),
+                          [i for i in range(cn) if i not in held_p], held_p)
+    if not (0 <= child_arrangement < len(kids) and 0 <= parent_arrangement < len(folks)):
+        return False
+    # Any copy identical to the removed ligand may be the one added; the parent's order
+    # is the child's less `removed`, and identical copies are interchangeable in it.
+    key = _ligand_key(child[removed])
+    partials = {tuple(v for li, v in enumerate(kids[child_arrangement]) if li != copy)
+                for copy, lig in enumerate(child) if _ligand_key(lig) == key}
+    slots = [(li, d) for li, lig in enumerate(parent) for d in range(lig.denticity)]
+    rep = folks[parent_arrangement]
+    images = set()
+    relabels = _ligand_symmetries(list(parent))
+    for rot in _rotations(targets):
+        for rel in relabels:
+            moved = {rel[k]: rot[rep[li][d]] for k, (li, d) in enumerate(slots)}
+            images.add(tuple(tuple(moved[(li, d)] for d in range(lig.denticity))
+                             for li, lig in enumerate(parent)))
+    return not images.isdisjoint(partials)
+
+
 def vertex_arrangements(geometry: str, cn: int, ligands: Sequence[LigandPlacement], *,
                         reserve: Sequence[int] | None = None) -> int:
-    """How many distinct arrangements a sphere's polydentate ligands have (#15).
+    """How many distinct arrangements (isomers) a sphere's ligands have on this polyhedron.
 
-    `place_mononuclear(arrangement=i)` builds the i-th, for i below this.  Zero when the
-    sphere has no ligand of three or more donors (there is nothing to arrange), and zero
-    when no arrangement keeps every chelate ring cis.  Monodentate and bidentate ligands
-    are placed after, as they always were.
+    `place_mononuclear(arrangement=i)` builds the i-th, for i below this.  Every ligand
+    counts — cis/trans of MA2B2 and of M(AB)2 are arrangements just as fac/mer are (#15,
+    #87).  Zero when no arrangement keeps every chelate ring cis.
     """
-    poly = [lig for lig in ligands if lig.denticity >= 3]
-    if not poly:
-        return 0
     targets = site_vectors(geometry, cn, 1.0)
     held = _check_reserved(reserve, cn)
     free = [i for i in range(cn) if i not in held]
-    return len(_arrangements(targets, poly, free, held))
+    return len(_arrangements(targets, list(ligands), free, held))
 
 
 def _assign_targets(targets: np.ndarray, ligands: list, *, reserved: Sequence[int] = (),
                     arrangement: int = 0) -> tuple[list[np.ndarray], list[int]]:
     """Give each ligand coordination vertices its denticity can actually reach.
 
-    Polydentate ligands are served first and take the vertex set whose angles sit
-    closest to a chelate bite angle; monodentate ligands take whatever is left.  Without
-    this the vertices are handed out in table order, and on an octahedron that puts a
-    bidentate ligand across a trans pair.
+    Every ligand is placed by `arrangement`, an index into `vertex_arrangements`: one
+    isomer per index (cis/trans, fac/mer, Delta/Lambda), each chelate ring on a cis pair,
+    each ligand's vertices in donor order.
 
     Returns the per-ligand vertex sets AND the indices of the vertices nothing claimed.
     That second value used to be dropped on the floor, which is why an unsaturated centre
@@ -599,54 +737,23 @@ def _assign_targets(targets: np.ndarray, ligands: list, *, reserved: Sequence[in
 
     `reserved` vertices are withheld before any ligand is served and come back among the
     vacancies: this is *which* vertices stay open, as against how many (S4).
-
-    Ligands of three or more donors are served first and together, by `arrangement`, an
-    index into `vertex_arrangements` (#15): fac and mer are two arrangements, not one
-    best guess.  Each gets its vertices in donor order.
     """
-    from itertools import combinations
-
     held = set(reserved)
     remaining = [i for i in range(len(targets)) if i not in held]
+    options = _arrangements(targets, list(ligands), remaining, held)
+    if not options:
+        raise ValueError(
+            "no vertex set on this geometry can host these ligands: no arrangement keeps "
+            f"every chelate ring cis (bite angles {BITE_ANGLE_RANGE[0]:.0f}-"
+            f"{BITE_ANGLE_RANGE[1]:.0f} deg)")
+    if not 0 <= arrangement < len(options):
+        raise ValueError(f"arrangement {arrangement} does not exist: this sphere has "
+                         f"{len(options)}")
     assigned: dict[int, np.ndarray] = {}
-    poly = [i for i in range(len(ligands)) if ligands[i].denticity >= 3]
-    if poly:
-        options = _arrangements(targets, [ligands[i] for i in poly], remaining, held)
-        if not options:
-            raise ValueError(
-                "no arrangement of these polydentate ligands on this geometry keeps every "
-                "chelate ring cis")
-        if not 0 <= arrangement < len(options):
-            raise ValueError(f"arrangement {arrangement} does not exist: this sphere has "
-                             f"{len(options)}")
-        for i, verts in zip(poly, options[arrangement], strict=True):
-            assigned[i] = targets[list(verts)]
-            for v in verts:
-                remaining.remove(v)
-    order = sorted((i for i in range(len(ligands)) if i not in assigned),
-                   key=lambda i: -ligands[i].denticity)
-    for i in order:
-        k = ligands[i].denticity
-        if k == 1:
-            pick = [remaining[0]]
-        else:
-            def cost(combo: tuple[int, ...]) -> float:
-                angles = [_angle_between(targets[a], targets[b])
-                          for a, b in combinations(combo, 2)]
-                return sum(abs(x - IDEAL_BITE_ANGLE) for x in angles)
-
-            options = list(combinations(remaining, k))
-            pick = list(min(options, key=cost))
-            worst = max((_angle_between(targets[a], targets[b])
-                         for a, b in combinations(pick, 2)), default=0.0)
-            if not (BITE_ANGLE_RANGE[0] <= worst <= BITE_ANGLE_RANGE[1]):
-                raise ValueError(
-                    f"no vertex set on this geometry can host a {k}-dentate ligand: "
-                    f"best bite angle {worst:.0f} deg, need "
-                    f"{BITE_ANGLE_RANGE[0]:.0f}-{BITE_ANGLE_RANGE[1]:.0f}")
-        for v in pick:
+    for i, verts in enumerate(options[arrangement]):
+        assigned[i] = targets[list(verts)]
+        for v in verts:
             remaining.remove(v)
-        assigned[i] = targets[pick]
     # Ascending, so a vacancy's slot number is a property of the polyhedron rather than
     # of the order this function happened to hand vertices out in.
     return [assigned[i] for i in range(len(ligands))], sorted(set(remaining) | held)
@@ -706,6 +813,12 @@ class LigandPlacement:
     #: positions in `donor_idxs`.  Those pairs must sit cis; any other pair may be trans,
     #: which is what makes mer possible.  Empty means every pair must be cis.
     rings: tuple[tuple[int, int], ...] = ()
+    #: What makes two ligands in one sphere the same ligand (swapping them is no new
+    #: isomer).  Empty falls back to `name`.
+    kind: str = ""
+    #: Per donor, its symmetry class within the ligand (`donor_classes`); donors of one
+    #: class are interchangeable.  Empty falls back to `donor_types`.
+    donor_classes: tuple[str, ...] = ()
 
     @property
     def denticity(self) -> int:
@@ -1076,9 +1189,7 @@ def place_mononuclear(
         # Only when something was reserved, so a saturated build's choice vector — and
         # therefore its stored identity — is unchanged by this argument existing.
         cv["reserve"] = sorted(reserved)
-    if any(lig.denticity >= 3 for lig in ligands):
-        # Only with a polydentate ligand, for the same reason: which isomer this is.
-        cv["arrangement"] = int(arrangement)
+    cv["arrangement"] = int(arrangement)          # which isomer this is (placement 6)
     return PlacementResult(symbols, arr, 0, donor_idxs, bonded, report,
                            choice_vector=cv,
                            atom_offsets=offsets, owners=owners,

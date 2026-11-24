@@ -10,6 +10,26 @@ you are about to reverse one and need to know what it cost last time.
 ---
 
 
+- *(2026-11-24)* **D22 superseded by D32 — L2 written by every path.** D22 had the run pipeline pass `l2=""` on purpose so that route products and placed spheres shared one node while only one path could tag. D32 tags every path from its own coordinates, so the override has no caller. D22's text as it stood:
+
+  - **D22 (C2's storage corollary; narrows D19)** **A tag is derived where the coordinates are,
+    and a caller that shares a node with an untagged path says so explicitly.** `put_structure`
+    computes L2 from a graph alone, and a `structures` row exists before its geometry does — so
+    only the builder holds coordinates at insert time. `store_block` therefore derives the tag
+    by default and takes `l2=` as an override for the one case that needs it: the run pipeline
+    does not tag isomers, so a route that tagged its own product would file it apart from the
+    node every other route reached ([B2](BUGS_details.md#b2)). It passes `l2=""` **on purpose**, and
+    closing B2 moves both paths together or neither.
+
+    No backfill, in either direction. Of the 39 structures stored under the stub, 18 would gain
+    a real tag and 21 would still tag `""` — and re-deriving them would rewrite stored
+    identities and every `reactions` edge pointing at them, which is the one thing here that is
+    not regenerable (D2). `structures.algo_l2` records which recipe produced each value, so a
+    `""` reads as *"this predates L2"* rather than as *"this has no isomerism"*. The
+    choice-vector digest goes the other way and for the same rule: it is an **annotation**
+    nothing points at, so `ix_geometries_choice` is repopulated by rewriting, not versioned.
+
+
 - *(2026-10-12)* **D30 — link a geometry to its graph; do not renumber it ([B28](BUGS_resolved.md)).**
   E1's first run on copies of the main registries flagged ~80 % of MACE geometries. The first
   construct of every structure realised its graph (1113/1113, 1079/1079, 4230/4233); later
