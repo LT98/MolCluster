@@ -87,7 +87,8 @@ def formula(g: TypedGraph) -> str:
     return head + hill_formula(organic)
 
 
-def display_label(g: TypedGraph, aliases: dict[str, str] | None = None) -> str:
+def display_label(g: TypedGraph, aliases: dict[str, str] | None = None, *,
+                  l2_tag: str = "", l2_known: bool = False) -> str:
     """Composed from the GRAPH, never from an author-supplied name.
 
     `TypedGraph.name` is deliberately not consulted.  It was, and the result looked
@@ -97,10 +98,11 @@ def display_label(g: TypedGraph, aliases: dict[str, str] | None = None) -> str:
     function of the structure or it is not a label, it is a memory of what someone
     called it once.
     """
-    return compose_label(g, aliases=aliases)
+    return compose_label(g, aliases=aliases, l2_tag=l2_tag, l2_known=l2_known)
 
 
-def _derive_columns(g: TypedGraph) -> dict[str, Any]:
+def _derive_columns(g: TypedGraph, *, l2_tag: str = "", l2_known: bool = False
+                    ) -> dict[str, Any]:
     metal_nodes = g.metals()
     edges = g.edges()
     return {
@@ -117,7 +119,7 @@ def _derive_columns(g: TypedGraph) -> dict[str, Any]:
         "max_bridge_class": g.max_bridge_class().value,
         "n_dative_bonds": sum(1 for _u, _v, et in edges if et is EdgeType.DATIVE),
         "has_metal_metal": int(any(et is EdgeType.METAL_METAL for _u, _v, et in edges)),
-        "display_label": display_label(g),
+        "display_label": display_label(g, l2_tag=l2_tag, l2_known=l2_known),
     }
 
 
@@ -194,14 +196,15 @@ def put_structure(
     if row is not None:
         sid, created = int(row["id"]), False
     else:
-        cols = _derive_columns(g)
+        source = "geometry" if l2 is not None else ""
+        cols = _derive_columns(g, l2_tag=tag2, l2_known=bool(source))
         try:
             cur = reg.conn.execute(
             "INSERT INTO structures (l0_composition, l1_graph_hash, l2_isomer_tag, block_id, "
             " wl_index, typed_graph_hash, canonical_order_json, algo_l0, algo_l1, algo_l2, "
             " algo_canon, formula, metals, n_metals, n_atoms, net_charge, multiplicity, "
             " ox_states, max_bridge_class, n_dative_bonds, has_metal_metal, display_label, "
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " created_at, l2_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (l0, l1, tag2, block_id(l0, l1, tag2), wl_index(g),
              reg.store.put(g.to_json()), json.dumps(order),
              ALGO_VERSIONS["l0_composition"], ALGO_VERSIONS["l1_certificate"],
@@ -209,7 +212,7 @@ def put_structure(
              cols["formula"], cols["metals"], cols["n_metals"], cols["n_atoms"],
              cols["net_charge"], cols["multiplicity"], cols["ox_states"],
              cols["max_bridge_class"], cols["n_dative_bonds"], cols["has_metal_metal"],
-                 cols["display_label"], utcnow()),
+                 cols["display_label"], utcnow(), source),
             )
         except sqlite3.IntegrityError:
             # Lost a race: another worker inserted this identity between our SELECT and
@@ -357,10 +360,13 @@ def relabel_all(reg: Registry) -> int:
     """
     aliases = fragment_aliases(reg)
     n = 0
-    for row in reg.conn.execute("SELECT id, typed_graph_hash FROM structures"):
+    for row in reg.conn.execute("SELECT id, typed_graph_hash, l2_isomer_tag, l2_source "
+                                "FROM structures"):
         g = TypedGraph.from_json(reg.store.get(row["typed_graph_hash"]))
+        label = compose_label(g, aliases=aliases, l2_tag=row["l2_isomer_tag"],
+                              l2_known=row["l2_source"] == "geometry")
         reg.conn.execute("UPDATE structures SET display_label=? WHERE id=?",
-                         (compose_label(g, aliases=aliases), row["id"]))
+                         (label, row["id"]))
         n += 1
     return n
 
@@ -580,19 +586,23 @@ def put_geometry(
     if row is not None:
         return Put(int(row["id"]), False)
     changed, conn_json = _connectivity_verdict(reg, structure_id, xyz_text, fidelity, link)
+    arr_changed, arr_json = _arrangement_verdict(reg, structure_id, xyz_text, fidelity,
+                                                 link, relaxed_from)
 
     try:
         cur = reg.conn.execute(
             "INSERT INTO geometries (structure_id, coords_hash, n_atoms, fidelity, method_id, "
             " energy, converged, relaxed_from, choice_vector_digest, choice_vector_json, seed, "
             " qc_json, connectivity_changed, connectivity_json, canonical_order_json, "
-            " derived_from, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " derived_from, created_at, arrangement_changed, arrangement_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (structure_id, coords_hash, n_atoms, int(fidelity), mid, energy,
          None if converged is None else int(converged), relaxed_from,
          cv.digest if cv is not None else None,
          cv.to_json() if cv is not None else None,
              seed, json.dumps(qc) if qc else None, changed, conn_json,
-             None if link is None else json.dumps(link), derived_from, utcnow()),
+             None if link is None else json.dumps(link), derived_from, utcnow(),
+             arr_changed, arr_json),
         )
     except sqlite3.IntegrityError:                      # concurrent identical geometry
         existing = reg.conn.execute(
@@ -677,6 +687,32 @@ def _connectivity_verdict(reg: Registry, structure_id: int, xyz_text: str,
     report = connectivity_check(*_parse_xyz(xyz_text),
                                 _graph_in_rows(reg, structure_id, link))
     return int(report.changed), json.dumps({**report.to_dict(), "version": version})
+
+
+def _arrangement_verdict(reg: Registry, structure_id: int, xyz_text: str,
+                         fidelity: Fidelity, link: list[int] | None,
+                         relaxed_from: int | None) -> tuple[int | None, str | None]:
+    """L2's E1: (arrangement_changed, arrangement_json) for a geometry about to be stored.
+
+    A relaxation is judged against the geometry it started from, both read through their
+    own links (D30): the tag before and after.  No source (nothing was relaxed) or no
+    link means no verdict, with the reason.
+    """
+    if fidelity <= Fidelity.RAW or relaxed_from is None:
+        return None, None
+    version = ALGO_VERSIONS["l2_isomer_tag"]
+    source = reg.conn.execute("SELECT structure_id, coords_hash, canonical_order_json "
+                              "FROM geometries WHERE id=?", (relaxed_from,)).fetchone()
+    if link is None or source is None or source["canonical_order_json"] is None:
+        return None, json.dumps({"unchecked": "no link between the rows and the "
+                                              "structure's graph (B28)", "version": version})
+    before = l2_isomer_tag(
+        _graph_in_rows(reg, int(source["structure_id"]),
+                       [int(r) for r in json.loads(source["canonical_order_json"])]),
+        _parse_xyz(reg.store.get(source["coords_hash"]).decode())[1])
+    after = l2_isomer_tag(_graph_in_rows(reg, structure_id, link), _parse_xyz(xyz_text)[1])
+    return int(after != before), json.dumps({"before": before, "after": after,
+                                             "version": version})
 
 
 #: Two runs of one correction method on one set of coordinates are one number.
@@ -785,6 +821,7 @@ def _refresh_best_geometry(reg: Registry, structure_id: int) -> None:
         "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
         "LEFT JOIN methods m ON m.id = g.method_id "
         "WHERE g.structure_id=? AND g.connectivity_changed IS NOT 1 "
+        "AND g.arrangement_changed IS NOT 1 "
         "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
         "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
         "         COALESCE(m.id, 0) ASC, "
@@ -1155,7 +1192,8 @@ def best_geometry(reg: Registry, structure_id: int,
         return row
     return reg.conn.execute(
         "SELECT * FROM geometries WHERE structure_id=? AND fidelity>=? "
-        "AND connectivity_changed IS NOT 1 ORDER BY fidelity DESC, energy ASC LIMIT 1",
+        "AND connectivity_changed IS NOT 1 AND arrangement_changed IS NOT 1 "
+        "ORDER BY fidelity DESC, energy ASC LIMIT 1",
         (structure_id, int(min_fidelity))
     ).fetchone()
 

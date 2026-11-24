@@ -23,7 +23,9 @@ directions is what gets classified.  Reducing to the instance is what makes the 
 serve a bis-chelate as well as MA2B2: two monodentate ammines and two bidentate diamines
 are both "two instances of one class", and asking whether they sit cis or trans is the same
 question in both cases.  A class with only one instance is skipped, because a chelate's own
-bite angle is not isomerism — it is a ligand binding the way that ligand binds.
+bite angle is not isomerism — it is a ligand binding the way that ligand binds.  A ligand
+that binds through donors of different symmetry classes is also compared donor class by
+donor class, since the mean direction cannot see which end of it points where (#87).
 """
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from mofsbu.graph._types import EdgeType, TypedGraph
-from mofsbu.graph.canon import canonical_index_map, certificate_digest
+from mofsbu.graph.canon import atom_orbits, canonical_index_map, certificate_digest
 
 #: Above this angle two donors are trans, below it they are cis.  The midpoint of the two
 #: ideal values (90 and 180), which is the only defensible place for it while the
@@ -45,9 +47,13 @@ from mofsbu.graph.canon import canonical_index_map, certificate_digest
 CIS_TRANS_SPLIT_DEG = 135.0
 
 #: How far from the split an angle must sit before the call is made at all.  Inside this
-#: band the arrangement is reported as ambiguous and the centre goes untagged, so a bad
-#: geometry produces a missing answer instead of a confident wrong one.
+#: band the arrangement is written as `AMBIGUOUS`, so a bad geometry produces a visible
+#: non-answer instead of a confident wrong one.
 AMBIGUITY_BAND_DEG = 15.0
+
+#: The same split for two CHELATES compared by their mean donor directions: ~120 deg
+#: apart cis on an octahedron (two 90 deg bites on adjacent edges) and 180 trans.
+CHELATE_SPLIT_DEG = 150.0
 
 AMBIGUOUS = "?"
 
@@ -76,11 +82,11 @@ def _angle_deg(a: np.ndarray, b: np.ndarray) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
 
 
-def _relation(angle: float) -> str:
+def _relation(angle: float, split: float = CIS_TRANS_SPLIT_DEG) -> str:
     """cis, trans, or an admission that this geometry does not say."""
-    if abs(angle - CIS_TRANS_SPLIT_DEG) < AMBIGUITY_BAND_DEG:
+    if abs(angle - split) < AMBIGUITY_BAND_DEG:
         return AMBIGUOUS
-    return "trans" if angle > CIS_TRANS_SPLIT_DEG else "cis"
+    return "trans" if angle > split else "cis"
 
 
 def _fragment_of(g: TypedGraph) -> dict[int, tuple[int, ...]]:
@@ -136,31 +142,68 @@ def _chirality(axis: np.ndarray, pairs: Sequence[tuple[np.ndarray, np.ndarray]])
     return AMBIGUOUS
 
 
+def _donor_types(g: TypedGraph, fragment: tuple[int, ...]) -> dict[int, int]:
+    """{atom: its symmetry class inside its own fragment}, numbered canonically.
+
+    The class is the smallest canonical index in the atom's orbit under the fragment's
+    automorphisms, so it names "which atom of this ligand" independently of build order and
+    is the same for every copy of the ligand.
+    """
+    sub = g.subgraph(fragment)                     # sub node k is fragment[k] (sorted)
+    canon = canonical_index_map(sub)
+    rep = {v: min(canon[w] for w in orbit) for orbit in atom_orbits(sub) for v in orbit}
+    return {atom: rep[k] for k, atom in enumerate(sorted(fragment))}
+
+
 def _centre_tag(g: TypedGraph, coords: np.ndarray, metal: int) -> str:
-    """The arrangement tag for one coordination centre, or `''` if it has no distinction."""
+    """The arrangement tag for one coordination centre, or `''` if it has no distinction.
+
+    Two levels are compared.  Whole ligands: each instance reduced to its mean donor
+    direction (cis/trans of two ligands, Delta/Lambda of three chelates).  And, for a ligand
+    whose donors at this centre are of more than one symmetry class (anthrarufin's phenolate
+    O and quinone O), each donor class on its own — which is the only level that separates
+    cis- from trans-M(O,O')2 (#87).
+    """
     donors = g.neighbors(metal, EdgeType.DATIVE)
     if len(donors) < 2:
         return ""
     origin = coords[metal]
     fragments = _fragment_of(g)
+    types: dict[tuple[int, ...], dict[int, int]] = {}
 
     # class key -> {fragment instance -> [donor unit vectors]}
-    classes: dict[tuple[str, str], dict[tuple[int, ...], list[np.ndarray]]] = {}
+    classes: dict[tuple, dict[tuple[int, ...], list[np.ndarray]]] = {}
     for donor in donors:
         fragment = fragments.get(donor, (donor,))
         cert = certificate_digest(g.subgraph(fragment))
-        key = (cert, _class_label(fragment, g.label(donor).element))
-        classes.setdefault(key, {}).setdefault(fragment, []).append(
-            _unit(coords[donor] - origin))
+        label = _class_label(fragment, g.label(donor).element)
+        if fragment not in types:
+            types[fragment] = _donor_types(g, fragment)
+        vector = _unit(coords[donor] - origin)
+        classes.setdefault((cert, label, None), {}).setdefault(fragment, []).append(vector)
+        classes.setdefault((cert, label, types[fragment][donor]), {}).setdefault(
+            fragment, []).append(vector)
+
+    # A donor-class level is only reported where it says more than the ligand level does:
+    # when a ligand class reaches this centre through two or more donor classes.
+    n_types: dict[tuple[str, str], int] = {}
+    for cert, label, dtype in classes:
+        if dtype is not None:
+            n_types[(cert, label)] = n_types.get((cert, label), 0) + 1
 
     labels: dict[str, list[tuple[str, str]]] = {}
-    for (cert, label), instances in classes.items():
+    for (cert, label, dtype), instances in classes.items():
+        if dtype is not None and n_types[(cert, label)] < 2:
+            continue
         if len(instances) < 2:
             # One instance: a chelate biting the way it bites, not an isomeric choice.
             continue
         arrangement = _arrangement(instances)
+        if arrangement == "trans" and dtype is None and n_types[(cert, label)] == 2:
+            arrangement += _skew(classes, cert, label, instances)
         if arrangement:
-            labels.setdefault(label, []).append((cert, arrangement))
+            spelled = label if dtype is None else f"{label}@{dtype}"
+            labels.setdefault(spelled, []).append((cert, arrangement))
 
     parts: list[str] = []
     for label in sorted(labels):
@@ -172,6 +215,41 @@ def _centre_tag(g: TypedGraph, coords: np.ndarray, metal: int) -> str:
     return ",".join(parts)
 
 
+#: |axis . (p1 x p2)| above which two unsymmetric chelates are twisted rather than
+#: coplanar: ~1 on a tetrahedron, ~0 square-planar or trans-octahedral.
+SKEW_MIN = 0.5
+
+
+def _skew(classes: dict, cert: str, label: str,
+          instances: dict[tuple[int, ...], list[np.ndarray]]) -> str:
+    """`-P` / `-M` for two unsymmetric chelates twisted about their common axis, else ''.
+
+    Each chelate is reduced to the vector from its donor of the higher class to the lower
+    one, projected off the axis (the first chelate's mean direction).  Swapping which chelate
+    is first negates both the axis and the cross product, so the sign is order-free; a
+    mirror image flips it.  Coplanar chelates (square planar, trans-octahedral) have none.
+    """
+    if len(instances) != 2 or not all(len(v) >= 2 for v in instances.values()):
+        return ""
+    dtypes = sorted(d for c, lab, d in classes if c == cert and lab == label and d is not None)
+    lo, hi = classes[(cert, label, dtypes[0])], classes[(cert, label, dtypes[-1])]
+    frags = sorted(instances)
+    if not all(f in lo and f in hi for f in frags):
+        return ""
+    axis = _unit(np.sum(instances[frags[0]], axis=0))
+    projected = []
+    for f in frags:
+        v = lo[f][0] - hi[f][0]
+        v = v - np.dot(v, axis) * axis
+        if float(np.linalg.norm(v)) < 1e-6:
+            return ""
+        projected.append(_unit(v))
+    twist = float(np.dot(axis, np.cross(projected[0], projected[1])))
+    if abs(twist) < SKEW_MIN:
+        return ""
+    return "-P" if twist > 0 else "-M"
+
+
 def _arrangement(instances: dict[tuple[int, ...], list[np.ndarray]]) -> str:
     """cis/trans, fac/mer, or Delta/Lambda for the instances of one donor class."""
     ordered = sorted(instances.items())
@@ -179,7 +257,22 @@ def _arrangement(instances: dict[tuple[int, ...], list[np.ndarray]]) -> str:
     chelating = [len(vectors) >= 2 for _frag, vectors in ordered]
 
     if len(directions) == 2:
-        return _relation(_angle_deg(directions[0], directions[1]))
+        angle = _angle_deg(directions[0], directions[1])
+        if not all(chelating):
+            return _relation(angle)
+        # Two chelates: their mean directions sit ~120 deg apart cis and 180 trans, so the
+        # split is between those.  cis is a two-bladed propeller (the free vertex pair is
+        # the third blade), so it has a hand; the axis is normal to the two blades.
+        relation = _relation(angle, split=CHELATE_SPLIT_DEG)
+        if relation != "cis":
+            return relation
+        axis = _unit(np.cross(directions[0], directions[1]))
+        pairs = []
+        for _frag, vectors in ordered:
+            by_axis = sorted(vectors, key=lambda v: float(np.dot(v, axis)))
+            pairs.append((by_axis[0], by_axis[-1]))
+        hand = _chirality(axis, pairs)
+        return AMBIGUOUS if hand == AMBIGUOUS else f"cis-{hand}"
 
     if len(directions) == 3:
         if all(chelating):
@@ -217,17 +310,23 @@ def _arrangement(instances: dict[tuple[int, ...], list[np.ndarray]]) -> str:
 def isomer_tag(g: TypedGraph, geom: Any | None = None) -> str:
     """The L2 tag for a whole structure: every centre that has an arrangement to report.
 
-    Centres are keyed by CANONICAL index, not build index, so shuffling the input atom
-    order cannot move the tag — the same invariance L1 is already held to, and the reason
-    a tag can be part of an identity key at all.
+    Centres are keyed by ORBIT — the smallest canonical index among the metals symmetry
+    makes equivalent — because a canonical index names an atom only up to symmetry (B29).
+    Centres sharing an orbit are written as a sorted multiset.  A centre whose geometry does
+    not decide its arrangement is written with `?` rather than dropped, so it never files as
+    a centre with no isomerism (ground rule 8).
     """
     coords = _coords(geom, len(g))
     if coords is None:
         return ""
+    metals = g.metals()
+    if not metals:
+        return ""
     canon = canonical_index_map(g)
+    orbit_of = {v: min(canon[w] for w in orbit) for orbit in atom_orbits(g) for v in orbit}
     parts = []
-    for metal in g.metals():
+    for metal in metals:
         tag = _centre_tag(g, coords, metal)
-        if tag and AMBIGUOUS not in tag:
-            parts.append((canon[metal], tag))
+        if tag:
+            parts.append((orbit_of[metal], tag))
     return ";".join(f"{c}:{t}" for c, t in sorted(parts))

@@ -110,7 +110,7 @@ Which structures are the same molecule with a proton removed, and what that cost
 | `deprotonation_pairs(reg) -> list[tuple[int, int, int]]` | `(protonated_id, deprotonated_id, 1)` for every pair exactly one proton apart. | `scripts/link_protomers.py` |
 | `link_protomers(reg, *, water_id, hydronium_id, limit) -> list[dict[str, Any]]` | Write one balanced deprotonation edge per pair, skipping what already exists. | `runner`, `scripts/link_protomers.py` |
 
-### `reference` (717 lines)
+### `reference` (727 lines)
 
 Reaction-balanced energies — the fix for the charged-ion reference problem (M7).
 

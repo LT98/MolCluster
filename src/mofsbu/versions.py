@@ -26,7 +26,7 @@ ALGO_VERSIONS: dict[str, str] = {
     # What counts as an arrangement, how donors are grouped into classes, and where
     # the cis/trans split sits.  Structures tagged under a different version are not
     # comparable at L2 and are never re-labelled (ground rule 6).
-    "l2_isomer_tag":   "iso1",    # M5/S5 — cis/trans, fac/mer, Delta/Lambda (D10)
+    "l2_isomer_tag":   "iso2",    # D10; donor classes (#87), orbit-keyed centres (B29), `?` kept
     # The L3 label is provenance-primary (D11): the choice vector names the conformer and
     # geometry only verifies.  So this version covers both halves — what `core_atoms` calls
     # the rigid core, and theta_geom, the clustering threshold that collapses stochastic
@@ -110,7 +110,12 @@ ALGO_VERSIONS: dict[str, str] = {
     #    Only those builds move; a chelate that already fitted is byte-identical to `4`.
     #    A ligand of three or more donors is placed by arrangement and wrapped
     #    (`geometry.wrap`); no such sphere was built at `4`.
-    "placement":        "5",       # how a ligand is oriented on a coordination vertex
+    # 6: every ligand is placed by arrangement, not only those of three or more donors
+    #    (#87): a sphere of monodentate and bidentate ligands is built once per isomer
+    #    (cis/trans of MA2B2 and M(AB)2, fac/mer of MA3B3), and its choice vector always
+    #    records `arrangement`.  Ligands sit on different vertices than a `5` build put
+    #    them on wherever a sphere has more than one isomer.
+    "placement":        "6",       # how a ligand is oriented on a coordination vertex
 }
 
 

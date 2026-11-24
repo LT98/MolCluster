@@ -121,7 +121,9 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
 
     aliases = {r["fragment_l1"]: r["name"]
                for r in reg.conn.execute("SELECT fragment_l1, name FROM fragment_aliases")}
-    expected_label = compose_label(g, aliases=aliases)
+    expected_label = compose_label(g, aliases=aliases, l2_tag=row["l2_isomer_tag"],
+                                   l2_known="l2_source" in row.keys()
+                                   and row["l2_source"] == "geometry")
     if row["display_label"] != expected_label:
         problems.append(Problem("error", "display_label",
                                 f"stored {row['display_label']!r} != derived "
@@ -142,6 +144,7 @@ def verify_structure(reg: Registry, row) -> list[Problem]:
         "SELECT g.id AS id, g.fidelity AS fidelity FROM geometries g "
         "LEFT JOIN methods m ON m.id = g.method_id "
         "WHERE g.structure_id=? AND g.connectivity_changed IS NOT 1 "
+        "AND g.arrangement_changed IS NOT 1 "
         "ORDER BY g.fidelity DESC, (g.converged IS 1) DESC, "
         "         COALESCE(json_extract(m.extras_json, '$.charge_blind'), 0) ASC, "
         "         COALESCE(m.id, 0) ASC, "

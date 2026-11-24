@@ -178,7 +178,11 @@ def test_a_geometry_in_the_wrong_order_is_refused(aqua, chloride):
 
 
 def test_a_distorted_geometry_declines_to_call_it(aqua, chloride):
-    """Near the split the honest output is no tag, not a coin flip."""
+    """Near the split the honest output is a visible `?`, not a coin flip and not a gap.
+
+    Dropping the class would file the structure beside centres that have no isomerism at
+    all (ground rule 8); `?` keeps it apart and says why.
+    """
     pt = metal_block("Pt", 2, cn=4, geometry="square_planar", spin_class="ls")
     cis = occupy(pt, [(0, aqua), (1, aqua), (2, chloride), (3, chloride)])
     donors = [i for i in cis.graph.nodes()
@@ -191,8 +195,9 @@ def test_a_distorted_geometry_declines_to_call_it(aqua, chloride):
     theta = np.radians(CIS_TRANS_SPLIT_DEG)
     bent[donors[1]] = metal_pos + radius * np.array(
         [np.cos(theta), np.sin(theta), 0.0])
-    assert AMBIGUOUS not in l2_isomer_tag(cis.graph, bent)      # never leaks into a key
-    assert "O3=" not in l2_isomer_tag(cis.graph, bent)          # the class simply drops out
+    bent_tag = l2_isomer_tag(cis.graph, bent)
+    assert f"O3={AMBIGUOUS}" in bent_tag                        # the aquas: undecided
+    assert "Cl1=cis" in bent_tag                                # the chlorides still called
 
 
 def test_the_tag_survives_an_atom_order_shuffle(aqua, chloride):
@@ -210,3 +215,123 @@ def test_the_tag_survives_an_atom_order_shuffle(aqua, chloride):
 
 def test_the_recipe_version_moved_off_the_stub():
     assert ALGO_VERSIONS["l2_isomer_tag"] not in ("0-stub", "")
+
+
+# ── a chelate whose two donors share an element (#87) ───────────────────────
+
+def unsymmetric_bis_chelate(arrangement: str):
+    """Square-planar Cu with two O,O' chelates: a phenolate-like O and a carbonyl-like O.
+
+    The anthrarufin pocket in miniature: both donors are oxygen, so only their place in the
+    ligand tells them apart.  `cis` puts the two phenolate O at 90 degrees, `trans` at 180.
+    """
+    g = TypedGraph(charge=0, multiplicity=2, name=f"{arrangement}-Cu(O,O')2")
+    cu = g.add_atom("Cu", formal_charge=2, oxidation_state=2, spin_class="hs")
+    xyz = [np.zeros(3)]
+    pairs = {"trans": [((2, 0), (0, 2)), ((-2, 0), (0, -2))],
+             "cis": [((2, 0), (0, 2)), ((0, -2), (-2, 0))]}[arrangement]
+    for oa_xy, ob_xy in pairs:
+        oa, c1 = g.add_atom("O", formal_charge=-1), g.add_atom("C")
+        c2, ob, me = g.add_atom("C"), g.add_atom("O"), g.add_atom("C")
+        for u, v in ((oa, c1), (c1, c2), (c2, ob), (c1, me)):
+            g.add_bond(u, v, EdgeType.COVALENT)
+        g.add_bond(oa, cu, EdgeType.DATIVE)
+        g.add_bond(ob, cu, EdgeType.DATIVE)
+        a, b = np.array([*oa_xy, 0.0]), np.array([*ob_xy, 0.0])
+        xyz += [a, 1.3 * a + 0.3 * b, 1.3 * b + 0.3 * a, b, 1.6 * (a + b) + [0, 0, 1.0]]
+    return g, np.array(xyz)
+
+
+def test_an_unsymmetric_o_o_chelate_splits_cis_from_trans():
+    """The D10 case: one connectivity, and the two pockets' phenolates 90 or 180 apart."""
+    g_cis, x_cis = unsymmetric_bis_chelate("cis")
+    g_trans, x_trans = unsymmetric_bis_chelate("trans")
+    assert l1_graph_hash(g_cis) == l1_graph_hash(g_trans)
+    cis_tag, trans_tag = l2_isomer_tag(g_cis, x_cis), l2_isomer_tag(g_trans, x_trans)
+    assert cis_tag != trans_tag
+    assert "@" in cis_tag and "=cis" in cis_tag and "=cis" not in trans_tag
+
+
+def test_a_symmetric_chelate_gets_no_donor_level():
+    """Both donors of O-C-C-O are one symmetry class: nothing beyond the ligand level."""
+    g, coords = tris_chelate()
+    assert "@" not in l2_isomer_tag(g, coords)
+
+
+# ── centres keyed by orbit (B29) ─────────────────────────────────────────────
+
+def two_centre_dimer():
+    """Two graph-equivalent Cu(H2O)2Cl2 centres joined by an M-M edge, one cis, one trans."""
+    g = TypedGraph(charge=0, multiplicity=3, name="dimer")
+    xyz = []
+    for z, layout in ((0.0, ("O", "O", "Cl", "Cl")), (5.0, ("O", "Cl", "O", "Cl"))):
+        cu = g.add_atom("Cu", formal_charge=2, oxidation_state=2, spin_class="hs")
+        xyz.append([0.0, 0.0, z])
+        for (dx, dy), element in zip(((2, 0), (0, 2), (-2, 0), (0, -2)), layout, strict=True):
+            if element == "O":
+                o = g.add_atom("O")
+                h1, h2 = g.add_atom("H"), g.add_atom("H")
+                g.add_bond(o, h1, EdgeType.COVALENT)
+                g.add_bond(o, h2, EdgeType.COVALENT)
+                g.add_bond(o, cu, EdgeType.DATIVE)
+                xyz += [[dx, dy, z], [1.4 * dx, 1.4 * dy, z + 0.6], [1.4 * dx, 1.4 * dy, z - 0.6]]
+            else:
+                cl = g.add_atom("Cl", formal_charge=-1)
+                g.add_bond(cl, cu, EdgeType.DATIVE)
+                xyz.append([1.1 * dx, 1.1 * dy, z])
+        if z:
+            g.add_bond(0, cu, EdgeType.METAL_METAL)
+    return g, np.array(xyz, float)
+
+
+def test_equivalent_centres_get_one_tag_under_any_numbering():
+    """A canonical index names an atom only up to symmetry; the orbit names it exactly."""
+    g, coords = two_centre_dimer()
+    reference = l2_isomer_tag(g, coords)
+    assert "cis" in reference and "trans" in reference
+    rng = np.random.default_rng(0)
+    nodes = g.nodes()
+    for _ in range(30):
+        order = list(rng.permutation(len(nodes)))
+        mapping = {old: int(new) for old, new in zip(nodes, order, strict=True)}
+        shuffled = g.relabel(mapping)
+        moved = np.empty_like(coords)
+        for old, new in mapping.items():
+            moved[new] = coords[old]
+        assert l2_isomer_tag(shuffled, moved) == reference
+
+
+# ── a tetrahedral M(AB)2 has a hand ──────────────────────────────────────────
+
+TETRAHEDRON = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], float) / np.sqrt(3)
+
+
+def tetrahedral_bis_chelate(mirror: bool = False):
+    """Zn with two unsymmetric O,O' chelates on a tetrahedron: chiral, mean directions 180."""
+    g = TypedGraph(charge=0, multiplicity=1, name="tet-Zn(O,O')2")
+    zn = g.add_atom("Zn", formal_charge=2, oxidation_state=2, spin_class="ls")
+    xyz = [np.zeros(3)]
+    for a, b in ((0, 1), (2, 3)):
+        oa, c1 = g.add_atom("O", formal_charge=-1), g.add_atom("C")
+        c2, ob, me = g.add_atom("C"), g.add_atom("O"), g.add_atom("C")
+        for u, v in ((oa, c1), (c1, c2), (c2, ob), (c1, me)):
+            g.add_bond(u, v, EdgeType.COVALENT)
+        g.add_bond(oa, zn, EdgeType.DATIVE)
+        g.add_bond(ob, zn, EdgeType.DATIVE)
+        p, q = 2 * TETRAHEDRON[a], 2 * TETRAHEDRON[b]
+        xyz += [p, 1.3 * p + 0.3 * q, 1.3 * q + 0.3 * p, q, 1.6 * (p + q) + 0.3]
+    arr = np.array(xyz)
+    return g, (arr * np.array([-1.0, 1.0, 1.0]) if mirror else arr)
+
+
+def test_a_tetrahedral_unsymmetric_bis_chelate_and_its_mirror_are_two_structures():
+    g, right = tetrahedral_bis_chelate()
+    mg, left = tetrahedral_bis_chelate(mirror=True)
+    tags = {l2_isomer_tag(g, right), l2_isomer_tag(mg, left)}
+    assert len(tags) == 2 and all("trans-P" in t or "trans-M" in t for t in tags)
+
+
+def test_coplanar_chelates_get_no_twist():
+    for arrangement in ("cis", "trans"):
+        g, coords = unsymmetric_bis_chelate(arrangement)
+        assert "-P" not in l2_isomer_tag(g, coords) and "-M" not in l2_isomer_tag(g, coords)

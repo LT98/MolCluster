@@ -20,7 +20,7 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 
 ## Open
 
-- [ ] **B2** · honesty · `runner.py` — Every stored row's `l2_isomer_tag` is `''`, so cis and trans are one row. The classifier exists; the run pipeline declines to use it (**D19**, **D22**) ([details](BUGS_details.md#b2))
+- [x] **B2** · honesty · `runner.py` — Every stored row's `l2_isomer_tag` is `''`, so cis and trans are one row. The classifier exists; the run pipeline declines to use it (**D19**, **D22**) ([details](BUGS_details.md#b2))
 - [ ] **B3** · honesty · registry data — 16 structures have no `site_state`; `n_open_sites` is NULL, not 0. **Self-healing (D19)** ([details](BUGS_details.md#b3))
 - [ ] **B5** · undecided · `ui/static/builder.html` — The builder posts `spec_version: 1` and no test covers the migration it relies on ([details](BUGS_details.md#b5))
 - [ ] **B6** · undecided · `ui/static/index.html` — The registry page never refreshes, so its counts go stale silently ([details](BUGS_details.md#b6))
@@ -31,12 +31,13 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 - [ ] **B11** · cosmetic · `sites/model.py` — `vacancy_sites` normalises by hand, differently from `_linalg.unit` ([details](BUGS_details.md#b11), #22)
 - [ ] **B14** · correctness · `sites/perception.py` — Pyrazolate's two equivalent N type differently, and one of them cannot bridge ([details](BUGS_details.md#b14))
 - [ ] **B15** · correctness · `sites/perception.py` — A bare oxide `[O-2]` types as `hydroxide_O`, so an oxo reports a hydroxide's pKa ([details](BUGS_details.md#b15))
-- [ ] **B16** · correctness · `scripts/run_spec.py` — `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store ([details](BUGS_details.md#b16))
+- [x] **B16** · correctness · `scripts/run_spec.py` — `--store` is ignored: spawned workers re-resolve `data_root()`, so blobs land in the default store ([details](BUGS_details.md#b16))
 - [ ] **B17** · honesty · `ui/static/index.html` — Changing the geometry does not re-render the detail panel, so `method` and `converged` go stale ([details](BUGS_details.md#b17))
 - [ ] **B19** · honesty · `ui/static/graph.html` — One structure drawn at two heights by two routes, with the reason — a different basis — only in the legend ([details](BUGS_details.md#b19))
 - [ ] **B27** · correctness · `sites/model.py` — A vacancy's torsion reference flips sign between cis vertices, so `join(torsion_well=0)` puts cis ligands on opposite faces ([details](BUGS_details.md#b27))
-- [ ] **B29** · correctness · `identity/isomers.py` — `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) ([details](BUGS_details.md#b29))
+- [x] **B29** · correctness · `identity/isomers.py` — `isomer_tag` keys each metal centre by canonical index, which is not stable for symmetry-equivalent atoms — one polynuclear species could get two L2 tags (latent until B2 is closed) ([details](BUGS_details.md#b29))
 - [x] **#70** · correctness · `energy/dft.py` — `DFTBackend` ignores `MOFSBU_DEVICE`: GPU4PySCF spreads over every visible GPU ([issue](https://github.com/LT98/MolCluster/issues/70))
+- [x] **#87** · correctness · `identity/isomers.py` — The L2 tag cannot tell cis from trans for a chelate whose two donors share an element (anthrarufin O,O′) ([issue](https://github.com/LT98/MolCluster/issues/87))
 - [ ] **#53** · undecided · `ui/` — Searching the registry for a displayed label (`tHQ`, chloride) returns no entries ([issue](https://github.com/LT98/MolCluster/issues/53))
 
 ## Resolved

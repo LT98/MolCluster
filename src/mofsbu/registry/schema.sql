@@ -128,6 +128,10 @@ CREATE TABLE IF NOT EXISTS structures (
     hidden_reason        TEXT    NOT NULL DEFAULT '',
 
     created_at           TEXT NOT NULL,
+    -- Where `l2_isomer_tag` came from: 'geometry' = read off coordinates (D32), so '' there
+    -- means "no isomerism at any centre"; '' = never tagged (no coordinates at insert, or a
+    -- row written before D32), so the label carries `?L2`.  Display only.
+    l2_source            TEXT    NOT NULL DEFAULT '',
     UNIQUE (l0_composition, l1_graph_hash, l2_isomer_tag)
 );
 
@@ -179,6 +183,12 @@ CREATE TABLE IF NOT EXISTS geometries (
     -- (`assembly.derive`); the two are joined by a `relaxation` edge between their structures.
     derived_from         INTEGER DEFAULT NULL REFERENCES geometries(id) ON DELETE SET NULL,
     created_at           TEXT    NOT NULL,
+    -- E1's analogue for L2: is a relaxation still the isomer it started from (`relaxed_from`)?
+    -- NULL = no verdict (not a relaxation, or no link), 0 = same tag, 1 = the relaxation
+    -- changed the arrangement.  A 1 is never selected for
+    -- an energy or as best geometry; it is filed under the isomer it became (D31 path).
+    arrangement_changed  INTEGER DEFAULT NULL,
+    arrangement_json     TEXT    DEFAULT NULL,          -- before/after tags, or why unchecked
     UNIQUE (structure_id, coords_hash, method_id)
 );
 

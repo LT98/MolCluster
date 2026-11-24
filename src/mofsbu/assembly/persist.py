@@ -96,11 +96,8 @@ def store_block(reg: Registry, block: Any, *, choice_vector: dict | ChoiceVector
     wrong geometry — which is why it is written down once here instead of at each call
     site.
 
-    `l2` overrides the tag derived from the coordinates.  It exists for a caller that is
-    storing a product ANOTHER path also builds and that has to land on the same identity
-    row: the run pipeline does not tag isomers yet, so a route that tagged its own product
-    would file it separately from the node every other route reached (B2).  Deriving it is
-    still the default, because a caller who does not raise that question wants the tag.
+    `l2` overrides the tag derived from the coordinates; every pipeline path derives it
+    (D32), so the override is for a caller that already holds the tag.
 
     `qc` travels onto the geometry row.  A construct whose report is missing looks exactly
     like one that passed, which is the distinction ground rule 9 is about.

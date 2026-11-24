@@ -170,12 +170,16 @@ def _formula(labels) -> str:
 
 
 def file_derived(reg: Any, geometry_id: int) -> dict[str, Any]:
-    """File the species a connectivity-changed geometry became.  Writes; does not commit.
+    """File the species a connectivity- or arrangement-changed geometry became.
+
+    Writes; does not commit.  The new structure's L2 tag is read off the relaxed
+    coordinates, so a relaxation that moved cis to trans is filed under trans.
 
     Idempotent: a geometry already filed (another geometry `derived_from` it) is skipped.
     A refusal, a separation included, is returned with its reason, never raised.
     """
     from mofsbu.energy.reference import _method_of, check_balance
+    from mofsbu.identity.keys import l2_isomer_tag
     from mofsbu.registry.api import (
         Provenance,
         RegistryError,
@@ -184,28 +188,39 @@ def file_derived(reg: Any, geometry_id: int) -> dict[str, Any]:
         put_reaction,
         put_structure,
     )
+    from mofsbu.registry.api import _parse_xyz
 
     row = reg.conn.execute(
         "SELECT structure_id, fidelity, method_id, energy, converged, coords_hash, "
-        "connectivity_changed, connectivity_json FROM geometries WHERE id=?",
-        (geometry_id,)).fetchone()
+        "connectivity_changed, connectivity_json, arrangement_changed, arrangement_json "
+        "FROM geometries WHERE id=?", (geometry_id,)).fetchone()
     if row is None:
         raise RegistryError(f"no geometry {geometry_id}")
-    if row["connectivity_changed"] != 1:
-        return {"skipped": "connectivity not changed"}
+    if row["connectivity_changed"] != 1 and row["arrangement_changed"] != 1:
+        return {"skipped": "neither connectivity nor arrangement changed"}
     done = reg.conn.execute("SELECT id FROM geometries WHERE derived_from=?",
                             (geometry_id,)).fetchall()
     if done:
         return {"skipped": "already filed", "geometries": [int(r["id"]) for r in done]}
-    try:
-        derived = derive_species(geometry_graph(reg, geometry_id),
-                                 json.loads(row["connectivity_json"]))
-    except DeriveRefused as exc:
-        return {"refused": str(exc)}
-
-    if len(derived.pieces) > 1:
-        return {"refused": "separation — second shell or leaving, pending",
-                "summary": derived.summary}
+    rows_graph = geometry_graph(reg, geometry_id)
+    if row["connectivity_changed"] == 1:
+        try:
+            derived = derive_species(rows_graph, json.loads(row["connectivity_json"]))
+        except DeriveRefused as exc:
+            return {"refused": str(exc)}
+        if len(derived.pieces) > 1:
+            return {"refused": "separation — second shell or leaving, pending",
+                    "summary": derived.summary}
+        graph, summary = derived.pieces[0].graph, derived.summary
+    else:
+        verdict = json.loads(row["arrangement_json"])
+        graph = rows_graph
+        summary = f"arrangement {verdict['before'] or '-'} -> {verdict['after'] or '-'}"
+    xyz_text = reg.store.get(row["coords_hash"]).decode()
+    coords = _parse_xyz(xyz_text)[1]
+    if len(coords) != len(graph):
+        raise MofsbuError(f"geometry {geometry_id} has {len(coords)} rows and its derived "
+                          f"graph {len(graph)} atoms; the tag would read the wrong atoms")
 
     # All three rows or none: a failure after the first write must not leave a structure
     # that the "already filed" check would then accept.
@@ -214,16 +229,16 @@ def file_derived(reg: Any, geometry_id: int) -> dict[str, Any]:
         reg.conn.execute("BEGIN")
     reg.conn.execute("SAVEPOINT file_derived")
     try:
-        put = put_structure(reg, derived.pieces[0].graph, l2="", tags=["derived"])
+        put = put_structure(reg, graph, l2=l2_isomer_tag(graph, coords), tags=["derived"])
         geom = put_geometry(
-            reg, put.id, reg.store.get(row["coords_hash"]).decode(),
+            reg, put.id, xyz_text,
             fidelity=Fidelity(int(row["fidelity"])),
             method=_method_of(reg, row["method_id"]), energy=row["energy"],
             converged=None if row["converged"] is None else bool(row["converged"]),
             canonical_order=put.canonical_order, derived_from=geometry_id)
         rid = put_reaction(reg, put.id, Provenance(
             kind="relaxation", reagent_ids=(int(row["structure_id"]),),
-            note=f"geometry {geometry_id}: {derived.summary}"))
+            note=f"geometry {geometry_id}: {summary}"))
         balance = check_balance(reg, rid)
         if not balance.balanced:
             raise MofsbuError(f"relaxation edge {rid} from geometry {geometry_id} is "
@@ -236,4 +251,4 @@ def file_derived(reg: Any, geometry_id: int) -> dict[str, Any]:
         raise
     reg.conn.execute("RELEASE SAVEPOINT file_derived")
     return {"filed": [put.id], "geometries": [geom.id], "created": [put.created],
-            "edge": rid, "summary": derived.summary}
+            "edge": rid, "summary": summary}
