@@ -194,3 +194,38 @@ def test_a_table_added_later_reaches_an_existing_database_and_is_logged(tmp_path
         reg.migrate()
         again = [r[0] for r in reg.conn.execute("SELECT note FROM migrations")]
     assert again == notes
+
+
+def _indexes(db) -> set[str]:
+    return {r[0] for r in sqlite3.connect(db).execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+
+
+def test_an_index_on_a_column_added_later_reaches_an_existing_database(tmp_path):
+    """`derived_from` (D31) came after many registries were written: the column is added
+    first, then its index, which `schema.sql` could not have created on such a database."""
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)
+    con.executescript(_old_schema_without("derived_from", "geometries"))
+    con.commit()
+    con.close()
+    assert "ix_geometries_derived" not in _indexes(db)
+
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+        plan = " ".join(r[-1] for r in reg.conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM geometries WHERE derived_from = 7"))
+    assert "ix_geometries_derived" in _indexes(db)
+    assert "ix_geometries_derived" in plan
+    notes = [r[0] for r in sqlite3.connect(db).execute("SELECT note FROM migrations")]
+    assert "added geometries.derived_from" in notes
+    assert "created index ix_geometries_derived" in notes
+
+
+def test_a_fresh_database_gets_the_late_indexes_without_logging_them(tmp_path):
+    db = tmp_path / "new.db"
+    with Registry(db, BlobStore(tmp_path / "store")) as reg:
+        reg.migrate()
+    assert "ix_geometries_derived" in _indexes(db)
+    notes = [r[0] for r in sqlite3.connect(db).execute("SELECT note FROM migrations")]
+    assert not any(n.startswith("created index") for n in notes)

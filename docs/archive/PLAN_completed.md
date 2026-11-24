@@ -310,6 +310,16 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 69)* **An index on `geometries.derived_from` (D31).** `assembly.derive.file_derived`
+  looks a filing up by `derived_from` on every connectivity-changed relaxation, and the column's
+  `ON DELETE SET NULL` makes every geometry delete look for rows that point at it; both read the
+  whole table. An index in `schema.sql` would fail on a registry made before the column existed,
+  because the schema runs before `_reconcile_columns` adds missing columns, so `registry.db` gains
+  `LATE_INDEXES`, created after that step and logged as a migration on an existing database. The
+  index is partial (`WHERE derived_from IS NOT NULL`): almost every row is NULL. Measured on a
+  synthetic table with 1 % of rows set: lookup 26.7 ms → 0.003 ms and delete 54.6 ms → 0.006 ms at
+  1 M rows, and 0.003 / 0.007 ms at 5 M, flat with size; the foreign-key check uses the partial
+  index too. On a copy of `THQ_run.db` the unfiled-geometry query went from 97 s to 25 ms.
 - *(rev 68)* **Both GPUs: one card per worker process (#70, PR #85).**
   `MOFSBU_DEVICE=cuda:0,cuda:1` was refused ("one device per process"), and
   nothing gave a second process a second card: every spawned worker inherited the same device.
