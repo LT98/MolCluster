@@ -12,7 +12,7 @@ layout are in [`archive/BUGS_resolved.md`](archive/BUGS_resolved.md).
 
 ## B29
 
-**Fixed (rev 70).** Centres are keyed by orbit and centres sharing one are written as a sorted multiset (`l2_isomer_tag` `iso2`); one dimer gave two tags under 30 renumberings before and one after.
+**Fixed (rev 70, PR #88).** Centres are keyed by orbit and centres sharing one are written as a sorted multiset (`l2_isomer_tag` `iso2`); one dimer gave two tags under 30 renumberings before and one after.
 
 **The L2 tag keys each metal centre by its canonical index, and a canonical index names an atom
 only up to symmetry.** `correctness` (latent) · `identity/isomers.isomer_tag`
@@ -59,7 +59,7 @@ reference or branches over faces explicitly.
 
 ## B2
 
-**Fixed (rev 70).** Every writer tags from its own coordinates (`place`, `grow`, routes, derived filings), a relaxation that changes the arrangement is filed under the isomer it became, and pre-`iso2` registries are regenerated (D32).
+**Fixed (rev 70, PR #88).** Every writer tags from its own coordinates (`place`, `grow`, routes, derived filings), a relaxation that changes the arrangement is filed under the isomer it became, and pre-`iso2` registries are regenerated (D32).
 
 **`l2_isomer_tag` is `''` everywhere, so cis and trans collapse into one row.** `honesty` ·
 `identity/keys.py`
@@ -361,7 +361,7 @@ type. It bites whenever an oxo-centred node is stored and its sites are scored.
 
 ## B16
 
-**Fixed (rev 70; not reproduced).** At `85fc20d`, a 2-worker `run_spec.py --store` run wrote all 98 blobs to the given store and none to the default one: `execute_run` passes `reg.store.root` to every spawned worker.
+**Fixed (rev 70, PR #88; not reproduced).** At `85fc20d`, a 2-worker `run_spec.py --store` run wrote all 98 blobs to the given store and none to the default one: `execute_run` passes `reg.store.root` to every spawned worker.
 
 **`run_spec.py --store` is ignored, and the run still succeeds.** `correctness` ·
 `scripts/run_spec.py`

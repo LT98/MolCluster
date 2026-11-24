@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 70)* **L2 wired end to end (D32; B2, B29, #87), and every sphere built once per
+- *(rev 70)* **L2 wired end to end (D32; B2, B29, #87; PR #88), and every sphere built once per
   isomer (`placement 6`).** Before the Cu–anthrarufin verification run, L2 was written by
   routes only: `place`, `grow` and derived filings stored `''`, so cis and trans were one row.
   Wiring it turned up three more problems. (1) **#87**: donors were grouped by ligand and element,
