@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 75)* **Two writers of one blob both succeed (#93).** `BlobStore.put` wrote
+- *(rev 75)* **Two writers of one blob both succeed (#93, PR #100).** `BlobStore.put` wrote
   `<digest>.tmp` and renamed it; every writer of identical bytes used that one name, so when
   two workers stored the same blob at once the second rename found the file gone
   (`FileNotFoundError`) and its task was recorded as failed although the blob was stored. It
