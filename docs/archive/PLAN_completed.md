@@ -310,6 +310,21 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 71)* **The finalise stage runs as tasks, and the run page names its phases (#89, #34; PR #90).**
+  When a `pathways` run's queue drained, `finalise_run` ran in the parent process: protomer
+  linking, then `correct_registry(alpb:water)`, a serial loop of two xTB single points per
+  stored energy. It wrote no task rows, did not touch the heartbeat, left the run `pending`,
+  and reported to the diagnostics only at the very end. On the Cu–anthrarufin CN 4 campaign
+  the inspector read 19,421 / 19,421 settled while the stage ran for 17 h+ (about 7.7 s per
+  geometry, 7,836 of ~10,460 done) and every declared worker sat idle. Now linking writes its
+  diagnostics as soon as it ends. The corrections are `solvate` tasks, one per geometry that
+  lacks one and is not already queued, drained by the run's own worker count on the CPU
+  (`finalise_env`: no card, `OMP_NUM_THREADS` = cores / workers) or in-process on a laptop.
+  Each task touches the heartbeat; a refusal is `solvation_refused`; their summary is written
+  once they settle. `outcome_summary` gains `phases` (generating / optimising / finalising,
+  each settled out of its own total, `jobs.TASK_PHASES`), shown under the settled count on the
+  run page (#34). `correct_registry` and `scripts/solvate.py` are unchanged for use by hand.
+  The CN 4 campaign's remaining corrections were finished by hand in parallel shards.
 - *(rev 70)* **L2 wired end to end (D32; B2, B29, #87; PR #88), and every sphere built once per
   isomer (`placement 6`).** Before the Cu–anthrarufin verification run, L2 was written by
   routes only: `place`, `grow` and derived filings stored `''`, so cis and trans were one row.

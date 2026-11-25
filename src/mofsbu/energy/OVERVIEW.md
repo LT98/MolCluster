@@ -159,7 +159,7 @@ Continuum corrections on stored energies — the producer (WORKPLAN_solvation S2
 
 | Name | Does | Used by |
 |---|---|---|
-| `correct(reg, geometry_id, medium) -> Any` | Compute and store the continuum correction for one geometry. Returns the `Put`. |  |
-| `correct_registry(reg, medium, *, min_fidelity, commit_every, limit) -> dict[str, Any]` | Correct every converged gas-phase energy at or above `min_fidelity` that lacks one. | `runner`, `scripts/solvate.py` |
+| `correct(reg, geometry_id, medium) -> Any` | Compute and store the continuum correction for one geometry. Returns the `Put`. | `runner` |
+| `correct_registry(reg, medium, *, min_fidelity, commit_every, limit) -> dict[str, Any]` | Correct every converged gas-phase energy at or above `min_fidelity` that lacks one. | `scripts/solvate.py` |
 
 <!-- END GENERATED -->

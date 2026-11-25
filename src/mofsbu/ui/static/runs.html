@@ -78,6 +78,10 @@ button{cursor:pointer}
 .settled{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:8px 0 2px}
 .settled .big{font-size:22px;font-variant-numeric:tabular-nums;line-height:1.1}
 .settled .sub{color:var(--muted);font-size:12px}
+/* Which phase a run is in (#34): generating, optimising, finalising; the one still
+   waiting on tasks is drawn in the foreground colour. */
+.phases{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;margin:2px 0}
+.phases .now{color:var(--ink);font-weight:600}
 .bar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 2px;
      display:flex}
 .bar i{display:block;height:100%}
@@ -271,6 +275,9 @@ async function render(force){
       <span class="sub">${done} built · ${rej} rejected · ${fail} failed${
         waiting ? ` · ${waiting} still to run` : ''}</span>
     </div>
+    ${(s.phases || []).some(ph => ph.total) ? `<div class="phases">${s.phases.filter(ph => ph.total)
+      .map(ph => `<span class="${ph.waiting ? 'now' : ''}">${esc(ph.phase)}
+        <b>${ph.settled}</b> / ${ph.total}</span>`).join(' · ')}</div>` : ''}
     <div class="bar" title="${done} built, ${rej} rejected, ${fail} failed of ${totalTasks}">
       <i class="i-done" style="width:${pct(done)}%"></i>
       <i class="i-rej"  style="width:${pct(rej)}%"></i>
