@@ -27,10 +27,17 @@ def _declarations_do_not_outlive_their_test():
 
     That failure depended on file order, which is the worst property a test failure can
     have.  It is fixed here, once, rather than in each test that declares something.
+
+    The same holds for the shell the suite is started from: a terminal that ran a campaign
+    with `MOFSBU_PROFILE=workstation` exported made every `run()` in the suite spawn 127
+    workers.  So each test starts from the laptop default — no profile, no worker count
+    (ground rule 9) — and a test that wants parallelism declares it.
     """
     import os
 
     before = {k: v for k, v in os.environ.items() if k.startswith("MOFSBU_")}
+    for key in ("MOFSBU_PROFILE", "MOFSBU_WORKERS"):
+        os.environ.pop(key, None)
     yield
     for key in [k for k in os.environ if k.startswith("MOFSBU_")]:
         if key not in before:
