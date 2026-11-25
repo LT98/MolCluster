@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 71)* **The finalise stage runs as tasks, and the run page names its phases (#89, #34).**
+- *(rev 71)* **The finalise stage runs as tasks, and the run page names its phases (#89, #34; PR #90).**
   When a `pathways` run's queue drained, `finalise_run` ran in the parent process: protomer
   linking, then `correct_registry(alpb:water)`, a serial loop of two xTB single points per
   stored energy. It wrote no task rows, did not touch the heartbeat, left the run `pending`,
