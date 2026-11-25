@@ -42,7 +42,9 @@ class Registry:
                  *, journal_mode: str = "auto") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.store = store or BlobStore(self.db_path.parent / "store")
+        # `is None`, not truthiness: a BlobStore has `__len__`, so an EMPTY store is falsy
+        # and `store or ...` silently replaced the one the caller named (B16).
+        self.store = store if store is not None else BlobStore(self.db_path.parent / "store")
         self.conn = sqlite3.connect(self.db_path, timeout=BUSY_TIMEOUT)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
