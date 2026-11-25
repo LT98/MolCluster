@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 73)* **A run corrects into the media its spec names; `alpb:dmf` is one.** The
+- *(rev 73)* **A run corrects into the media its spec names; `alpb:dmf` is one (PR #97).** The
   finalise stage corrected every run into `alpb:water` (`FINALISE_MEDIUM`), while the
   Cu–anthrarufin solvothermal syntheses run in DMF/H₂O. `energy.solvation.MEDIA` gains
   `alpb:dmf` (tblite ALPB `dmf`; water molecule ΔG_solv −0.39 eV in water, −0.30 eV in DMF).
