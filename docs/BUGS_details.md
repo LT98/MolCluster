@@ -361,7 +361,7 @@ type. It bites whenever an oxo-centred node is stored and its sites are scored.
 
 ## B16
 
-**Fixed (rev 70, PR #88; not reproduced).** At `85fc20d`, a 2-worker `run_spec.py --store` run wrote all 98 blobs to the given store and none to the default one: `execute_run` passes `reg.store.root` to every spawned worker.
+**Fixed (rev 72).** `Registry` took its store as `store or BlobStore(<db folder>/store)`, and `BlobStore` has `__len__`, so a named store with no files in it was falsy and silently replaced by one beside the database; now `is None`. Rev 70's "not reproduced" was a coincidence: that test's empty `--store` was the folder beside its database.
 
 **`run_spec.py --store` is ignored, and the run still succeeds.** `correctness` ·
 `scripts/run_spec.py`
