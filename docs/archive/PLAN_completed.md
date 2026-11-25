@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 74)* **`solvate.py --workers` hands each worker its slice (#98).** Each worker
+- *(rev 74)* **`solvate.py --workers` hands each worker its slice (#98, PR #99).** Each worker
   queried the uncorrected geometries itself when it started and took `[index::N]`; a worker
   that started after another had committed saw a shorter list, and what fell between the
   slices was never attempted, while the script reported "k of k corrected". It showed as
