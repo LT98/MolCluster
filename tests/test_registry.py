@@ -430,3 +430,15 @@ def test_a_label_shows_the_tag_read_off_coordinates_and_flags_one_never_read(tmp
         assert {r["id"]: r["display_label"] for r in reg.conn.execute(
             "SELECT id, display_label FROM structures")} == label
         assert not [p for p in verify(reg) if p.check == "display_label"]
+
+
+def test_an_empty_store_that_was_named_is_the_store_used(tmp_path):
+    """B16: an empty BlobStore is falsy (`__len__`), and `store or <beside the db>` swapped
+    a named-but-empty store for one next to the database, so a run's files landed there."""
+    from mofsbu.registry import BlobStore
+
+    named = BlobStore(tmp_path / "elsewhere" / "store")
+    assert len(named) == 0
+    with Registry(tmp_path / "campaign" / "r.db", named) as reg:
+        assert reg.store.root == named.root
+    assert not (tmp_path / "campaign" / "store").exists()
