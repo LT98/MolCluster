@@ -2214,58 +2214,61 @@ def _drain_finalise(ctx: Any, args: tuple, n: int, run_id: int) -> None:
             + ". Their solvate tasks are still pending; resume the run to finish them")
 
 
-#: The medium a finished run's energies are corrected into (WORKPLAN_solvation C17).
-FINALISE_MEDIUM = "alpb:water"
-
-
-def _queue_solvate(reg: Registry, run_id: int, target: Fidelity
+def _queue_solvate(reg: Registry, run_id: int, target: Fidelity, media: Sequence[str]
                    ) -> tuple[int, list[dict[str, Any]]]:
-    """Queue one `solvate` task per geometry lacking a correction; or say why there are none.
+    """Queue one `solvate` task per geometry and medium lacking a correction; or say why none.
 
-    The same geometries `energy.solvation.correct_registry` would correct, less any already
-    queued and not yet settled, so resuming a run does not queue them twice.
+    The geometries `energy.solvation.uncorrected` names, less any already queued for that
+    medium and not yet settled, so resuming a run does not queue them twice.
     """
     from mofsbu.energy.backends import get_backend
+    from mofsbu.energy.solvation import uncorrected
 
+    if not media:
+        return 0, [{"stage": "solvate", "count": 0,
+                    "reason": "no continuum corrections: the spec names no solvation_media",
+                    "hint": "add e.g. 'alpb:water' or 'alpb:dmf' to solvation_media"}]
     if target < Fidelity.ML:
         return 0, [{"stage": "solvate", "count": 0,
-                    "reason": f"no {FINALISE_MEDIUM} corrections: this run computed no "
-                              f"energies", "hint": "construct mode builds geometries only"}]
+                    "reason": "no continuum corrections: this run computed no energies",
+                    "hint": "construct mode builds geometries only"}]
     if not get_backend("xtb").available():
         return 0, [{"stage": "solvate", "count": 0,
-                    "reason": f"no {FINALISE_MEDIUM} corrections: xTB (tblite) is not "
-                              f"installed",
+                    "reason": "no continuum corrections: xTB (tblite) is not installed",
                     "hint": "install tblite, then run scripts/solvate.py on this database"}]
-    todo = [int(r["id"]) for r in reg.conn.execute(
-        "SELECT g.id FROM geometries g JOIN methods m ON m.id = g.method_id "
-        "WHERE g.energy IS NOT NULL AND g.converged = 1 AND m.solvent IS NULL "
-        "AND g.fidelity >= ? AND NOT EXISTS ("
-        "  SELECT 1 FROM solvation_corrections sc JOIN methods cm ON cm.id = sc.method_id "
-        "  WHERE sc.geometry_id = g.id AND cm.solvent = ?) AND NOT EXISTS ("
-        "  SELECT 1 FROM tasks t WHERE t.kind = 'solvate' AND t.status IN ('pending', "
-        "  'claimed') AND json_extract(t.payload_json, '$.geometry_id') = g.id) "
-        "ORDER BY g.id", (int(Fidelity.ML), FINALISE_MEDIUM))]
-    for gid in todo:
-        add_task(reg, run_id, "solvate", {"geometry_id": gid, "medium": FINALISE_MEDIUM})
-    return len(todo), []
+    n = 0
+    for medium in media:
+        queued = {int(r[0]) for r in reg.conn.execute(
+            "SELECT json_extract(payload_json, '$.geometry_id') FROM tasks WHERE kind = "
+            "'solvate' AND status IN ('pending', 'claimed') AND "
+            "json_extract(payload_json, '$.medium') = ?", (medium,))}
+        for gid in uncorrected(reg, medium):
+            if gid not in queued:
+                add_task(reg, run_id, "solvate", {"geometry_id": gid, "medium": medium})
+                n += 1
+    return n, []
 
 
 def _solvate_summary(reg: Registry, run_id: int) -> list[dict[str, Any]]:
-    """What the run's `solvate` tasks did, as run diagnostics."""
-    rows = reg.conn.execute("SELECT status, error FROM tasks WHERE run_id=? AND "
-                            "kind='solvate'", (run_id,)).fetchall()
-    done = sum(1 for r in rows if r["status"] == "done")
-    refused: dict[str, int] = {}
-    for r in rows:
-        if r["status"] != "done":
-            why = (r["error"] or r["status"]).splitlines()[0][:160]
-            refused[why] = refused.get(why, 0) + 1
-    stages = [{"stage": "solvate", "count": done,
-               "reason": f"geometries given a {FINALISE_MEDIUM} correction",
-               "hint": "xTB with and without the continuum on each stored geometry"}]
-    stages += [{"stage": "solvate", "count": n, "reason": f"correction refused: {why}",
-                "hint": "that geometry's energy has no medium; routes through it stay gas-only"}
-               for why, n in sorted(refused.items())]
+    """What the run's `solvate` tasks did, per medium, as run diagnostics."""
+    rows = reg.conn.execute(
+        "SELECT status, error, json_extract(payload_json, '$.medium') AS medium FROM tasks "
+        "WHERE run_id=? AND kind='solvate'", (run_id,)).fetchall()
+    stages = []
+    for medium in sorted({r["medium"] for r in rows}):
+        mine = [r for r in rows if r["medium"] == medium]
+        refused: dict[str, int] = {}
+        for r in mine:
+            if r["status"] != "done":
+                why = (r["error"] or r["status"]).splitlines()[0][:160]
+                refused[why] = refused.get(why, 0) + 1
+        stages.append({"stage": "solvate", "count": sum(r["status"] == "done" for r in mine),
+                       "reason": f"geometries given a {medium} correction",
+                       "hint": "xTB with and without the continuum on each stored geometry"})
+        stages += [{"stage": "solvate", "count": k,
+                    "reason": f"{medium} correction refused: {why}",
+                    "hint": "that geometry's energy has no correction in this medium; routes "
+                            "through it stay unpriced there"} for why, k in sorted(refused.items())]
     return stages
 
 
@@ -2276,10 +2279,11 @@ def finalise_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     Queued only now: the queue orders by priority and has no dependencies, so a task
     claimed while another worker is still relaxing would see a registry that is not
     finished yet.  Only for `pathways` runs — linking is provenance, and a run that did not
-    ask for provenance gets none.  Protomer linking runs here; the water corrections are
-    `solvate` tasks that `drain` works through (#89), so the run page counts them and the
-    heartbeat moves.  Each stage's outcome is appended to the run's diagnostics as that
-    stage ends, so what it did is on the run page rather than in a terminal.
+    ask for provenance gets none.  Protomer linking runs here; the continuum corrections
+    (one set per `spec.solvation_media` entry) are `solvate` tasks that `drain` works
+    through (#89), so the run page counts them and the heartbeat moves.  Each stage's
+    outcome is appended to the run's diagnostics as that stage ends, so what it did is on
+    the run page rather than in a terminal.
     """
     if not spec.pathways or not spec.metals:
         return []
@@ -2304,7 +2308,7 @@ def finalise_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     stages += [{"stage": "link_protomers", "reason": f"deprotonation edge refused: {why}",
                 "hint": "the pair was found but its equation did not balance", "count": n}
                for why, n in sorted(refused.items())]
-    n_solvate, why_none = _queue_solvate(reg, run_id, target)
+    n_solvate, why_none = _queue_solvate(reg, run_id, target, spec.solvation_media)
     stages += why_none
     set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + stages)
     touch_run(reg, run_id)

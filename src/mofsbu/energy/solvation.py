@@ -16,10 +16,11 @@ from typing import Any
 
 from mofsbu._types import Fidelity, MofsbuError, split_medium
 
-__all__ = ["correct", "correct_registry", "MEDIA"]
+__all__ = ["correct", "correct_registry", "uncorrected", "MEDIA"]
 
-#: Media this producer can compute: token -> the xTB backend's solvent key.
-MEDIA = {"alpb:water": "water"}
+#: Media this producer can compute: token -> the xTB backend's solvent key.  DMF is the
+#: synthesis solvent of the solvothermal Cu–anthrarufin series.
+MEDIA = {"alpb:water": "water", "alpb:dmf": "dmf"}
 
 
 def _backend_solvent(medium: str) -> str:
@@ -56,6 +57,18 @@ def correct(reg: Any, geometry_id: int, medium: str = "alpb:water") -> Any:
                                     e_gas=gas.energy, e_solv=solv.energy)
 
 
+def uncorrected(reg: Any, medium: str, *, min_fidelity: Fidelity = Fidelity.ML) -> list[int]:
+    """Geometries whose converged gas-phase energy has no correction in `medium` yet."""
+    _backend_solvent(medium)
+    return [int(r[0]) for r in reg.conn.execute(
+        "SELECT g.id FROM geometries g JOIN methods m ON m.id = g.method_id "
+        "WHERE g.energy IS NOT NULL AND g.converged = 1 AND m.solvent IS NULL "
+        "AND g.fidelity >= ? AND NOT EXISTS ("
+        "  SELECT 1 FROM solvation_corrections sc JOIN methods cm ON cm.id = sc.method_id "
+        "  WHERE sc.geometry_id = g.id AND cm.solvent = ?) ORDER BY g.id",
+        (int(min_fidelity), medium))]
+
+
 def correct_registry(reg: Any, medium: str = "alpb:water", *,
                      min_fidelity: Fidelity = Fidelity.ML, commit_every: int = 50,
                      limit: int | None = None) -> dict[str, Any]:
@@ -66,14 +79,7 @@ def correct_registry(reg: Any, medium: str = "alpb:water", *,
     from the geometry whose energy it uses and never borrows one from a sibling.  A refusal
     is counted with its reason, not raised: one odd structure must not stop the rest.
     """
-    _backend_solvent(medium)
-    todo = [int(r["id"]) for r in reg.conn.execute(
-        "SELECT g.id FROM geometries g JOIN methods m ON m.id = g.method_id "
-        "WHERE g.energy IS NOT NULL AND g.converged = 1 AND m.solvent IS NULL "
-        "AND g.fidelity >= ? AND NOT EXISTS ("
-        "  SELECT 1 FROM solvation_corrections sc JOIN methods cm ON cm.id = sc.method_id "
-        "  WHERE sc.geometry_id = g.id AND cm.solvent = ?) ORDER BY g.id",
-        (int(min_fidelity), medium))]
+    todo = uncorrected(reg, medium, min_fidelity=min_fidelity)
     if limit is not None:
         todo = todo[:limit]
     written, refused = 0, {}

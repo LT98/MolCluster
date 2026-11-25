@@ -41,6 +41,16 @@ A v10 spec's `max_denticity` (default 6) lets a ligand bind one metal through 3+
 builder page posts `spec_version: 1`, which migrates to `max_denticity: 2`, so the page plans
 pairs only and has no control for it. Edit the spec file to use it.
 
+## Solvation media are spec-file only
+
+A v11 spec's `solvation_media` names the continua a finished `pathways` run corrects its
+energies into: `alpb:water` (the default) and/or `alpb:dmf`. The builder page posts
+`spec_version: 1`, which migrates to water alone, and has no control for it. Edit the spec
+file, or add a medium to an existing registry with
+`scripts/solvate.py --db … --medium alpb:dmf --workers N`. In `alpb:dmf`, a released proton
+still goes to H₂O/H₃O⁺ unless **H⁺ to** names a base (dimethylamine, formate) — choose one
+that is in the synthesis.
+
 ## Construction routes are spec-file only
 
 A v9 spec can carry `routes` — explicit join-by-join constructions, which is how a

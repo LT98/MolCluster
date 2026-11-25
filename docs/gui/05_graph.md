@@ -153,8 +153,9 @@ says so.
 Two selects in the toolbar are inputs to **every** route on the chart at once, because routes
 priced under different ones compare nothing:
 
-- **medium** — `gas`, or a continuum the registry holds corrections in (`alpb:water` once
-  `runner.finalise_run` or `scripts/solvate.py` has run). A medium is always `model:solvent`;
+- **medium** — `gas`, or a continuum the registry holds corrections in (`alpb:water`,
+  `alpb:dmf`: whichever `runner.finalise_run` — one per spec `solvation_media` entry — or
+  `scripts/solvate.py` has written). A medium is always `model:solvent`;
   each energy is `E + dG_solv` on its own geometry, and a route with any term lacking a
   correction is refused rather than half-solvated. The legend says `in <medium>`.
 - **H⁺ to** — `water (H3O+)`, or a free base whose conjugate acid is also in the registry

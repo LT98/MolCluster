@@ -105,8 +105,9 @@ What makes this page the useful one:
   that has built everything but is still relaxing or correcting does not read as finished.
 - **"after the run"** — what `runner.finalise_run` did once the build and relax queues
   drained: for a `pathways` run, how many one-proton deprotonation edges it wrote and why any
-  were refused (written as soon as linking ends), then the `alpb:water` corrections. Those
-  are `solvate` tasks, one per geometry, worked by the run's own workers on the CPU, so they
+  were refused (written as soon as linking ends), then the continuum corrections, one set per
+  spec `solvation_media` entry (`alpb:water` unless the spec names others). Those
+  are `solvate` tasks, one per geometry and medium, worked by the run's own workers on the CPU, so they
   count in the settled total and in the *finalising* phase; their summary is written when
   they have all settled. Refusals carry the code `solvation_refused`.
 - **Liveness is computed, never stored.** The page asks whether a pid still exists rather

@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = 10
+SPEC_VERSION = 11
 
 # What to do with each structure once it is constructed.  Whether a mode can RUN is a
 # property of the machine, not of the spec: `energy.relax.mode_status()` asks the
@@ -331,6 +331,10 @@ class BuildSpec:
     # (`energy.relax.relax_geometry`), which is what every spec before v9 ran.
     relax_fmax: float | None = None
     relax_steps: int | None = None
+    # The continua a finished `pathways` run corrects its energies into ('model:solvent',
+    # `energy.solvation.MEDIA`), each a set of `solvate` tasks.  Water is what every spec
+    # before v11 got; the synthesis solvent is the reason to name another.
+    solvation_media: tuple[str, ...] = ("alpb:water",)
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -393,6 +397,17 @@ class BuildSpec:
                 or self.relax_steps < 1):
             raise ValueError(f"relax_steps must be a whole number >= 1, got "
                              f"{self.relax_steps!r}")
+        media = self.solvation_media
+        if isinstance(media, str):
+            media = (media,)
+        object.__setattr__(self, "solvation_media", tuple(dict.fromkeys(media)))
+        if self.solvation_media:
+            from mofsbu.energy.solvation import MEDIA
+
+            unknown = [m for m in self.solvation_media if m not in MEDIA]
+            if unknown:
+                raise ValueError(f"solvation_media {unknown} have no producer; this build "
+                                 f"can compute {sorted(MEDIA)}")
         if self.ml_model is not None:
             from mofsbu.config import resolve_ml_backend
 
@@ -443,6 +458,10 @@ class BuildSpec:
             # field is added rather than back-filled with "mace-mp-0" because a v3 spec
             # never expressed a choice and writing one in would invent provenance.
             d.setdefault("ml_model", None)
+        if version <= 10:
+            # v10 -> v11 adds `solvation_media`.  Water alone is what every earlier run's
+            # finalise stage corrected into.
+            d.setdefault("solvation_media", ("alpb:water",))
         if version <= 9:
             # v9 -> v10 adds `max_denticity` (#15).  2 is what every earlier spec planned:
             # pockets only, no donor set of three or more.
