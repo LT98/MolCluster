@@ -310,6 +310,14 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 75)* **Two writers of one blob both succeed (#93).** `BlobStore.put` wrote
+  `<digest>.tmp` and renamed it; every writer of identical bytes used that one name, so when
+  two workers stored the same blob at once the second rename found the file gone
+  (`FileNotFoundError`) and its task was recorded as failed although the blob was stored. It
+  cost 3 of 3,242 place tasks in the Cu–anthrarufin CN 4 run and 3 in CN 6 (125 build workers),
+  and 2 pathway steps built on the CN 4 rungs. The temporary name now carries the writer's pid
+  and a random suffix; both renames land on the same content, and a temporary file left by a
+  failed step is removed.
 - *(rev 73)* **A run corrects into the media its spec names; `alpb:dmf` is one (PR #97).** The
   finalise stage corrected every run into `alpb:water` (`FINALISE_MEDIUM`), while the
   Cu–anthrarufin solvothermal syntheses run in DMF/H₂O. `energy.solvation.MEDIA` gains

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 from pathlib import Path
 
 SHARD = 2          # store/ab/cdef… — keeps directory sizes sane
@@ -35,9 +36,15 @@ class BlobStore:
         if p.exists():
             return d                                  # idempotent
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, p)                            # atomic
+        # A temporary name of this writer's own: two workers storing identical bytes at
+        # once must not rename each other's file away (#93).  Both renames then succeed,
+        # onto the same content.
+        tmp = p.with_name(f"{p.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, p)                        # atomic
+        finally:
+            tmp.unlink(missing_ok=True)               # only still there if a step failed
         return d
 
     def put_text(self, text: str) -> str:

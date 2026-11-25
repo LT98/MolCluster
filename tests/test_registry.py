@@ -442,3 +442,26 @@ def test_an_empty_store_that_was_named_is_the_store_used(tmp_path):
     with Registry(tmp_path / "campaign" / "r.db", named) as reg:
         assert reg.store.root == named.root
     assert not (tmp_path / "campaign" / "store").exists()
+
+
+def test_two_writers_of_one_blob_both_succeed(tmp_path, monkeypatch):
+    """#93: a second writer of identical bytes that finishes while the first is between its
+    write and its rename must not take the first writer's temporary file away."""
+    import mofsbu.registry.store as store_mod
+    from mofsbu.registry import BlobStore
+
+    store = BlobStore(tmp_path / "store")
+    data = b"same bytes from two workers"
+    real_replace = store_mod.os.replace
+    second_ran = []
+
+    def first_writer_pauses_here(src, dst):
+        if not second_ran:
+            second_ran.append(True)
+            store.put(data)                  # the other worker, start to finish
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(store_mod.os, "replace", first_writer_pauses_here)
+    digest = store.put(data)
+    assert second_ran and store.get(digest) == data
+    assert not list(store.root.glob("*/*.tmp"))          # no temporary file left behind
