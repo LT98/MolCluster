@@ -186,3 +186,92 @@ def test_relaxation_is_marked_as_wired(monkeypatch):
     monkeypatch.setenv("MOFSBU_DEVICE", "cpu")
     assert relax_mod.RELAXATION_IS_EXECUTED is True
     assert relax_mod.mode_status()["dft_go"]["available"] is False
+
+
+# ── the finalise stage runs as tasks (#89) ───────────────────────────────────
+
+@pytest.fixture()
+def fake_solvation(monkeypatch):
+    """A correction for every geometry without running xTB: the wiring is under test."""
+    from mofsbu.energy import solvation as solvation_mod
+    from mofsbu.registry import MethodSpec
+    from mofsbu.registry.api import put_solvation_correction
+
+    calls = []
+
+    def correct(reg, geometry_id, medium="alpb:water"):
+        calls.append(geometry_id)
+        row = reg.conn.execute("SELECT s.net_charge, s.multiplicity FROM geometries g JOIN "
+                               "structures s ON s.id = g.structure_id WHERE g.id=?",
+                               (geometry_id,)).fetchone()
+        xtb = MethodSpec(code="xtb", code_version="test", method="GFN2-xTB", solvent=medium,
+                         charge=int(row[0]), multiplicity=int(row[1]))
+        return put_solvation_correction(reg, geometry_id, method=xtb, e_gas=-1.0, e_solv=-1.1)
+
+    class Available:
+        def available(self):
+            return True
+
+    real = backends_mod.get_backend
+    monkeypatch.setattr(solvation_mod, "correct", correct)
+    monkeypatch.setattr(backends_mod, "get_backend",
+                        lambda name, *a, **kw: Available() if name == "xtb" else real(name, *a,
+                                                                                      **kw))
+    return calls
+
+
+def test_the_water_corrections_are_tasks_the_run_counts(reg, null_ml, fake_solvation):
+    import json
+
+    result = run(reg, acetate_spec(run_mode="ml_go", pathways=True))
+    rid = result["run_id"]
+    tasks = reg.conn.execute("SELECT status, payload_json FROM tasks WHERE run_id=? AND "
+                             "kind='solvate'", (rid,)).fetchall()
+    need = reg.conn.execute(
+        "SELECT COUNT(*) FROM geometries g JOIN methods m ON m.id = g.method_id "
+        "WHERE g.energy IS NOT NULL AND g.converged = 1 AND m.solvent IS NULL "
+        "AND g.fidelity >= ?", (int(Fidelity.ML),)).fetchone()[0]
+    assert need and len(tasks) == need
+    assert all(t["status"] == "done" for t in tasks)
+    assert sorted(json.loads(t["payload_json"])["geometry_id"] for t in tasks) == \
+        sorted(fake_solvation)
+    assert result["counts"].get("done") == sum(result["counts"].values())  # tasks settle
+    diagnostics = json.loads(reg.conn.execute("SELECT diagnostics_json FROM runs WHERE id=?",
+                                              (rid,)).fetchone()[0])
+    solvate = [d for d in diagnostics if d.get("stage") == "solvate"]
+    assert solvate and solvate[0]["count"] == need
+
+
+def test_a_rerun_queues_no_correction_twice(reg, null_ml, fake_solvation):
+    run(reg, acetate_spec(run_mode="ml_go", pathways=True))
+    first = len(fake_solvation)
+    again = run(reg, acetate_spec(run_mode="ml_go", pathways=True))
+    assert len(fake_solvation) == first
+    assert not reg.conn.execute("SELECT COUNT(*) FROM tasks WHERE run_id=? AND kind='solvate'",
+                                (again["run_id"],)).fetchone()[0]
+
+
+def test_finalise_workers_share_the_cores_and_see_no_card(monkeypatch):
+    import os
+
+    from mofsbu.runner import finalise_env
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 128)
+    assert finalise_env(16) == {"CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "8"}
+    assert finalise_env(500)["OMP_NUM_THREADS"] == "1"
+
+
+def test_the_run_summary_names_its_phases(reg, null_ml, fake_solvation):
+    """#34: generating, optimising and finalising, each settled out of its own total."""
+    from mofsbu.registry.jobs import TASK_PHASES, outcome_summary
+    from mofsbu.runner import BUILD_KINDS, FINALISE_KINDS, RELAX_KINDS
+
+    assert TASK_PHASES == {"generating": BUILD_KINDS, "optimising": RELAX_KINDS,
+                           "finalising": FINALISE_KINDS}
+    rid = run(reg, acetate_spec(run_mode="ml_go", pathways=True))["run_id"]
+    phases = {p["phase"]: p for p in outcome_summary(reg, rid)["phases"]}
+    assert list(phases) == ["generating", "optimising", "finalising"]
+    assert all(p["total"] and p["settled"] == p["total"] and not p["waiting"]
+               for p in phases.values())
+    n_tasks = reg.conn.execute("SELECT COUNT(*) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0]
+    assert sum(p["total"] for p in phases.values()) == n_tasks

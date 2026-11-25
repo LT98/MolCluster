@@ -353,6 +353,34 @@ def task_rows(reg: Registry, run_id: int, *, status: str | None = None,
     return out
 
 
+#: A run's phases, in the order they happen, by task kind (#34, #89): constructs first,
+#: relaxations queued behind them, and the finalise stage queued once both have drained.
+TASK_PHASES: dict[str, tuple[str, ...]] = {
+    "generating": ("ligand", "co_ligand", "place", "grow", "route"),
+    "optimising": ("relax",),
+    "finalising": ("solvate",),
+}
+
+
+def phase_counts(reg: Registry, run_id: int) -> list[dict[str, Any]]:
+    """Per phase: tasks settled, waiting and in total — which phase a run is in, and how far."""
+    by_kind: dict[str, dict[str, int]] = {}
+    for r in reg.conn.execute("SELECT kind, status, COUNT(*) AS n FROM tasks WHERE run_id=? "
+                              "GROUP BY kind, status", (run_id,)):
+        by_kind.setdefault(r["kind"], {})[r["status"]] = r["n"]
+    out = []
+    for phase, kinds in TASK_PHASES.items():
+        total = waiting = 0
+        for kind in kinds:
+            for status, n in by_kind.get(kind, {}).items():
+                total += n
+                if status in (PENDING, CLAIMED):
+                    waiting += n
+        out.append({"phase": phase, "total": total, "waiting": waiting,
+                    "settled": total - waiting})
+    return out
+
+
 def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
     """A run at a glance: what happened, how often, and to what.
 
@@ -397,6 +425,7 @@ def outcome_summary(reg: Registry, run_id: int) -> dict[str, Any]:
         "AND json_extract(detail_json, '$.relax_reused') IS NOT NULL", (run_id,)).fetchone()
     return {
         "counts": counts,
+        "phases": phase_counts(reg, run_id),
         "by_code": by_code,
         "new_structures": reuse["new_structures"] or 0,
         "reused_structures": reuse["reused_structures"] or 0,

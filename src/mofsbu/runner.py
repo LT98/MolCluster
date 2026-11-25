@@ -1811,7 +1811,38 @@ def execute(reg: Registry, task, spec: BuildSpec) -> Outcome:
     if task.kind == "route":
         return _execute_route(reg, task, spec)
 
+    if task.kind == "solvate":
+        return _execute_solvate(reg, payload)
+
     raise MofsbuError(f"no executor for task kind {task.kind!r}")
+
+
+def _has_correction(reg: Registry, geometry_id: int, medium: str) -> bool:
+    return reg.conn.execute(
+        "SELECT 1 FROM solvation_corrections sc JOIN methods m ON m.id = sc.method_id "
+        "WHERE sc.geometry_id=? AND m.solvent=?", (geometry_id, medium)).fetchone() is not None
+
+
+def _execute_solvate(reg: Registry, payload: dict[str, Any]) -> Outcome:
+    """One geometry's continuum correction — a `solvate` task of the finalise stage (#89)."""
+    from mofsbu.energy.solvation import correct
+
+    gid, medium = int(payload["geometry_id"]), payload["medium"]
+    row = reg.conn.execute("SELECT structure_id FROM geometries WHERE id=?",
+                           (gid,)).fetchone()
+    if row is None:
+        raise _Rejected(f"geometry {gid} is not in this registry", code="solvate_no_geometry")
+    sid = int(row["structure_id"])
+    if _has_correction(reg, gid, medium):
+        return Outcome(sid, gid, None, False, {"solvate": {"medium": medium,
+                                                           "skipped": "already corrected"}})
+    try:
+        put = correct(reg, gid, medium)
+    except (MofsbuError, ValueError, RuntimeError) as exc:
+        raise _Rejected(f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}",
+                        code="solvation_refused", detail={"geometry": gid}) from exc
+    return Outcome(sid, gid, None, False, {"solvate": {"medium": medium,
+                                                       "created": bool(put.created)}})
 
 
 class _Rejected(MofsbuError):
@@ -1842,7 +1873,7 @@ def queue_relax(reg: Registry, spec: BuildSpec, task, out: "Outcome") -> int | N
     unrelaxed free ligand could never appear in the same equation — which would leave the
     reference scheme with nothing to say.
     """
-    if spec.run_mode == "construct" or task.kind in ("relax", "route"):
+    if spec.run_mode == "construct" or task.kind in ("relax", "route", "solvate"):
         return None                       # a route queues one relax per species itself
     if out.structure_id is None or out.geometry_id is None:
         return None
@@ -1889,6 +1920,8 @@ def _queue_relax_geometry(reg: Registry, spec: BuildSpec, run_id: int, structure
 #: however many processes ask for it.
 BUILD_KINDS = ("ligand", "co_ligand", "place", "grow", "route")
 RELAX_KINDS = ("relax",)
+#: Queued only once the build and relax queues have drained (`finalise_run`, #89).
+FINALISE_KINDS = ("solvate",)
 
 
 def work(reg: Registry, spec: BuildSpec, run_id: int, *, limit: int | None = None,
@@ -2005,6 +2038,16 @@ def worker_env(role: str, index: int, *, split: bool) -> dict[str, str]:
     return pin_env(devices[index % len(devices)], label=devices[0])
 
 
+def finalise_env(n_workers: int) -> dict[str, str]:
+    """A finalise worker's environment: xTB on the CPU, the cores shared out (#89).
+
+    No card, and `OMP_NUM_THREADS` set so n processes do not each start one OpenMP thread
+    per core.
+    """
+    threads = max(1, (os.cpu_count() or 1) // max(1, n_workers))
+    return {"CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": str(threads)}
+
+
 def _gpu_pool() -> bool:
     return all(d.startswith(("cuda", "xpu")) for d in compute_devices())
 
@@ -2024,7 +2067,8 @@ def _worker_process(db_path: str, store_path: str, spec_json: str, run_id: int,
     from mofsbu.config import name_process
     from mofsbu.registry import BlobStore
 
-    name_process(f"mofsbu-{'relax' if kinds == RELAX_KINDS else 'build'}:{run_id}")
+    role = {RELAX_KINDS: "relax", FINALISE_KINDS: "finalise"}.get(tuple(kinds or ()), "build")
+    name_process(f"mofsbu-{role}:{run_id}")
     with Registry(Path(db_path), BlobStore(Path(store_path))) as reg:
         work(reg, BuildSpec.from_json(spec_json), run_id, kinds=kinds,
              exclude_kinds=exclude_kinds,
@@ -2103,7 +2147,8 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
     pool = plan_workers(workers, relaxes=spec.run_mode != "construct")
     if pool.total <= 1:
         work(reg, spec, run_id)
-        finalise_run(reg, spec, run_id)
+        finalise_run(reg, spec, run_id,
+                     drain=lambda: work(reg, spec, run_id, kinds=FINALISE_KINDS))
         return pool
 
     import multiprocessing as mp
@@ -2147,45 +2192,94 @@ def execute_run(reg: Registry, spec: BuildSpec, run_id: int, *,
             f"{len(dead)} of {pool.total} workers died before the queue was drained: "
             + ", ".join(dead) + ". Their tasks are still pending; the run can be "
             "resumed once the cause is fixed")
-    finalise_run(reg, spec, run_id)
+    finalise_run(reg, spec, run_id,
+                 drain=lambda: _drain_finalise(ctx, args, pool.total, run_id))
     return pool
+
+
+def _drain_finalise(ctx: Any, args: tuple, n: int, run_id: int) -> None:
+    """Drain the finalise tasks with the run's worker count, CPU only (#89)."""
+    procs = [ctx.Process(target=_worker_process, args=args,
+                         kwargs={"kinds": FINALISE_KINDS, "env": finalise_env(n)},
+                         name=f"mofsbu-finalise-{run_id}-{i}")
+             for i in range(n)]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join()
+    dead = [f"{p.name} (exit {p.exitcode})" for p in procs if p.exitcode not in (0, None)]
+    if dead:
+        raise MofsbuError(
+            f"{len(dead)} of {n} finalise workers died: " + ", ".join(dead)
+            + ". Their solvate tasks are still pending; resume the run to finish them")
 
 
 #: The medium a finished run's energies are corrected into (WORKPLAN_solvation C17).
 FINALISE_MEDIUM = "alpb:water"
 
 
-def _solvate_stage(reg: Registry, target: Fidelity) -> list[dict[str, Any]]:
-    """Continuum corrections on the run's energies, or the stated reason there are none."""
+def _queue_solvate(reg: Registry, run_id: int, target: Fidelity
+                   ) -> tuple[int, list[dict[str, Any]]]:
+    """Queue one `solvate` task per geometry lacking a correction; or say why there are none.
+
+    The same geometries `energy.solvation.correct_registry` would correct, less any already
+    queued and not yet settled, so resuming a run does not queue them twice.
+    """
     from mofsbu.energy.backends import get_backend
-    from mofsbu.energy.solvation import correct_registry
 
     if target < Fidelity.ML:
-        return [{"stage": "solvate", "count": 0,
-                 "reason": f"no {FINALISE_MEDIUM} corrections: this run computed no energies",
-                 "hint": "construct mode builds geometries only"}]
+        return 0, [{"stage": "solvate", "count": 0,
+                    "reason": f"no {FINALISE_MEDIUM} corrections: this run computed no "
+                              f"energies", "hint": "construct mode builds geometries only"}]
     if not get_backend("xtb").available():
-        return [{"stage": "solvate", "count": 0,
-                 "reason": f"no {FINALISE_MEDIUM} corrections: xTB (tblite) is not installed",
-                 "hint": "install tblite, then run scripts/solvate.py on this database"}]
-    out = correct_registry(reg, FINALISE_MEDIUM)
-    stages = [{"stage": "solvate", "count": out["written"],
+        return 0, [{"stage": "solvate", "count": 0,
+                    "reason": f"no {FINALISE_MEDIUM} corrections: xTB (tblite) is not "
+                              f"installed",
+                    "hint": "install tblite, then run scripts/solvate.py on this database"}]
+    todo = [int(r["id"]) for r in reg.conn.execute(
+        "SELECT g.id FROM geometries g JOIN methods m ON m.id = g.method_id "
+        "WHERE g.energy IS NOT NULL AND g.converged = 1 AND m.solvent IS NULL "
+        "AND g.fidelity >= ? AND NOT EXISTS ("
+        "  SELECT 1 FROM solvation_corrections sc JOIN methods cm ON cm.id = sc.method_id "
+        "  WHERE sc.geometry_id = g.id AND cm.solvent = ?) AND NOT EXISTS ("
+        "  SELECT 1 FROM tasks t WHERE t.kind = 'solvate' AND t.status IN ('pending', "
+        "  'claimed') AND json_extract(t.payload_json, '$.geometry_id') = g.id) "
+        "ORDER BY g.id", (int(Fidelity.ML), FINALISE_MEDIUM))]
+    for gid in todo:
+        add_task(reg, run_id, "solvate", {"geometry_id": gid, "medium": FINALISE_MEDIUM})
+    return len(todo), []
+
+
+def _solvate_summary(reg: Registry, run_id: int) -> list[dict[str, Any]]:
+    """What the run's `solvate` tasks did, as run diagnostics."""
+    rows = reg.conn.execute("SELECT status, error FROM tasks WHERE run_id=? AND "
+                            "kind='solvate'", (run_id,)).fetchall()
+    done = sum(1 for r in rows if r["status"] == "done")
+    refused: dict[str, int] = {}
+    for r in rows:
+        if r["status"] != "done":
+            why = (r["error"] or r["status"]).splitlines()[0][:160]
+            refused[why] = refused.get(why, 0) + 1
+    stages = [{"stage": "solvate", "count": done,
                "reason": f"geometries given a {FINALISE_MEDIUM} correction",
                "hint": "xTB with and without the continuum on each stored geometry"}]
     stages += [{"stage": "solvate", "count": n, "reason": f"correction refused: {why}",
                 "hint": "that geometry's energy has no medium; routes through it stay gas-only"}
-               for why, n in sorted(out["refused"].items())]
+               for why, n in sorted(refused.items())]
     return stages
 
 
-def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, Any]]:
+def finalise_run(reg: Registry, spec: BuildSpec, run_id: int, *,
+                 drain: Any = None) -> list[dict[str, Any]]:
     """Stages that need every build and relaxation in place, run once the queue drains.
 
-    Not queued tasks: the queue orders by priority and has no dependencies, so a task
-    claimed while another worker is still relaxing would link a registry that is not
+    Queued only now: the queue orders by priority and has no dependencies, so a task
+    claimed while another worker is still relaxing would see a registry that is not
     finished yet.  Only for `pathways` runs — linking is provenance, and a run that did not
-    ask for provenance gets none.  Each stage's outcome is appended to the run's
-    diagnostics, so what it did is on the run page rather than in a terminal.
+    ask for provenance gets none.  Protomer linking runs here; the water corrections are
+    `solvate` tasks that `drain` works through (#89), so the run page counts them and the
+    heartbeat moves.  Each stage's outcome is appended to the run's diagnostics as that
+    stage ends, so what it did is on the run page rather than in a terminal.
     """
     if not spec.pathways or not spec.metals:
         return []
@@ -2195,6 +2289,8 @@ def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, 
 
     target = MODE_FIDELITY.get(spec.run_mode, Fidelity.RAW)
     ml_model = resolve_ml_model(spec) if target is Fidelity.ML else None
+    touch_run(reg, run_id)
+    reg.conn.commit()
     water, hydronium = ensure_couple(reg, target=target, ml_model=ml_model)
     written = link_protomers(reg, water_id=water, hydronium_id=hydronium)
     refused: dict[str, int] = {}
@@ -2208,9 +2304,17 @@ def finalise_run(reg: Registry, spec: BuildSpec, run_id: int) -> list[dict[str, 
     stages += [{"stage": "link_protomers", "reason": f"deprotonation edge refused: {why}",
                 "hint": "the pair was found but its equation did not balance", "count": n}
                for why, n in sorted(refused.items())]
-    stages += _solvate_stage(reg, target)
+    n_solvate, why_none = _queue_solvate(reg, run_id, target)
+    stages += why_none
     set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + stages)
+    touch_run(reg, run_id)
     reg.conn.commit()
+    if n_solvate:
+        (drain or (lambda: work(reg, spec, run_id, kinds=FINALISE_KINDS)))()
+        summary = _solvate_summary(reg, run_id)
+        set_diagnostics(reg, run_id, get_diagnostics(reg, run_id) + summary)
+        reg.conn.commit()
+        stages += summary
     return stages
 
 

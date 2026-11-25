@@ -99,8 +99,16 @@ What makes this page the useful one:
 - **Time per task.** Each task records its own wall time (`detail.duration_ms`); the table
   gives n, total seconds, median and p90 per kind. Rejected tasks count, because their time
   was spent. Tasks from before this was recorded are left out rather than counted as zero.
-- **"after the run"** — what `runner.finalise_run` did once the queue drained: for a
-  `pathways` run, how many one-proton deprotonation edges it wrote and why any were refused.
+- **Phases.** Under the settled count, one line per phase: *generating* (ligand,
+  co-ligand, place, grow, route), *optimising* (relax) and *finalising* (solvate), each
+  settled out of its own total. The phase still waiting on tasks is drawn darker, so a run
+  that has built everything but is still relaxing or correcting does not read as finished.
+- **"after the run"** — what `runner.finalise_run` did once the build and relax queues
+  drained: for a `pathways` run, how many one-proton deprotonation edges it wrote and why any
+  were refused (written as soon as linking ends), then the `alpb:water` corrections. Those
+  are `solvate` tasks, one per geometry, worked by the run's own workers on the CPU, so they
+  count in the settled total and in the *finalising* phase; their summary is written when
+  they have all settled. Refusals carry the code `solvation_refused`.
 - **Liveness is computed, never stored.** The page asks whether a pid still exists rather
   than believing the row — because a row is written by a process that, if it died, is by
   definition no longer able to correct it. Finished runs show no liveness verdict at all,
