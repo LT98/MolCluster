@@ -310,6 +310,18 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
+- *(rev 73)* **A run corrects into the media its spec names; `alpb:dmf` is one (PR #97).** The
+  finalise stage corrected every run into `alpb:water` (`FINALISE_MEDIUM`), while the
+  Cu–anthrarufin solvothermal syntheses run in DMF/H₂O. `energy.solvation.MEDIA` gains
+  `alpb:dmf` (tblite ALPB `dmf`; water molecule ΔG_solv −0.39 eV in water, −0.30 eV in DMF).
+  Spec v11 adds `solvation_media` (a list of `model:solvent`, default `["alpb:water"]`, empty =
+  none, an unknown medium refused by name); earlier specs migrate to water alone, which is
+  what they ran. `finalise_run` queues one `solvate` task per geometry **and medium** and
+  summarises per medium; `energy.solvation.uncorrected` is the one query for what still needs
+  a correction. `scripts/solvate.py --workers N` splits an existing registry's geometries over
+  N processes (cores shared out as in the finalise drain), committing after every geometry:
+  the hand-run shards of rev 71 hit `database is locked` because each held the write lock
+  across ten xTB calls. The builder page cannot choose a medium yet (`docs/gui/04_limits.md`).
 - *(rev 72)* **A named store is the store used, even when it is empty (B16, PR #91).** The
   Cu–anthrarufin CN 4 run, started with `--db data/campaigns/cu-atf/cu-atf.db` and no
   `--store`, wrote all 17,746 blobs to `data/campaigns/cu-atf/store` while `run_spec.py`'s

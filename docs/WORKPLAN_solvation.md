@@ -219,6 +219,9 @@ behaviour of the new code; `scripts/check.sh` passes.
 coordinates and writes through S1; `scripts/solvate.py --medium alpb:water` over a registry,
 resumable. C16's `XTBBackend` token change rides here.
 **Done when:** reaction 633 and R2 price in `alpb:water` from the registry and reproduce §1.
+*Since rev 73:* `MEDIA` also has `alpb:dmf` (the solvothermal syntheses' solvent); a spec's
+`solvation_media` names the continua a run corrects into (water by default), and
+`scripts/solvate.py --workers N` adds a medium to an existing registry in parallel.
 
 ### S3 — readers · S
 `routes.price_reaction` passes the medium into `check_reference_quality`; the medium becomes a

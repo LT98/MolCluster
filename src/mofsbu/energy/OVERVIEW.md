@@ -153,13 +153,14 @@ What one provenance edge costs, and why it sometimes cannot be said.
 | `price_incoming_routes(reg, structure_id, *, min_fidelity, solvent) -> list[dict[str, Any]]`* | Every edge arriving at this structure, priced or refused, in `reactions` order. |  |
 | `decompositions(reg, structure_id, *, min_fidelity, solvent, limit) -> list[dict[str, Any]]` | Pairs of registry structures whose atoms and charge add up to this one. | `pathways.route`, `ui.app` |
 
-### `solvation` (90 lines)
+### `solvation` (96 lines)
 
 Continuum corrections on stored energies — the producer (WORKPLAN_solvation S2, C17).
 
 | Name | Does | Used by |
 |---|---|---|
-| `correct(reg, geometry_id, medium) -> Any` | Compute and store the continuum correction for one geometry. Returns the `Put`. | `runner` |
+| `correct(reg, geometry_id, medium) -> Any` | Compute and store the continuum correction for one geometry. Returns the `Put`. | `runner`, `scripts/solvate.py` |
+| `uncorrected(reg, medium, *, min_fidelity) -> list[int]` | Geometries whose converged gas-phase energy has no correction in `medium` yet. | `runner`, `scripts/solvate.py` |
 | `correct_registry(reg, medium, *, min_fidelity, commit_every, limit) -> dict[str, Any]` | Correct every converged gas-phase energy at or above `min_fidelity` that lacks one. | `scripts/solvate.py` |
 
 <!-- END GENERATED -->

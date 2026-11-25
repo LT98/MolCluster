@@ -43,3 +43,37 @@ def test_every_energy_gets_a_correction_once_and_prices_in_the_medium(reg):
 def test_a_medium_with_no_producer_is_refused_by_name(reg):
     with pytest.raises(Exception, match="no producer"):
         correct_registry(reg, "gbsa:water")
+
+
+def test_dmf_is_a_medium_and_differs_from_water(reg):
+    """The solvothermal syntheses run in DMF/H2O; a water continuum alone misstates them."""
+    _store(reg, water(), energy=-15.0)
+    _store(reg, hydroxide(), energy=-10.0)
+    assert correct_registry(reg, "alpb:dmf")["written"] == 2
+    assert correct_registry(reg, "alpb:water")["written"] == 2       # its own set
+    by_medium = dict(reg.conn.execute(
+        "SELECT m.solvent, SUM(sc.dG_solv) FROM solvation_corrections sc JOIN methods m "
+        "ON m.id = sc.method_id GROUP BY m.solvent").fetchall())
+    assert set(by_medium) == {"alpb:dmf", "alpb:water"}
+    assert by_medium["alpb:dmf"] != pytest.approx(by_medium["alpb:water"])
+
+
+def test_the_script_splits_the_geometries_over_workers(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    db = tmp_path / "r.db"
+    with Registry(db) as r:
+        r.migrate()
+        for g, e in ((water(), -15.0), (hydronium(), -14.0), (hydroxide(), -10.0)):
+            _store(r, g, energy=e)
+        r.conn.commit()
+    script = Path(__file__).resolve().parents[1] / "scripts" / "solvate.py"
+    out = subprocess.run([sys.executable, str(script), "--db", str(db), "--store",
+                          str(tmp_path / "store"), "--medium", "alpb:dmf", "--workers", "2"],
+                         capture_output=True, text=True, timeout=600)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "3 of 3 geometries corrected in alpb:dmf" in out.stdout
+    with Registry(db) as r:
+        assert correct_registry(r, "alpb:dmf")["candidates"] == 0

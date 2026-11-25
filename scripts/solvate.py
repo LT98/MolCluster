@@ -2,11 +2,17 @@
 
     python scripts/solvate.py --db data/salt_study_k1.db
     python scripts/solvate.py --db data/salt_study_k1.db --medium alpb:water --limit 20
+    python scripts/solvate.py --db data/campaigns/x/x.db --medium alpb:dmf --workers 32
 
 xTB (tblite) single points with and without ALPB on each stored geometry; the difference is
 stored as that geometry's dG_solv (WORKPLAN_solvation C17).  Resumable — a geometry already
-corrected in the medium is skipped.  A `pathways` run does this itself when it finishes
-(`runner.finalise_run`); this is for a registry built before that.
+corrected in the medium is skipped.  A `pathways` run does this itself when it finishes, for
+each of its spec's `solvation_media` (`runner.finalise_run`); this is for a registry built
+before that, or for a medium the run did not ask for.
+
+`--workers N` (a declaration, ground rule 9) splits the geometries over N processes, each
+with its share of the cores (`runner.finalise_env`), committing after every geometry so no
+worker holds the write lock across an xTB call.
 """
 from __future__ import annotations
 
@@ -23,6 +29,46 @@ from mofsbu.energy.solvation import MEDIA, correct_registry              # noqa:
 from mofsbu.registry import BlobStore, Registry                         # noqa: E402
 
 
+def _shard(db: str, store: str, medium: str, index: int, n: int,
+           env: dict[str, str]) -> dict:
+    """One worker: every n-th uncorrected geometry, committed one at a time."""
+    import os
+
+    os.environ.update(env)                    # before tblite starts its OpenMP threads
+    from mofsbu._types import MofsbuError
+    from mofsbu.energy.solvation import correct, uncorrected
+
+    written, refused = 0, {}
+    with Registry(Path(db), BlobStore(Path(store))) as reg:
+        mine = uncorrected(reg, medium)[index::n]
+        for gid in mine:
+            try:
+                if correct(reg, gid, medium).created:
+                    written += 1
+            except (MofsbuError, ValueError, RuntimeError) as exc:
+                why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+                refused[why] = refused.get(why, 0) + 1
+            reg.conn.commit()
+    return {"candidates": len(mine), "written": written, "refused": refused}
+
+
+def correct_in_parallel(db: Path, store: Path, medium: str, workers: int) -> dict:
+    import multiprocessing as mp
+
+    from mofsbu.runner import finalise_env
+
+    env = finalise_env(workers)
+    with mp.get_context("spawn").Pool(workers) as pool:
+        parts = pool.starmap(_shard, [(str(db), str(store), medium, i, workers, env)
+                                      for i in range(workers)])
+    refused: dict[str, int] = {}
+    for part in parts:
+        for why, k in part["refused"].items():
+            refused[why] = refused.get(why, 0) + k
+    return {"medium": medium, "candidates": sum(p["candidates"] for p in parts),
+            "written": sum(p["written"] for p in parts), "refused": refused}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -30,13 +76,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db", type=Path, default=data_root() / "registry.db")
     p.add_argument("--store", type=Path, default=None)
     p.add_argument("--medium", default="alpb:water", choices=sorted(MEDIA))
-    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--limit", type=int, default=None, help="serial only: stop after N")
+    p.add_argument("--workers", type=int, default=1,
+                   help="processes to split the geometries over (default 1, in-process)")
     a = p.parse_args(argv)
+    if a.workers > 1 and a.limit is not None:
+        p.error("--limit is for a serial trial; drop it or use --workers 1")
 
+    store = a.store or store_root()
     started = time.perf_counter()
-    with Registry(a.db, BlobStore(a.store or store_root())) as reg:
+    with Registry(a.db, BlobStore(store)) as reg:
         reg.migrate()
-        out = correct_registry(reg, a.medium, limit=a.limit)
+        if a.workers <= 1:
+            out = correct_registry(reg, a.medium, limit=a.limit)
+    if a.workers > 1:
+        out = correct_in_parallel(a.db, store, a.medium, a.workers)
     took = time.perf_counter() - started
     print(f"{a.db}: {out['written']} of {out['candidates']} geometries corrected in "
           f"{out['medium']} ({took:.1f} s)")

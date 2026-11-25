@@ -275,3 +275,24 @@ def test_the_run_summary_names_its_phases(reg, null_ml, fake_solvation):
                for p in phases.values())
     n_tasks = reg.conn.execute("SELECT COUNT(*) FROM tasks WHERE run_id=?", (rid,)).fetchone()[0]
     assert sum(p["total"] for p in phases.values()) == n_tasks
+
+
+def test_each_named_medium_gets_its_own_corrections(reg, null_ml, fake_solvation):
+    """`solvation_media` decides the continua; each is one set of `solvate` tasks."""
+    rid = run(reg, acetate_spec(run_mode="ml_go", pathways=True,
+                                solvation_media=("alpb:water", "alpb:dmf")))["run_id"]
+    per = dict(reg.conn.execute(
+        "SELECT json_extract(payload_json, '$.medium'), COUNT(*) FROM tasks WHERE run_id=? "
+        "AND kind='solvate' AND status='done' GROUP BY 1", (rid,)).fetchall())
+    assert set(per) == {"alpb:water", "alpb:dmf"} and per["alpb:water"] == per["alpb:dmf"]
+
+
+def test_a_spec_with_no_media_corrects_nothing_and_says_so(reg, null_ml, fake_solvation):
+    import json
+
+    rid = run(reg, acetate_spec(run_mode="ml_go", pathways=True, solvation_media=()))["run_id"]
+    assert not fake_solvation
+    diagnostics = json.loads(reg.conn.execute("SELECT diagnostics_json FROM runs WHERE id=?",
+                                              (rid,)).fetchone()[0])
+    assert any("no solvation_media" in d["reason"] for d in diagnostics
+               if d.get("stage") == "solvate")

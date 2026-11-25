@@ -822,3 +822,17 @@ def test_a_range_that_cannot_mean_what_it_says_refuses(bad, says):
     the case the ceiling exists for, and it says so rather than quietly building some."""
     with pytest.raises(ValueError, match=says):
         catechol_spec(coordination=bad)
+
+
+def test_a_version_10_spec_corrects_in_water_as_it_always_did():
+    """v11 adds `solvation_media`; an older spec keeps exactly what its run corrected into."""
+    old = BuildSpec.from_dict({"spec_version": 10, "molecules": [
+        {"name": "w", "smiles": "O", "multiplicity": 1}]})
+    assert old.solvation_media == ("alpb:water",)
+    from dataclasses import replace
+
+    named = replace(old, solvation_media=["alpb:dmf", "alpb:water", "alpb:dmf"])
+    assert named.solvation_media == ("alpb:dmf", "alpb:water")
+    assert BuildSpec.from_json(named.to_json()) == named
+    with pytest.raises(ValueError, match="no producer"):
+        replace(old, solvation_media=("smd:dmf",))
