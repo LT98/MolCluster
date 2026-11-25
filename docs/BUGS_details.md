@@ -361,7 +361,7 @@ type. It bites whenever an oxo-centred node is stored and its sites are scored.
 
 ## B16
 
-**Fixed (rev 72).** `Registry` took its store as `store or BlobStore(<db folder>/store)`, and `BlobStore` has `__len__`, so a named store with no files in it was falsy and silently replaced by one beside the database; now `is None`. Rev 70's "not reproduced" was a coincidence: that test's empty `--store` was the folder beside its database.
+**Fixed (rev 72, PR #91).** `Registry` took its store as `store or BlobStore(<db folder>/store)`, and `BlobStore` has `__len__`, so a named store with no files in it was falsy and silently replaced by one beside the database; now `is None`. Rev 70's "not reproduced" was a coincidence: that test's empty `--store` was the folder beside its database.
 
 **`run_spec.py --store` is ignored, and the run still succeeds.** `correctness` ·
 `scripts/run_spec.py`

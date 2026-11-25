@@ -310,7 +310,7 @@ behind the same API once the pipeline stops changing shape.
 Newest first. A revision line is the record of one landed change: what was wrong, what was
 built, and what the building turned up that the diagnosis had not.
 
-- *(rev 72)* **A named store is the store used, even when it is empty (B16).** The
+- *(rev 72)* **A named store is the store used, even when it is empty (B16, PR #91).** The
   Cu–anthrarufin CN 4 run, started with `--db data/campaigns/cu-atf/cu-atf.db` and no
   `--store`, wrote all 17,746 blobs to `data/campaigns/cu-atf/store` while `run_spec.py`'s
   default named `data/store`, so the viewer (which defaults to `data/store`) found no
