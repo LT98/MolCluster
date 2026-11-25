@@ -39,6 +39,10 @@ but what it reports is misleading · `cosmetic` it looks wrong and misleads nobo
 - [x] **#70** · correctness · `energy/dft.py` — `DFTBackend` ignores `MOFSBU_DEVICE`: GPU4PySCF spreads over every visible GPU ([issue](https://github.com/LT98/MolCluster/issues/70))
 - [x] **#87** · correctness · `identity/isomers.py` — The L2 tag cannot tell cis from trans for a chelate whose two donors share an element (anthrarufin O,O′) ([issue](https://github.com/LT98/MolCluster/issues/87))
 - [x] **#89** · honesty · `runner.py` — A run's finalise stage (protomer links, water corrections) is invisible to the run inspector and runs serially ([issue](https://github.com/LT98/MolCluster/issues/89))
+- [x] **#93** · correctness · `registry/store.py` — Concurrent writers of one blob shared a temp file name, and the loser's task failed ([issue](https://github.com/LT98/MolCluster/issues/93))
+- [ ] **#94** · cosmetic · third-party (e3nn/MACE) — `torch.jit` deprecation warnings on every model load; a TorchScript removal would break MACE ([issue](https://github.com/LT98/MolCluster/issues/94))
+- [ ] **#95** · cosmetic · third-party (ASE) — NumPy 2.5 `.shape` deprecation on every `ase.Atoms`; a NumPy removal would break the backends ([issue](https://github.com/LT98/MolCluster/issues/95))
+- [ ] **#96** · cosmetic · third-party (MACE) — `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD` set on import: a warning per `torch.load`, `weights_only=False` process-wide ([issue](https://github.com/LT98/MolCluster/issues/96))
 - [ ] **#53** · undecided · `ui/` — Searching the registry for a displayed label (`tHQ`, chloride) returns no entries ([issue](https://github.com/LT98/MolCluster/issues/53))
 
 ## Resolved
