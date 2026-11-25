@@ -77,3 +77,28 @@ def test_the_script_splits_the_geometries_over_workers(tmp_path):
     assert "3 of 3 geometries corrected in alpb:dmf" in out.stdout
     with Registry(db) as r:
         assert correct_registry(r, "alpb:dmf")["candidates"] == 0
+
+
+def test_a_late_worker_still_gets_its_share(tmp_path):
+    """#98: the parent slices one list.  A worker started after another has committed must
+    not re-query a shorter list and skip what fell between the slices."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import solvate
+
+    db = tmp_path / "r.db"
+    with Registry(db) as r:
+        r.migrate()
+        for g, e in ((water(), -15.0), (hydronium(), -14.0), (hydroxide(), -10.0)):
+            _store(r, g, energy=e)
+        r.conn.commit()
+        from mofsbu.energy.solvation import uncorrected
+        todo = uncorrected(r, "alpb:dmf")
+    env = {"OMP_NUM_THREADS": "1"}
+    first = solvate._shard(str(db), str(tmp_path / "store"), "alpb:dmf", todo[0::2], env)
+    late = solvate._shard(str(db), str(tmp_path / "store"), "alpb:dmf", todo[1::2], env)
+    assert first["written"] + late["written"] == 3
+    with Registry(db) as r:
+        assert not uncorrected(r, "alpb:dmf")
