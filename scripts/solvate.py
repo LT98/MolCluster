@@ -29,18 +29,21 @@ from mofsbu.energy.solvation import MEDIA, correct_registry              # noqa:
 from mofsbu.registry import BlobStore, Registry                         # noqa: E402
 
 
-def _shard(db: str, store: str, medium: str, index: int, n: int,
+def _shard(db: str, store: str, medium: str, mine: list[int],
            env: dict[str, str]) -> dict:
-    """One worker: every n-th uncorrected geometry, committed one at a time."""
+    """One worker: the geometries it was handed, each committed as soon as it is done.
+
+    The parent takes the list once and slices it: a worker that queried for itself would
+    see a list already shortened by the others' commits, and skip what fell between (#98).
+    """
     import os
 
     os.environ.update(env)                    # before tblite starts its OpenMP threads
     from mofsbu._types import MofsbuError
-    from mofsbu.energy.solvation import correct, uncorrected
+    from mofsbu.energy.solvation import correct
 
     written, refused = 0, {}
     with Registry(Path(db), BlobStore(Path(store))) as reg:
-        mine = uncorrected(reg, medium)[index::n]
         for gid in mine:
             try:
                 if correct(reg, gid, medium).created:
@@ -55,11 +58,14 @@ def _shard(db: str, store: str, medium: str, index: int, n: int,
 def correct_in_parallel(db: Path, store: Path, medium: str, workers: int) -> dict:
     import multiprocessing as mp
 
+    from mofsbu.energy.solvation import uncorrected
     from mofsbu.runner import finalise_env
 
+    with Registry(db, BlobStore(store)) as reg:
+        todo = uncorrected(reg, medium)
     env = finalise_env(workers)
     with mp.get_context("spawn").Pool(workers) as pool:
-        parts = pool.starmap(_shard, [(str(db), str(store), medium, i, workers, env)
+        parts = pool.starmap(_shard, [(str(db), str(store), medium, todo[i::workers], env)
                                       for i in range(workers)])
     refused: dict[str, int] = {}
     for part in parts:
